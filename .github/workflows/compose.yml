@@ -7,9 +7,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Run a one-line script
+
+    - name: Set Up
       run: docker compose up -d
-      
-    - name: Run a multi-line script
+
+    - name: Check
+      run: docker compose ps -a
+
+    - name: Logs
+      run: docker compose logs
+
+    - name: Tear Down
       run: docker compose down

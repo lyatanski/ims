@@ -1,4 +1,74 @@
 services:
+  hss.epc.mnc001.mcc001.3gppnetwork.org:
+    command: sh /opt/start
+    configs:
+    - source: hss
+      target: /etc/hss/open5gs.yaml
+    - source: hss.diameter
+      target: /etc/hss/diameter.conf
+    - source: hss.start
+      target: /opt/start
+      mode: 0774
+    expose:
+    - 3868/tcp
+    depends_on:
+      mongo:
+        condition: service_started
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine AS build
+        RUN apk add alpine-sdk bison flex git cmake meson bash sudo linux-headers bsd-compat-headers yaml-dev lksctp-tools-dev gnutls-dev libgcrypt-dev libidn-dev mongo-c-driver-dev libmicrohttpd-dev curl-dev nghttp2-dev talloc-dev
+        RUN git clone https://github.com/open5gs/open5gs
+        WORKDIR open5gs
+        RUN meson build --prefix=/opt
+        RUN ninja -C build install
+
+        FROM alpine
+        RUN apk add yaml lksctp-tools gnutls libgcrypt libidn mongo-c-driver libmicrohttpd curl nghttp2 talloc
+        RUN apk add openssl
+        COPY --from=build /opt /opt
+
+  mongo:
+    image: mongo:8.0
+    command: --bind_ip 0.0.0.0
+    expose:
+    - 27017/udp
+    - 27017/tcp
+
+configs:
+  hss.start:
+    content: |
+      P=/etc/hss/
+      openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out $P/crt.pem -keyout $P/key.pem -subj /CN=hss.mnc${MNC}.mcc${MCC}.3gppnetwork.org
+      /opt/bin/open5gs-hssd -c /etc/hss/open5gs.yaml -t
+
   hss:
-    image: alpine
-    command: sleep inf
+    content: |
+      db_uri: mongodb://mongo/open5gs
+      hss:
+        freeDiameter: /etc/hss/diameter.conf
+      logger:
+        file:
+          path: /var/log/hss.log
+      global:
+        max:
+          ue: 1024
+
+  hss.diameter:
+    content: |
+      Identity = "hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org";
+      No_SCTP;
+      TLS_Cred = "/etc/hss/crt.pem", "/etc/hss/key.pem";
+      TLS_CA = "/etc/hss/crt.pem";
+
+      LoadExtension = "/opt/lib/freeDiameter/dbg_msg_dumps.fdx" : "0x4444";
+      LoadExtension = "/opt/lib/freeDiameter/dict_rfc5777.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_mip6i.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_nasreq.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_nas_mipv6.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_dcca.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
+
+      ConnectPeer = "scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" { No_TLS; };
+
