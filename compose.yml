@@ -1,0 +1,4 @@
+services:
+  hss:
+    image: alpine
+    command: sleep inf
