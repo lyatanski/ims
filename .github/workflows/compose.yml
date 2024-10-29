@@ -1,0 +1,15 @@
+name: compose
+on:
+  push:
+  
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run a one-line script
+      run: docker compose up -d
+      
+    - name: Run a multi-line script
+      run: docker compose down
