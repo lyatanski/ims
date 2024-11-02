@@ -6,7 +6,7 @@ The minimal IMS is comprised of 3 Call Session Control Functions (CSCF):
 - Interrogating
 - Serving
 
-Required vore etwork components:
+Required core network components:
 - Home subscriber server (HSS)
 - Policy and Charging Rules Function (PCRF)
 
