@@ -1,6 +1,10 @@
 # IMS
 IP Multimedia Subsystem
 
+Why another setup:
+- use modern compose fetures (like interpolation) for simplicity
+- go into a bit more depth of the Kamailio configuration for better understanding
+
 The minimal IMS is comprised of 3 Call Session Control Functions (CSCF):
 - Proxy
 - Interrogating
