@@ -52,12 +52,55 @@ services:
         RUN apk add openssl
         COPY --from=build /opt /opt
 
+  ui:
+    working_dir: /open5gs/webui
+    command: npm run dev
+    environment:
+      DB_URI: mongodb://mongo/open5gs
+      HOSTNAME: 0.0.0.0
+    ports:
+    - 9999:9999
+    depends_on:
+      mongo:
+        condition: service_started
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine AS build
+        RUN apk add git
+        RUN git clone https://github.com/open5gs/open5gs
+
+        FROM alpine
+        RUN apk add nodejs npm
+        COPY --from=build /open5gs/webui /open5gs/webui
+        RUN cd /open5gs/webui && npm ci
+
   mongo:
     image: mongo:8.0
     command: --bind_ip 0.0.0.0
     expose:
     - 27017/udp
     - 27017/tcp
+
+  test:
+    command: sleep inf
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ubuntu:jammy AS build
+
+        RUN apt update && apt install -y --no-install-recommends \
+        git build-essential cmake libtool yasm \
+        ragel \
+        libsrtp2-dev libssl-dev libopus-dev \
+        libspeexdsp-dev \
+        libavutil-dev libswscale-dev libavcodec-dev \
+        libvpx-dev libyuv-dev libgsm1-dev swig \
+        python3-dev  python3-pip
+        RUN git clone https://github.com/lyatanski/doubango.git
+        WORKDIR doubango
+        RUN cmake -B out
+        RUN cmake --build out
 
 
 configs:
