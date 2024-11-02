@@ -11,6 +11,9 @@ jobs:
     - name: Set Up
       run: docker compose up -d
 
+    - name: Wait
+      run: sleep 30
+
     - name: Check
       run: docker compose ps -a
 
