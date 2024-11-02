@@ -1,2 +1,13 @@
-# ims
+# IMS
 IP Multimedia Subsystem
+
+The minimal IMS is comprised of 3 Call Session Control Functions (CSCF):
+- Proxy
+- Interrogating
+- Serving
+
+Required vore etwork components:
+- Home subscriber server (HSS)
+- Policy and Charging Rules Function (PCRF)
+
+Additionally DNS will be required for services name resolution as the naming convention follows the pattern: <service>.mncXXX.mccXXX.3gppnetwork.org. It is not strictly necessary to follow this naming for test setup and there is a workaround with FQDN compose servive names, but the closer to real setup we can get, the better.
