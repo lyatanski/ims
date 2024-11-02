@@ -53,7 +53,7 @@ services:
         COPY --from=build /opt /opt
 
   ui:
-    profile:
+    profiles:
     - ui
     working_dir: /open5gs/webui
     command: npm run dev
