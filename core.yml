@@ -60,6 +60,9 @@ services:
     expose:
     - 27017/udp
     - 27017/tcp
+    configs:
+    - source: mongo
+      target: /docker-entrypoint-initdb.d/mongo-init.js
 
 
 configs:
@@ -109,3 +112,60 @@ configs:
 
       ConnectPeer = "scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" { No_TLS; };
 
+  mongo:
+    content: |
+      db = db.getSiblingDB('open5gs')
+      db.subscribers.insertOne(
+      {
+          _id: new ObjectId(),
+          schema_version: NumberInt(1),
+          imsi: '123456789012345',
+          msisdn: [],
+          imeisv: [],
+          mme_host: [],
+          mm_realm: [],
+          purge_flag: [],
+          slice:[
+          {
+              sst: NumberInt(1),
+              default_indicator: true,
+              session: [
+              {
+                  name : 'internet',
+                  type : NumberInt(3),
+                  qos : {
+                      index: NumberInt(9),
+                      arp: {
+                          priority_level : NumberInt(8),
+                          pre_emption_capability: NumberInt(1),
+                          pre_emption_vulnerability: NumberInt(2)
+                      }
+                  },
+                  ambr: {
+                      downlink: { value: NumberInt(1000000000), unit: NumberInt(0) },
+                      uplink: { value: NumberInt(1000000000), unit: NumberInt(0) }
+                  },
+                  pcc_rule: [],
+                  _id: new ObjectId(),
+              }],
+              _id: new ObjectId(),
+          }],
+          security:
+          {
+              k : '129837912837918237',
+              op : null,
+              opc : '129837912837918237',
+              amf : '8000',
+          },
+          ambr :
+          {
+              downlink : { value: NumberInt(1000000000), unit: NumberInt(0)},
+              uplink : { value: NumberInt(1000000000), unit: NumberInt(0)}
+          },
+          access_restriction_data: 32,
+          network_access_mode: 0,
+          subscriber_status: 0,
+          operator_determined_barring: 0,
+          subscribed_rau_tau_timer: 12,
+          __v: 0
+      })
