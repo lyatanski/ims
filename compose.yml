@@ -1,3 +1,7 @@
+include:
+- core.yml
+
+
 x-kamailio: &kamailio
   image: ghcr.io/kamailio/kamailio-ci:master-alpine
   command: -f /etc/ims/kamailio.cfg
@@ -7,9 +11,9 @@ services:
   scscf:
     << : *kamailio
     configs:
-    - source: scscf
+    - source: scscf.cfg
       target: /etc/ims/kamailio.cfg
-    - source: scscf.diameter
+    - source: scscf.xml
       target: /etc/ims/diameter.xml
 
   dns:
@@ -22,70 +26,10 @@ services:
       default:
         ipv4_address: ${DNS}
 
-  hss:
-    command: sh /opt/start
-    configs:
-    - source: hss
-      target: /etc/hss/open5gs.yaml
-    - source: hss.diameter
-      target: /etc/hss/diameter.conf
-    - source: hss.start
-      target: /opt/start
-      mode: 0774
-    expose:
-    - 3868/tcp
-    depends_on:
-      mongo:
-        condition: service_started
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM alpine AS build
-        RUN apk add alpine-sdk bison flex git cmake meson bash sudo linux-headers bsd-compat-headers yaml-dev lksctp-tools-dev gnutls-dev libgcrypt-dev libidn-dev mongo-c-driver-dev libmicrohttpd-dev curl-dev nghttp2-dev talloc-dev
-        RUN git clone https://github.com/open5gs/open5gs
-        WORKDIR open5gs
-        RUN meson build --prefix=/opt
-        RUN ninja -C build install
-
-        FROM alpine
-        RUN apk add yaml lksctp-tools gnutls libgcrypt libidn mongo-c-driver libmicrohttpd curl nghttp2 talloc
-        RUN apk add openssl
-        COPY --from=build /opt /opt
-
-  ui:
-    profiles:
-    - ui
-    working_dir: /open5gs/webui
-    command: npm run dev
-    environment:
-      DB_URI: mongodb://mongo/open5gs
-      HOSTNAME: 0.0.0.0
-    ports:
-    - 9999:9999
-    depends_on:
-      mongo:
-        condition: service_started
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM alpine AS build
-        RUN apk add git
-        RUN git clone https://github.com/open5gs/open5gs
-
-        FROM alpine
-        RUN apk add nodejs npm
-        COPY --from=build /open5gs/webui /open5gs/webui
-        RUN cd /open5gs/webui && npm ci
-
-  mongo:
-    image: mongo:8.0
-    command: --bind_ip 0.0.0.0
-    expose:
-    - 27017/udp
-    - 27017/tcp
-
   test:
-    command: sleep inf
+    profiles:
+    - test
+    command: python3 /opt/test.py scscf ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
     build:
       context: .
       dockerfile_inline: |
@@ -104,13 +48,41 @@ services:
         RUN cmake -B out
         RUN cmake --build out
 
+        FROM ubuntu:jammy
+        RUN apt update && apt install -y python3-pip iproute2
+        COPY --from=build /doubango/out/_deps/libmnl/usr/lib/libmnl.so* /usr/local/lib/
+        COPY --from=build /doubango/out/bindings/python/ /opt/python
+        COPY --from=build /doubango/out/plugins/ipsec_linux/ipsec.so /opt/
+        RUN ldconfig && pip install /opt/python
+    configs:
+    - source: test.py
+      target: /opt/test.py
+
 
 configs:
-  scscf:
-    file: scscf/kamailio.cfg
+  scscf.cfg:
+    file: scscf.cfg
 
-  scscf.diameter:
-    file: scscf/diameter.xml
+  scscf.xml:
+    content: |
+      <?xml version="1.0" encoding="UTF-8"?>
+      <DiameterPeer
+          FQDN="scscf.ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+          Realm="ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+          Vendor_Id="10415"
+          Product_Name="CDiameterPeer"
+          Workers="1"
+      >
+              <Peer
+                  FQDN="hss.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+                  Realm="epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+                  port="3868"
+              />
+              <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
+              <Auth id="4"        vendor="10415"/> <!-- Ro 3GPP -->
+              <SupportedVendor vendor="10415" />
+              <DefaultRoute FQDN="hss.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org" metric="1"/>
+      </DiameterPeer>
 
   dns:
     content: |
@@ -133,51 +105,9 @@ configs:
           loadbalance
       }
 
-  hss.start:
-    content: |
-      P=/etc/hss/
-      openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out $$P/crt.pem -keyout $$P/key.pem -subj /CN=hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
-      sleep 3
-      /opt/bin/open5gs-hssd -c /etc/hss/open5gs.yaml -t
+  test.py:
+    file: test.py
 
-  hss:
-    content: |
-      db_uri: mongodb://mongo/open5gs
-      hss:
-        freeDiameter: /etc/hss/diameter.conf
-          #identity: hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
-          #load_extension:
-          #- module: /opt/lib/freeDiameter/dbg_msg_dumps.fdx
-          #  conf: 0x4444
-          #- module: /opt/lib/freeDiameter/dict_rfc5777.fdx
-          #- module: /opt/lib/freeDiameter/dict_mip6i.fdx
-          #- module: /opt/lib/freeDiameter/dict_nasreq.fdx
-          #- module: /opt/lib/freeDiameter/dict_nas_mipv6.fdx
-          #- module: /opt/lib/freeDiameter/dict_dcca.fdx
-          #- module: /opt/lib/freeDiameter/dict_dcca_3gpp.fdx
-      logger:
-        file:
-          path: /var/log/hss.log
-      global:
-        max:
-          ue: 1024
-
-  hss.diameter:
-    content: |
-      Identity = "hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org";
-      No_SCTP;
-      TLS_Cred = "/etc/hss/crt.pem", "/etc/hss/key.pem";
-      TLS_CA = "/etc/hss/crt.pem";
-
-      LoadExtension = "/opt/lib/freeDiameter/dbg_msg_dumps.fdx" : "0x4444";
-      LoadExtension = "/opt/lib/freeDiameter/dict_rfc5777.fdx";
-      LoadExtension = "/opt/lib/freeDiameter/dict_mip6i.fdx";
-      LoadExtension = "/opt/lib/freeDiameter/dict_nasreq.fdx";
-      LoadExtension = "/opt/lib/freeDiameter/dict_nas_mipv6.fdx";
-      LoadExtension = "/opt/lib/freeDiameter/dict_dcca.fdx";
-      LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
-
-      ConnectPeer = "scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" { No_TLS; };
 
 networks:
   default:
