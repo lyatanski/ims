@@ -3,22 +3,22 @@ on:
   push:
   
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
 
     - name: Set Up
-      run: docker compose up -d
+      run: docker compose --profile test up -d
 
     - name: Wait
       run: sleep 30
 
     - name: Check
-      run: docker compose ps -a
+      run: docker compose --profile test ps -a
 
     - name: Logs
-      run: docker compose logs
+      run: docker compose --profile test logs
 
     - name: Tear Down
-      run: docker compose down
+      run: docker compose --profile test down
