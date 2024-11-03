@@ -29,7 +29,7 @@ services:
   test:
     profiles:
     - test
-    command: /opt/test.py
+    command: python3 /opt/test.py scscf ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
     build:
       context: .
       dockerfile_inline: |
@@ -57,7 +57,6 @@ services:
     configs:
     - source: test.py
       target: /opt/test.py
-      mode: 0774
 
 
 configs:
