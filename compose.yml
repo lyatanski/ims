@@ -29,7 +29,7 @@ services:
   test:
     profiles:
     - test
-    command: sleep inf
+    command: /opt/test.py
     build:
       context: .
       dockerfile_inline: |
@@ -47,6 +47,10 @@ services:
         WORKDIR doubango
         RUN cmake -B out
         RUN cmake --build out
+    configs:
+    - source: test.py
+      target: /opt/test.py
+      mode: 0774
 
 
 configs:
@@ -94,6 +98,9 @@ configs:
           reload
           loadbalance
       }
+
+  test.py:
+    file: test.py
 
 
 networks:
