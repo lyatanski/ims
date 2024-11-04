@@ -154,7 +154,7 @@ if __name__ == "__main__":
     domain = sys.argv[2]
     print(cscf)
 
-    time.sleep(5)
+    time.sleep(10)
     s0 = run_ue(imsi = "268011200608410",
                 msisdn = "972559997790",
                 Ki = "3919F39741B626604B4BACE23ACFB094",
