@@ -2,7 +2,7 @@
 
 import os
 import sys
-#import time
+import time
 import logging
 import tinyWRAP as s
 
@@ -127,6 +127,6 @@ if __name__ == "__main__":
              msisdn = os.environ["MSISDN"],
              Ki = os.environ["K"],
              opc = os.environ["OPC"])
-    #time.sleep(10)
+    time.sleep(10)
     #del s0
 
