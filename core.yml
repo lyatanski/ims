@@ -1,19 +1,20 @@
 services:
   hss:
-    command: sh /opt/start
+    command: /opt/bin/open5gs-hssd -c /etc/hss/open5gs.yaml -t
     configs:
     - source: hss
       target: /etc/hss/open5gs.yaml
     - source: hss.diameter
       target: /etc/hss/diameter.conf
-    - source: hss.start
-      target: /opt/start
-      mode: 0774
+    volumes:
+      - cert:/var/hss
     expose:
     - 3868/tcp
     depends_on:
-      mongo:
-        condition: service_started
+      cert:
+        condition: service_completed_successfully
+      subscribers:
+        condition: service_completed_successfully
     build:
       context: .
       dockerfile_inline: |
@@ -26,8 +27,18 @@ services:
 
         FROM alpine
         RUN apk add yaml lksctp-tools gnutls libgcrypt libidn mongo-c-driver libmicrohttpd curl nghttp2 talloc
-        RUN apk add openssl
         COPY --from=build /opt /opt
+
+  cert:
+    command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
+    working_dir: /var/hss
+    volumes:
+      - cert:/var/hss
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine
+        RUN apk add openssl
 
   ui:
     profiles:
@@ -40,8 +51,8 @@ services:
     ports:
     - 9999:9999
     depends_on:
-      mongo:
-        condition: service_started
+      subscribers:
+        condition: service_completed_successfully
     build:
       context: .
       dockerfile_inline: |
@@ -54,25 +65,23 @@ services:
         COPY --from=build /open5gs/webui /open5gs/webui
         RUN cd /open5gs/webui && npm ci
 
+  subscribers:
+    image: mongo:8.0
+    entrypoint: mongosh --host mongo --file /opt/subscribers.js
+    configs:
+    - source: subscribers
+      target: /opt/subscribers.js
+    restart: on-failure
+
   mongo:
     image: mongo:8.0
     command: --bind_ip 0.0.0.0
     expose:
     - 27017/udp
     - 27017/tcp
-    configs:
-    - source: mongo
-      target: /docker-entrypoint-initdb.d/mongo-init.js
 
 
 configs:
-  hss.start:
-    content: |
-      P=/etc/hss/
-      openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out $$P/crt.pem -keyout $$P/key.pem -subj /CN=hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
-      sleep 3
-      /opt/bin/open5gs-hssd -c /etc/hss/open5gs.yaml -t
-
   hss:
     content: |
       db_uri: mongodb://mongo/open5gs
@@ -99,8 +108,8 @@ configs:
     content: |
       Identity = "hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org";
       No_SCTP;
-      TLS_Cred = "/etc/hss/crt.pem", "/etc/hss/key.pem";
-      TLS_CA = "/etc/hss/crt.pem";
+      TLS_Cred = "/var/hss/crt.pem", "/var/hss/key.pem";
+      TLS_CA = "/var/hss/crt.pem";
 
       LoadExtension = "/opt/lib/freeDiameter/dbg_msg_dumps.fdx" : "0x4444";
       LoadExtension = "/opt/lib/freeDiameter/dict_rfc5777.fdx";
@@ -112,7 +121,7 @@ configs:
 
       ConnectPeer = "scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" { No_TLS; };
 
-  mongo:
+  subscribers:
     content: |
       db = db.getSiblingDB('open5gs')
       db.subscribers.insertOne(
@@ -169,3 +178,7 @@ configs:
           subscribed_rau_tau_timer: 12,
           __v: 0
       })
+
+
+volumes:
+  cert:

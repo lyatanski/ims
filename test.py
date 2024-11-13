@@ -126,13 +126,15 @@ class DDebugCallback(s.DDebugCallback):
 
 
 def run_ue(imsi, msisdn, Ki, opc, bind=None, ipsec=None, call=None):
+    transport = "udp"
     sip = s.SipStack(SipCallback(imsi, msisdn, call),
                      realm_uri=domain,
                      impi_uri=f"{imsi}@{domain}",
                      impu_uri=f"sip:{imsi}@{domain}")
-    sip.setProxyCSCF(cscf, 5060, "udp", "ipv4")
+    sip.setProxyCSCF(cscf, 5060, transport, "ipv4")
 
-    if bind: sip.setLocalIP(bind, "tcp")
+    sip.setLocalPort(5060, transport)
+    if bind: sip.setLocalIP(bind, transport)
 
     # Milenage parameters
     sip.setAMF("8000")
