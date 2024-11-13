@@ -128,8 +128,8 @@ configs:
       {
           _id: new ObjectId(),
           schema_version: NumberInt(1),
-          imsi: '123456789012345',
-          msisdn: [],
+          imsi: '${IMSI}',
+          msisdn: ['${MSISDN}'],
           imeisv: [],
           mme_host: [],
           mm_realm: [],
@@ -161,9 +161,9 @@ configs:
           }],
           security:
           {
-              k : '129837912837918237',
+              k : '${K}',
               op : null,
-              opc : '129837912837918237',
+              opc : '${OPC}',
               amf : '8000',
           },
           ambr :
