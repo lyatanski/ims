@@ -30,6 +30,11 @@ services:
     profiles:
     - test
     command: python3 /opt/test.py scscf ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
+    environment:
+    - IMSI
+    - MSISDN
+    - K
+    - OPC
     depends_on:
       hss:
         condition: service_started
