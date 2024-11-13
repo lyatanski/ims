@@ -7,7 +7,7 @@ services:
     - source: hss.diameter
       target: /etc/hss/diameter.conf
     volumes:
-      - cert:/var/hss
+    - cert:/var/hss
     expose:
     - 3868/tcp
     depends_on:
@@ -33,7 +33,7 @@ services:
     command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
     working_dir: /var/hss
     volumes:
-      - cert:/var/hss
+    - cert:/var/hss
     build:
       context: .
       dockerfile_inline: |
