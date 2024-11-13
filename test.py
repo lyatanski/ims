@@ -94,7 +94,7 @@ class SipCallback(s.SipCallback):
         return 0
 
 
-def gen(cscf, domain, proto="udp"):
+def gen(cscf, domain, transport="udp"):
     def run_ue(imsi, msisdn, Ki, opc, bind=None, ipsec=None, call=None):
         sip = s.SipStack(SipCallback(imsi, msisdn, call),
                          realm_uri=domain,
