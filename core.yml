@@ -119,6 +119,7 @@ configs:
       LoadExtension = "/opt/lib/freeDiameter/dict_dcca.fdx";
       LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
 
+      ConnectPeer = "icscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" { No_TLS; };
       ConnectPeer = "scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" { No_TLS; };
 
   subscribers:
