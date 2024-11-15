@@ -7,11 +7,11 @@ services:
     - source: hss.diameter
       target: /etc/hss/diameter.conf
     volumes:
-    - cert:/var/hss
+    - certificate:/var/hss
     expose:
     - 3868/tcp
     depends_on:
-      cert:
+      certificate:
         condition: service_completed_successfully
       subscribers:
         condition: service_completed_successfully
@@ -29,16 +29,27 @@ services:
         RUN apk add yaml lksctp-tools gnutls libgcrypt libidn mongo-c-driver libmicrohttpd curl nghttp2 talloc
         COPY --from=build /opt /opt
 
-  cert:
+  certificate:
     command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
     working_dir: /var/hss
     volumes:
-    - cert:/var/hss
+    - certificate:/var/hss
     build:
       context: .
       dockerfile_inline: |
         FROM alpine
         RUN apk add openssl
+
+  subscribers:
+    image: mongo:8.0
+    entrypoint: mongosh --host mongo --file /opt/subscribers.js
+    configs:
+    - source: subscribers
+      target: /opt/subscribers.js
+    depends_on:
+      mongo:
+        condition: service_started
+    restart: on-failure
 
   ui:
     profiles:
@@ -64,14 +75,6 @@ services:
         RUN apk add nodejs npm
         COPY --from=build /open5gs/webui /open5gs/webui
         RUN cd /open5gs/webui && npm ci
-
-  subscribers:
-    image: mongo:8.0
-    entrypoint: mongosh --host mongo --file /opt/subscribers.js
-    configs:
-    - source: subscribers
-      target: /opt/subscribers.js
-    restart: on-failure
 
   mongo:
     image: mongo:8.0
@@ -182,4 +185,4 @@ configs:
 
 
 volumes:
-  cert:
+  certificate:
