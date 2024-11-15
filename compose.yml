@@ -8,6 +8,14 @@ x-kamailio: &kamailio
   dns: ${DNS}
 
 services:
+  pcscf:
+    << : *kamailio
+    configs:
+    - source: pcscf.cfg
+      target: /etc/ims/kamailio.cfg
+    - source: pcscf.xml
+      target: /etc/ims/diameter.xml
+
   icscf:
     << : *kamailio
     environment:
@@ -78,6 +86,29 @@ services:
 
 
 configs:
+  pcscf.cfg:
+    file: pcscf.cfg
+
+  pcscf.xml:
+    content: |
+      <?xml version="1.0" encoding="UTF-8"?>
+      <DiameterPeer
+          FQDN="pcscf.ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+          Realm="ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+          Vendor_Id="10415"
+          Product_Name="CDiameterPeer"
+          Workers="1"
+      >
+              <Peer
+                  FQDN="pcrf.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+                  Realm="epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+                  port="3868"
+              />
+              <Auth id="16777236" vendor="10415"/> <!-- Rx 3GPP -->
+              <SupportedVendor vendor="10415" />
+              <DefaultRoute FQDN="pcrf.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org" metric="1"/>
+      </DiameterPeer>
+
   icscf.cfg:
     file: icscf.cfg
 
