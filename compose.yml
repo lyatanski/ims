@@ -10,6 +10,8 @@ x-kamailio: &kamailio
 services:
   icscf:
     << : *kamailio
+    environment:
+      EPC_REALM: epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
     configs:
     - source: icscf.cfg
       target: /etc/ims/kamailio.cfg
