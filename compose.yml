@@ -17,6 +17,9 @@ services:
       target: /etc/ims/kamailio.cfg
     - source: pcscf.xml
       target: /etc/ims/diameter.xml
+    depends_on:
+      kmod:
+        condition: service_completed_successfully
 
   icscf:
     << : *kamailio
@@ -46,6 +49,26 @@ services:
       default:
         ipv4_address: ${DNS}
 
+  kmod:
+    image: alpine
+    command:
+    - modprobe
+    - -a
+    - ah4
+    - ah6
+    - esp4
+    - esp6
+    - xfrm4_tunnel
+    - xfrm6_tunnel
+    - xfrm_user
+    - ip_tunnel
+    - tunnel4
+    - tunnel6
+    cap_add:
+    - SYS_MODULE
+    volumes:
+    - /lib/modules:/lib/modules
+
   test:
     profiles:
     - test
@@ -55,9 +78,6 @@ services:
     - MSISDN
     - K
     - OPC
-    depends_on:
-      hss:
-        condition: service_started
     build:
       context: .
       dockerfile_inline: |
