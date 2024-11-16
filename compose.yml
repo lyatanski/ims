@@ -10,6 +10,8 @@ x-kamailio: &kamailio
 services:
   pcscf:
     << : *kamailio
+    environment:
+      DOMAIN: mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
     configs:
     - source: pcscf.cfg
       target: /etc/ims/kamailio.cfg
@@ -47,7 +49,7 @@ services:
   test:
     profiles:
     - test
-    command: python3 /opt/test.py scscf ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
+    command: python3 /opt/test.py pcscf ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
     environment:
     - IMSI
     - MSISDN
@@ -165,6 +167,11 @@ configs:
              lameduck 5s
           }
           ready
+          template IN SRV ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org {
+              match .*
+              answer "{{ .Name }} 1D SRV 0 0 5060 icscf."
+              fallthrough
+          }
           template IN ANY mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org {
               match (^|[.])(?P<name>[^.]*).*
               answer "{{ .Name }} 1D IN CNAME {{ .Group.name }}."
