@@ -10,11 +10,16 @@ x-kamailio: &kamailio
 services:
   pcscf:
     << : *kamailio
+    environment:
+      DOMAIN: mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
     configs:
     - source: pcscf.cfg
       target: /etc/ims/kamailio.cfg
     - source: pcscf.xml
       target: /etc/ims/diameter.xml
+    depends_on:
+      kmod:
+        condition: service_completed_successfully
 
   icscf:
     << : *kamailio
@@ -44,18 +49,35 @@ services:
       default:
         ipv4_address: ${DNS}
 
+  kmod:
+    image: alpine
+    command:
+    - modprobe
+    - -a
+    - ah4
+    - ah6
+    - esp4
+    - esp6
+    - xfrm4_tunnel
+    - xfrm6_tunnel
+    - xfrm_user
+    - ip_tunnel
+    - tunnel4
+    - tunnel6
+    cap_add:
+    - SYS_MODULE
+    volumes:
+    - /lib/modules:/lib/modules
+
   test:
     profiles:
     - test
-    command: python3 /opt/test.py scscf ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
+    command: python3 /opt/test.py pcscf ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
     environment:
     - IMSI
     - MSISDN
     - K
     - OPC
-    depends_on:
-      hss:
-        condition: service_started
     build:
       context: .
       dockerfile_inline: |
@@ -165,6 +187,11 @@ configs:
              lameduck 5s
           }
           ready
+          template IN SRV ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org {
+              match .*
+              answer "{{ .Name }} 1D SRV 0 0 5060 icscf."
+              fallthrough
+          }
           template IN ANY mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org {
               match (^|[.])(?P<name>[^.]*).*
               answer "{{ .Name }} 1D IN CNAME {{ .Group.name }}."
