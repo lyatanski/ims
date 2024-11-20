@@ -178,7 +178,29 @@ configs:
       </DiameterPeer>
 
   icscf.sql:
-    file: icscf.sql
+    content: |
+      CREATE DATABASE IF NOT EXISTS icscf;
+      USE icscf;
+      CREATE TABLE IF NOT EXISTS nds_trusted_domains (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        trusted_domain varchar(83) NOT NULL DEFAULT '',
+        PRIMARY KEY (id)
+      );
+      CREATE TABLE IF NOT EXISTS s_cscf_capabilities (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        id_s_cscf int(11) NOT NULL DEFAULT 0,
+        capability int(11) NOT NULL DEFAULT 0,
+        PRIMARY KEY (id),
+        KEY idx_capability (capability),
+        KEY idx_id_s_cscf (id_s_cscf)
+      );
+      CREATE TABLE IF NOT EXISTS s_cscf (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        name varchar(83) NOT NULL DEFAULT '',
+        s_cscf_uri varchar(83) NOT NULL DEFAULT '',
+        PRIMARY KEY (id)
+      );
+      INSERT IGNORE INTO s_cscf (s_cscf_uri) VALUES ('sip:scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org:5060');
 
   scscf.cfg:
     file: scscf.cfg
