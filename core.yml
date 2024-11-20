@@ -46,6 +46,9 @@ services:
     configs:
     - source: subscribers
       target: /opt/subscribers.js
+    tmpfs:
+    - /data/configdb
+    - /data/db
     depends_on:
       mongo:
         condition: service_started
@@ -79,6 +82,9 @@ services:
   mongo:
     image: mongo:8.0
     command: --bind_ip 0.0.0.0
+    tmpfs:
+    - /data/configdb
+    - /data/db
     expose:
     - 27017/udp
     - 27017/tcp

@@ -11,7 +11,7 @@ services:
   pcscf:
     << : *kamailio
     environment:
-      DOMAIN: mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
+      DOMAIN: mnc${MNC}.mcc${MCC}.3gppnetwork.org
     configs:
     - source: pcscf.cfg
       target: /etc/ims/kamailio.cfg
@@ -24,12 +24,15 @@ services:
   icscf:
     << : *kamailio
     environment:
-      EPC_REALM: epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
+      EPC_REALM: epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
     configs:
     - source: icscf.cfg
       target: /etc/ims/kamailio.cfg
     - source: icscf.xml
       target: /etc/ims/diameter.xml
+    depends_on:
+      dbprep:
+        condition: service_completed_successfully
 
   scscf:
     << : *kamailio
@@ -69,10 +72,30 @@ services:
     volumes:
     - /lib/modules:/lib/modules
 
+  dbprep:
+    image: mariadb
+    command:
+    - sh
+    - -c
+    - mariadb --skip-ssl --host maria < /opt/icscf.sql
+    tmpfs:
+    - /var/lib/mysql
+    configs:
+    - source: icscf.sql
+      target: /opt/icscf.sql
+    restart: on-failure
+
+  maria:
+    image: mariadb
+    environment:
+      MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: true
+    tmpfs:
+    - /var/lib/mysql
+
   test:
     profiles:
     - test
-    command: python3 /opt/test.py pcscf ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org
+    command: python3 /opt/test.py pcscf ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org
     environment:
     - IMSI
     - MSISDN
@@ -115,20 +138,20 @@ configs:
     content: |
       <?xml version="1.0" encoding="UTF-8"?>
       <DiameterPeer
-          FQDN="pcscf.ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
-          Realm="ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+          FQDN="pcscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
+          Realm="ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
           Workers="1"
       >
               <Peer
-                  FQDN="pcrf.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
-                  Realm="epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+                  FQDN="pcrf.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
+                  Realm="epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
                   port="3868"
               />
               <Auth id="16777236" vendor="10415"/> <!-- Rx 3GPP -->
               <SupportedVendor vendor="10415" />
-              <DefaultRoute FQDN="pcrf.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org" metric="1"/>
+              <DefaultRoute FQDN="pcrf.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org" metric="1"/>
       </DiameterPeer>
 
   icscf.cfg:
@@ -138,21 +161,46 @@ configs:
     content: |
       <?xml version="1.0" encoding="UTF-8"?>
       <DiameterPeer
-          FQDN="icscf.ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
-          Realm="ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+          FQDN="icscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
+          Realm="ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
           Workers="1"
       >
               <Peer
-                  FQDN="hss.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
-                  Realm="epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+                  FQDN="hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
+                  Realm="epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
                   port="3868"
               />
               <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
               <SupportedVendor vendor="10415" />
-              <DefaultRoute FQDN="hss.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org" metric="1"/>
+              <DefaultRoute FQDN="hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org" metric="1"/>
       </DiameterPeer>
+
+  icscf.sql:
+    content: |
+      CREATE DATABASE IF NOT EXISTS icscf;
+      USE icscf;
+      CREATE TABLE IF NOT EXISTS nds_trusted_domains (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        trusted_domain varchar(83) NOT NULL DEFAULT '',
+        PRIMARY KEY (id)
+      );
+      CREATE TABLE IF NOT EXISTS s_cscf_capabilities (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        id_s_cscf int(11) NOT NULL DEFAULT 0,
+        capability int(11) NOT NULL DEFAULT 0,
+        PRIMARY KEY (id),
+        KEY idx_capability (capability),
+        KEY idx_id_s_cscf (id_s_cscf)
+      );
+      CREATE TABLE IF NOT EXISTS s_cscf (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        name varchar(83) NOT NULL DEFAULT '',
+        s_cscf_uri varchar(83) NOT NULL DEFAULT '',
+        PRIMARY KEY (id)
+      );
+      INSERT IGNORE INTO s_cscf (s_cscf_uri) VALUES ('sip:scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org:5060');
 
   scscf.cfg:
     file: scscf.cfg
@@ -161,21 +209,21 @@ configs:
     content: |
       <?xml version="1.0" encoding="UTF-8"?>
       <DiameterPeer
-          FQDN="scscf.ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
-          Realm="ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+          FQDN="scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
+          Realm="ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
           Workers="1"
       >
               <Peer
-                  FQDN="hss.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
-                  Realm="epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org"
+                  FQDN="hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
+                  Realm="epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
                   port="3868"
               />
               <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
               <Auth id="4"        vendor="10415"/> <!-- Ro 3GPP -->
               <SupportedVendor vendor="10415" />
-              <DefaultRoute FQDN="hss.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org" metric="1"/>
+              <DefaultRoute FQDN="hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org" metric="1"/>
       </DiameterPeer>
 
   dns:
@@ -187,12 +235,12 @@ configs:
              lameduck 5s
           }
           ready
-          template IN SRV ims.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org {
+          template IN SRV ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org {
               match .*
               answer "{{ .Name }} 1D SRV 0 0 5060 icscf."
               fallthrough
           }
-          template IN ANY mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org {
+          template IN ANY mnc${MNC}.mcc${MCC}.3gppnetwork.org {
               match (^|[.])(?P<name>[^.]*).*
               answer "{{ .Name }} 1D IN CNAME {{ .Group.name }}."
               fallthrough
