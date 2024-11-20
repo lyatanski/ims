@@ -30,6 +30,9 @@ services:
       target: /etc/ims/kamailio.cfg
     - source: icscf.xml
       target: /etc/ims/diameter.xml
+    depends_on:
+      dbprep:
+        condition: service_completed_successfully
 
   scscf:
     << : *kamailio
@@ -68,6 +71,26 @@ services:
     - SYS_MODULE
     volumes:
     - /lib/modules:/lib/modules
+
+  dbprep:
+    image: mariadb
+    command:
+    - sh
+    - -c
+    - mariadb --skip-ssl --host maria < /opt/icscf.sql
+    tmpfs:
+    - /var/lib/mysql
+    configs:
+    - source: icscf.sql
+      target: /opt/icscf.sql
+    restart: on-failure
+
+  maria:
+    image: mariadb
+    environment:
+      MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: true
+    tmpfs:
+    - /var/lib/mysql
 
   test:
     profiles:
@@ -153,6 +176,9 @@ configs:
               <SupportedVendor vendor="10415" />
               <DefaultRoute FQDN="hss.epc.mnc${MNC-001}.mcc${MCC-001}.3gppnetwork.org" metric="1"/>
       </DiameterPeer>
+
+  icscf.sql:
+    file: icscf.sql
 
   scscf.cfg:
     file: scscf.cfg
