@@ -38,7 +38,7 @@ services:
     << : *kamailio
     environment:
       EPC_REALM: epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
-      NAME: sip:scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org:5060
+      SRV_NAME: sip:scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org:5060
     configs:
     - source: scscf.cfg
       target: /etc/ims/kamailio.cfg
