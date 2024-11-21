@@ -20,7 +20,7 @@ services:
       dockerfile_inline: |
         FROM alpine AS build
         RUN apk add alpine-sdk bison flex git cmake meson bash sudo linux-headers bsd-compat-headers yaml-dev lksctp-tools-dev gnutls-dev libgcrypt-dev libidn-dev mongo-c-driver-dev libmicrohttpd-dev curl-dev nghttp2-dev talloc-dev
-        RUN git clone https://github.com/open5gs/open5gs
+        RUN git clone --depth=1 https://github.com/open5gs/open5gs
         WORKDIR open5gs
         RUN meson build --prefix=/opt
         RUN ninja -C build install
