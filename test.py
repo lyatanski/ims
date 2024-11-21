@@ -66,8 +66,8 @@ class SipCallback(s.SipCallback):
         if msg.isResponse() and msg.getResponseCode() == 200:
             self.log.info(f"sending subscribe")
             sip = event.getStack()
-            sip.setIMPU(f"sip:{self.msisdn}@{domain}")
-            sip.setRealm(f"sip:{self.msisdn}@{domain}")
+            #sip.setIMPU(f"sip:{self.msisdn}@{domain}")
+            #sip.setRealm(f"sip:{self.msisdn}@{domain}")
             sip.addHeader("Event", "reg")
             sip.addHeader("Accept", "application/reginfo+xml")
             #sip.setSilentHangup(True)
@@ -94,7 +94,7 @@ class SipCallback(s.SipCallback):
         return 0
 
 
-def gen(cscf, domain, transport="udp"):
+def gen(cscf, domain, transport="tcp"):
     def run_ue(imsi, msisdn, Ki, opc, bind=None, ipsec=None, call=None):
         sip = s.SipStack(SipCallback(imsi, msisdn, call),
                          realm_uri=domain,
