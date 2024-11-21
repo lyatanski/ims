@@ -36,6 +36,8 @@ services:
 
   scscf:
     << : *kamailio
+    environment:
+      EPC_REALM: epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
     configs:
     - source: scscf.cfg
       target: /etc/ims/kamailio.cfg
