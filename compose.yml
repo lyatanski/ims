@@ -238,13 +238,13 @@ configs:
              lameduck 5s
           }
           ready
-          template IN SRV ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org {
-              match .*
+          template IN SRV {
+              match .*ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
               answer "{{ .Name }} 1D SRV 0 0 5060 icscf."
               fallthrough
           }
-          template IN ANY mnc${MNC}.mcc${MCC}.3gppnetwork.org {
-              match (^|[.])(?P<name>[^.]*).*
+          template IN ANY {
+              match (^|[.])(?P<name>[^.]*).*\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
               answer "{{ .Name }} 1D IN CNAME {{ .Group.name }}."
               fallthrough
           }
