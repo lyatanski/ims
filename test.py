@@ -7,11 +7,12 @@ import logging
 import tinyWRAP as s
 
 class SipCallback(s.SipCallback):
-    def __init__(self, imsi, msisdn, call):
+    def __init__(self, imsi, msisdn, domain, call):
         super().__init__()
         self.log = logging.getLogger(f"----------{imsi}----------")
         self.imsi = imsi
         self.msisdn = msisdn
+        self.domain = domain
         self.call = call
         self.__disown__()
 
@@ -66,12 +67,14 @@ class SipCallback(s.SipCallback):
         if msg.isResponse() and msg.getResponseCode() == 200:
             self.log.info(f"sending subscribe")
             sip = event.getStack()
-            #sip.setIMPU(f"sip:{self.msisdn}@{domain}")
-            #sip.setRealm(f"sip:{self.msisdn}@{domain}")
+            #sip.setIMPU(f"sip:{self.msisdn}@{self.domain}")
+            #sip.setRealm(f"sip:{self.msisdn}@{self.domain}")
             sip.addHeader("Event", "reg")
             sip.addHeader("Accept", "application/reginfo+xml")
             #sip.setSilentHangup(True)
-            s.SubscriptionSession(sip).subscribe()
+            ses = s.SubscriptionSession(sip)
+            ses.setToUri(f"sip:{self.msisdn}@{self.domain}")
+            ses.subscribe()
         return 0
 
     def OnSubscriptionEvent(self, event):
@@ -96,7 +99,7 @@ class SipCallback(s.SipCallback):
 
 def gen(cscf, domain, transport="tcp"):
     def run_ue(imsi, msisdn, Ki, opc, bind=None, ipsec=None, call=None):
-        sip = s.SipStack(SipCallback(imsi, msisdn, call),
+        sip = s.SipStack(SipCallback(imsi, msisdn, domain, call),
                          realm_uri=domain,
                          impi_uri=f"{imsi}@{domain}",
                          impu_uri=f"sip:{imsi}@{domain}")
