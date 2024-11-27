@@ -24,7 +24,8 @@ sequenceDiagram
     P-CSCF->>I-CSCF: SIP - REGISTER
     I-CSCF->>HSS: Diameter - User-Authorization-Request
     HSS->>I-CSCF: Diameter - User-Authorization-Answer
-    I-CSCF->>DNS: A scscf
+    Note over I-CSCF: select S-CSCF form DB and/or UAA
+    I-CSCF->>DNS: A(if no port SRV) query S-CSCF URI
     DNS->>I-CSCF: CNAME S-CSCF
     I-CSCF->>S-CSCF: REGISTER
     S-CSCF->>HSS: Diameter - Multimedia-Auth-Request
