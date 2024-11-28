@@ -24,6 +24,8 @@ sequenceDiagram
     UE->>P-CSCF: SIP - REGISTER
     P-CSCF->>I-CSCF: SIP - REGISTER
     I-CSCF->>S-CSCF: SIP - REGISTER
+    S-CSCF->>HSS: Diameter - Server-Assignment-Request
+    HSS->>S-CSCF: Diameter - Server-Assignment-Answer
     S-CSCF->>I-CSCF: SIP 200 - OK
     I-CSCF->>P-CSCF: SIP 200 - OK
     P-CSCF->>UE: SIP 200 - OK
