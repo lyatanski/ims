@@ -14,7 +14,7 @@ IP Multimedia Subsystem
 
 [Images](doc/images.md)
 
-# Transactions:
+## Transactions:
 - [registration](doc/registration.md)
 
 Why another setup:
