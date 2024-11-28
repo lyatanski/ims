@@ -43,6 +43,8 @@ sequenceDiagram
 
 ```
 
+[images](doc/images.md)
+
 Why another setup:
 - use modern compose features (like interpolation) for simplicity
 - go into a bit more depth of the Kamailio configuration for better understanding
