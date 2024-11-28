@@ -11,6 +11,12 @@ IP Multimedia Subsystem
 - SMS [TS 24.341](https://www.etsi.org/deliver/etsi_ts/124300_124399/124341/18.00.00_60/ts_124341v180000p.pdf)
 - Emergency [TS 23.167](https://www.etsi.org/deliver/etsi_ts/123100_123199/123167/18.02.00_60/ts_123167v180200p.pdf)
 
+
+[Images](doc/images.md)
+
+## Transactions:
+- [registration](doc/registration.md)
+
 Why another setup:
 - use modern compose features (like interpolation) for simplicity
 - go into a bit more depth of the Kamailio configuration for better understanding
