@@ -125,7 +125,7 @@ def gen(cscf, domain, transport="tcp", ipsec=None):
 
 
 if __name__ == "__main__":
-    run = gen(cscf=os.environ["PCSCF"], domain=os.environ["REALM"], ipsec=os.environ["REALM"])
+    run = gen(cscf=os.environ["PCSCF"], domain=os.environ["REALM"], ipsec=os.environ["IPSEC"])
     s0 = run(imsi = sys.argv[1],
              msisdn = sys.argv[2],
              Ki = sys.argv[3],
