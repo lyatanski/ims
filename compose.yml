@@ -17,6 +17,8 @@ services:
       target: /etc/ims/kamailio.cfg
     - source: pcscf.xml
       target: /etc/ims/diameter.xml
+    cap_add:
+    - NET_ADMIN
     depends_on:
       kmod:
         condition: service_completed_successfully
