@@ -97,8 +97,8 @@ class SipCallback(s.SipCallback):
         return 0
 
 
-def gen(cscf, domain, transport="tcp"):
-    def run_ue(imsi, msisdn, Ki, opc, bind=None, ipsec=None, call=None):
+def gen(cscf, domain, transport="tcp", ipsec=None):
+    def run_ue(imsi, msisdn, Ki, opc, bind=None, call=None):
         sip = s.SipStack(SipCallback(imsi, msisdn, domain, call),
                          realm_uri=domain,
                          impi_uri=f"{imsi}@{domain}",
@@ -125,11 +125,11 @@ def gen(cscf, domain, transport="tcp"):
 
 
 if __name__ == "__main__":
-    run = gen(cscf=sys.argv[1], domain=sys.argv[2])
-    s0 = run(imsi = os.environ["IMSI"],
-             msisdn = os.environ["MSISDN"],
-             Ki = os.environ["K"],
-             opc = os.environ["OPC"])
+    run = gen(cscf=os.environ["PCSCF"], domain=os.environ["REALM"], ipsec=os.environ["IPSEC"])
+    s0 = run(imsi = sys.argv[1],
+             msisdn = sys.argv[2],
+             Ki = sys.argv[3],
+             opc = sys.argv[4])
     time.sleep(10)
     #del s0
 
