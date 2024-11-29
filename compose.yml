@@ -12,6 +12,7 @@ services:
     << : *kamailio
     environment:
       DOMAIN: mnc${MNC}.mcc${MCC}.3gppnetwork.org
+      IPSEC: ${IPSEC}
     configs:
     - source: pcscf.cfg
       target: /etc/ims/kamailio.cfg
@@ -19,6 +20,9 @@ services:
       target: /etc/ims/diameter.xml
     cap_add:
     - NET_ADMIN
+    networks:
+      default:
+        ipv4_address: ${IPSEC}
     depends_on:
       kmod:
         condition: service_completed_successfully
