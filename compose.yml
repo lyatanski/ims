@@ -3,7 +3,7 @@ include:
 
 
 x-kamailio: &kamailio
-  image: ghcr.io/kamailio/kamailio-ci:master-alpine
+  image: kamailio
   command: -f /etc/ims/kamailio.cfg
   dns: ${DNS}
 
@@ -20,6 +20,12 @@ services:
     depends_on:
       kmod:
         condition: service_completed_successfully
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine:edge
+        RUN apk add kamailio-ims kamailio-mysql kamailio-presence kamailio-debugger
+        ENTRYPOINT ["kamailio", "-DD", "-E"]
 
   icscf:
     << : *kamailio
@@ -54,6 +60,15 @@ services:
     networks:
       default:
         ipv4_address: ${DNS}
+
+  ## as UE IPs will not be in the setup IP range, they need special attention
+  ## TODO: to be relevant when PGW is involved
+  #route:
+  #  image: alpine
+  #  command: ip route add ${POOL} via ${SGI}
+  #  network_mode: service:pcscf
+  #  cap_add:
+  #  - NET_ADMIN
 
   kmod:
     image: alpine
