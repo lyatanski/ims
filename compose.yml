@@ -113,12 +113,11 @@ services:
   test:
     profiles:
     - test
-    command: python3 /opt/test.py pcscf ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org
+    command: python3 /opt/test.py ${IMSI} ${MSISDN} ${K} ${OPC}
     environment:
-    - IMSI
-    - MSISDN
-    - K
-    - OPC
+      PCSCF: pcscf
+      REALM: ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org
+      IPSEC: /opt/ipsec.so
     build:
       context: .
       dockerfile_inline: |
