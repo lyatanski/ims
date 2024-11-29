@@ -118,6 +118,8 @@ services:
       PCSCF: pcscf
       REALM: ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org
       IPSEC: /opt/ipsec.so
+    cap_add:
+    - NET_ADMIN
     build:
       context: .
       dockerfile_inline: |
