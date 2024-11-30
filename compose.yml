@@ -69,11 +69,16 @@ services:
 
 
   rtpengine:
+    command: --no-log-timestamps --config-file=/etc/rtpengine.conf
+    configs:
+    - source: rtpengine
+      target: /etc/rtpengine.conf
     build:
       context: .
       dockerfile_inline: |
          FROM ubuntu:noble
          RUN apt update && apt install --no-install-recommends -y rtpengine-daemon
+         ENTRYPOINT ["rtpengine"]
 
   ## as UE IPs will not be in the setup IP range, they need special attention
   ## TODO: to be relevant when PGW is involved
@@ -258,6 +263,21 @@ configs:
               <SupportedVendor vendor="10415" />
               <DefaultRoute FQDN="hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org" metric="1"/>
       </DiameterPeer>
+
+  rtpengine:
+    content: |
+      [rtpengine]
+      foreground = true
+      log-level = 6
+      log-stderr = true
+      table = -1
+      listen-ng = 0.0.0.0:9910
+      interface = internal/0.0.0.0
+      timeout = 60
+      silent-timeout = 3600
+      tos = 184
+      port-min = 30000
+      port-max = 40000
 
   dns:
     content: |
