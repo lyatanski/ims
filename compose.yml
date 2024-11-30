@@ -5,7 +5,7 @@ include:
 x-kamailio: &kamailio
   image: kamailio
   command: -f /etc/ims/kamailio.cfg
-  dns: ${DNS}
+  dns: ${DNSIP}
 
 services:
   pcscf:
@@ -65,7 +65,7 @@ services:
       target: /etc/coredns/Corefile
     networks:
       default:
-        ipv4_address: ${DNS}
+        ipv4_address: ${DNSIP}
 
 
   rtpengine:
@@ -73,6 +73,9 @@ services:
     configs:
     - source: rtpengine
       target: /etc/rtpengine.conf
+    networks:
+      default:
+        ipv4_address: ${RTPIP}
     build:
       context: .
       dockerfile_inline: |
@@ -272,7 +275,7 @@ configs:
       log-stderr = true
       table = -1
       listen-ng = 0.0.0.0:9910
-      interface = internal/0.0.0.0
+      interface = internal/${RTPIP}
       timeout = 60
       silent-timeout = 3600
       tos = 184
