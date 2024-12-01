@@ -53,6 +53,4 @@ configs:
         honor_timestamps: false
         static_configs:
         - targets:
-          - pcscf:9090
-          - icscf:9090
           - scscf:9090

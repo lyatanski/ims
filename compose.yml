@@ -1,5 +1,6 @@
 include:
 - core.yml
+- monitor.yml
 
 
 x-kamailio: &kamailio
@@ -30,7 +31,7 @@ services:
       context: .
       dockerfile_inline: |
         FROM alpine:edge
-        RUN apk add kamailio-ims kamailio-mysql kamailio-presence kamailio-debugger
+        RUN apk add kamailio-extras kamailio-ims kamailio-mysql kamailio-presence kamailio-debugger
         ENTRYPOINT ["kamailio", "-DD", "-E"]
 
   icscf:
@@ -49,13 +50,14 @@ services:
   scscf:
     << : *kamailio
     environment:
-      EPC_REALM: epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
-      SRV_NAME: sip:scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org:5060
+      REALM: mnc${MNC}.mcc${MCC}.3gppnetwork.org
     configs:
     - source: scscf.cfg
       target: /etc/ims/kamailio.cfg
     - source: scscf.xml
       target: /etc/ims/diameter.xml
+    - source: monitor.cfg
+      target: /etc/ims/monitor.cfg
 
   dns:
     image: coredns/coredns
@@ -172,6 +174,19 @@ services:
 
 
 configs:
+  monitor.cfg:
+    content: |
+      listen=tcp:0.0.0.0:9090
+      loadmodule "xhttp.so"
+      loadmodule "xhttp_prom.so"
+      modparam("xhttp_prom", "xhttp_prom_stats", "all")
+      event_route[xhttp:request] {
+      	if(prom_check_uri())
+      		prom_dispatch();
+                else
+      	        	xhttp_reply("200", "OK", "text/html", "<html><body>Wrong URL $$hu</body></html>");
+      }
+
   pcscf.cfg:
     file: pcscf.cfg
 
