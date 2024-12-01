@@ -3,11 +3,18 @@ services:
     image: grafana/promtail:2.9.2
     command: -config.file=/etc/promtail/config.yml
     volumes:
-      - /var/log:/var/log
+    - /var/log:/var/log
 
   loki:
     image: grafana/loki:2.9.2
     command: -config.file=/etc/loki/local-config.yaml
+
+  prometheus:
+    image: prom/prometheus
+    command: --config.file=/etc/prometheus/prometheus.yml
+    configs:
+    - source: prometheus.yml
+      target: /etc/prometheus/prometheus.yml
 
   grafana:
     image: grafana/grafana:latest
@@ -36,3 +43,16 @@ configs:
         isDefault: true
         version: 1
         editable: false
+
+  prometheus.yml:
+    content: |
+      global:
+        scrape_interval: 10s
+      scrape_configs:
+      - job_name: kamailo
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - pcscf:9090
+          - icscf:9090
+          - scscf:9090
