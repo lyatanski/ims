@@ -17,20 +17,20 @@ services:
       target: /etc/prometheus/prometheus.yml
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana
     environment:
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
     configs:
-    - source: ds.yaml
+    - source: grafana.yaml
       target: /etc/grafana/provisioning/datasources/ds.yaml
     ports:
     - 3000:3000
 
 
 configs:
-  ds.yaml:
+  grafana.yaml:
     content: |
       apiVersion: 1
       datasources:
