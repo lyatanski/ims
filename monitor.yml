@@ -47,6 +47,11 @@ configs:
         isDefault: true
         version: 1
         editable: false
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        basicAuth: false
 
   prometheus.yml:
     content: |
