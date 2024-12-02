@@ -23,22 +23,22 @@ Why another setup:
 - [registration](doc/registration.md)
 
 ## Components
-- IMS
+- IMS (compose.yml)
     - [x] Proxy
     - [x] Interrogating
     - [x] Serving
     - [x] rtpengine
     - [x] DNS
-- Core Network
+- Core Network (core.yml)
     - [x] HSS
     - [ ] PCRF
     - [ ] PGW
-- Billing
+- Billing (billing.yml)
     - [ ] CGRateS
-- Monitoring
+- Monitoring (monitor.yml)
     - [ ] Fluent Bit
-    - [ ] Loki
-    - [ ] Prometheus
+    - [x] Loki
+    - [x] Prometheus
     - [x] Grafana
-- Testing
+- Testing (compose.yml)
     - [x] Doubango
