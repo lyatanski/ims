@@ -14,6 +14,8 @@ services:
   prometheus:
     image: prom/prometheus
     command: --config.file=/etc/prometheus/prometheus.yml
+    expose:
+    - 9090/tcp
     configs:
     - source: prometheus.yml
       target: /etc/prometheus/prometheus.yml
