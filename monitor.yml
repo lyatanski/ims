@@ -8,6 +8,8 @@ services:
   loki:
     image: grafana/loki:2.9.2
     command: -config.file=/etc/loki/local-config.yaml
+    expose:
+    - 3100/tcp
 
   prometheus:
     image: prom/prometheus
@@ -23,14 +25,14 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
     configs:
-    - source: grafana.yaml
+    - source: grafana.yml
       target: /etc/grafana/provisioning/datasources/ds.yaml
     ports:
     - 3000:3000
 
 
 configs:
-  grafana.yaml:
+  grafana.yml:
     content: |
       apiVersion: 1
       datasources:
@@ -53,4 +55,4 @@ configs:
         honor_timestamps: false
         static_configs:
         - targets:
-          - scscf:9090
+          - scscf:5060
