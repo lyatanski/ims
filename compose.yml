@@ -179,6 +179,8 @@ services:
 configs:
   monitor.cfg:
     content: |
+      http_reply_parse=yes
+      tcp_accept_no_cl=yes
       loadmodule "xhttp.so"
       loadmodule "xhttp_prom.so"
       modparam("xhttp_prom", "xhttp_prom_stats", "all")
