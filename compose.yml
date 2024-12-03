@@ -1,23 +1,29 @@
 include:
 - core.yml
+- monitor.yml
 
 
 x-kamailio: &kamailio
   image: kamailio
   command: -f /etc/ims/kamailio.cfg
+  expose:
+  - 5060/tcp
+  - 5060/udp
   dns: ${DNSIP}
 
 services:
   pcscf:
     << : *kamailio
     environment:
-      DOMAIN: mnc${MNC}.mcc${MCC}.3gppnetwork.org
+      REALM: mnc${MNC}.mcc${MCC}.3gppnetwork.org
       IPSEC: ${IPSEC}
     configs:
     - source: pcscf.cfg
       target: /etc/ims/kamailio.cfg
     - source: pcscf.xml
       target: /etc/ims/diameter.xml
+    - source: monitor.cfg
+      target: /etc/ims/monitor.cfg
     cap_add:
     - NET_ADMIN
     networks:
@@ -30,18 +36,20 @@ services:
       context: .
       dockerfile_inline: |
         FROM alpine:edge
-        RUN apk add kamailio-ims kamailio-mysql kamailio-presence kamailio-debugger
+        RUN apk add kamailio-extras kamailio-ims kamailio-mysql kamailio-presence kamailio-debugger
         ENTRYPOINT ["kamailio", "-DD", "-E"]
 
   icscf:
     << : *kamailio
     environment:
-      EPC_REALM: epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
+      REALM: mnc${MNC}.mcc${MCC}.3gppnetwork.org
     configs:
     - source: icscf.cfg
       target: /etc/ims/kamailio.cfg
     - source: icscf.xml
       target: /etc/ims/diameter.xml
+    - source: monitor.cfg
+      target: /etc/ims/monitor.cfg
     depends_on:
       dbprep:
         condition: service_completed_successfully
@@ -49,13 +57,14 @@ services:
   scscf:
     << : *kamailio
     environment:
-      EPC_REALM: epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
-      SRV_NAME: sip:scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org:5060
+      REALM: mnc${MNC}.mcc${MCC}.3gppnetwork.org
     configs:
     - source: scscf.cfg
       target: /etc/ims/kamailio.cfg
     - source: scscf.xml
       target: /etc/ims/diameter.xml
+    - source: monitor.cfg
+      target: /etc/ims/monitor.cfg
 
   dns:
     image: coredns/coredns
@@ -172,6 +181,20 @@ services:
 
 
 configs:
+  monitor.cfg:
+    content: |
+      http_reply_parse=yes
+      tcp_accept_no_cl=yes
+      loadmodule "xhttp.so"
+      loadmodule "xhttp_prom.so"
+      modparam("xhttp_prom", "xhttp_prom_stats", "all")
+      event_route[xhttp:request] {
+      	if(prom_check_uri())
+      		prom_dispatch();
+      	else
+      		xhttp_reply("200", "OK", "text/html", "<html><body>Wrong URL $$hu</body></html>");
+      }
+
   pcscf.cfg:
     file: pcscf.cfg
 

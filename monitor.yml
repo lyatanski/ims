@@ -1,0 +1,75 @@
+services:
+  promtail:
+    image: grafana/promtail:2.9.2
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+    - /var/log:/var/log
+
+  loki:
+    image: grafana/loki:2.9.2
+    command: -config.file=/etc/loki/local-config.yaml
+    expose:
+    - 3100/tcp
+
+  prometheus:
+    image: prom/prometheus
+    command: --config.file=/etc/prometheus/prometheus.yml
+    expose:
+    - 9090/tcp
+    configs:
+    - source: prometheus.yml
+      target: /etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana
+    environment:
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    configs:
+    - source: grafana.yml
+      target: /etc/grafana/provisioning/datasources/ds.yaml
+    ports:
+    - 3000:3000
+
+
+configs:
+  grafana.yml:
+    content: |
+      apiVersion: 1
+      datasources:
+      - name: Loki
+        type: loki
+        access: proxy
+        orgId: 1
+        url: http://loki:3100
+        basicAuth: false
+        isDefault: true
+        version: 1
+        editable: false
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        basicAuth: false
+
+  prometheus.yml:
+    content: |
+      global:
+        scrape_interval: 10s
+      scrape_configs:
+      - job_name: pcscf
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - pcscf:5060
+      - job_name: icscf
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - icscf:5060
+      - job_name: scscf
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - scscf:5060
