@@ -58,7 +58,17 @@ configs:
       global:
         scrape_interval: 10s
       scrape_configs:
-      - job_name: kamailo
+      - job_name: pcscf
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - pcscf:5060
+      - job_name: icscf
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - icscf:5060
+      - job_name: scscf
         honor_timestamps: false
         static_configs:
         - targets:
