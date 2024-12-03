@@ -39,6 +39,7 @@ Why another setup:
     - [ ] Fluent Bit
     - [x] Loki
     - [x] Prometheus
+    - [ ] Alertmanager
     - [x] Grafana
 - Testing (compose.yml)
     - [x] Doubango
