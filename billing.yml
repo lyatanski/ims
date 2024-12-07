@@ -3,6 +3,8 @@ services:
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
+    volumes:
+    - diameter:/usr/share/cgrates/diameter/dict/
     build:
       context: .
       dockerfile_inline: |
@@ -37,3 +39,7 @@ configs:
               "origin_realm": "cgrates.org",
           },
       }
+
+
+volumes:
+  diameter:
