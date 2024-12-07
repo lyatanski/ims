@@ -24,6 +24,11 @@ configs:
               "log_level": 7,
           },
 
+          // requested by diameter_agent
+          "sessions": {
+              "enabled": true,
+          },
+
           "diameter_agent": {
               "enabled": true,
               "listen": "0.0.0.0:3868",
