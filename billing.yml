@@ -3,6 +3,8 @@ services:
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
+    expose:
+    - 3868/tcp
     volumes:
     - diameter:/usr/share/cgrates/diameter/dict/
     build:
