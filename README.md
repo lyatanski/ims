@@ -34,7 +34,8 @@ Why another setup:
     - [ ] PCRF
     - [ ] PGW
 - Billing (billing.yml)
-    - [ ] CGRateS
+    - [x] CGRateS
+    - [ ] CGRAdmin
 - Monitoring (monitor.yml)
     - [ ] Fluent Bit
     - [x] Loki

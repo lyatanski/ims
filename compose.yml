@@ -1,5 +1,6 @@
 include:
 - core.yml
+- billing.yml
 - monitor.yml
 
 

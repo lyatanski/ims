@@ -1,0 +1,47 @@
+services:
+  cgrates:
+    configs:
+    - source: cgrates.json
+      target: /etc/cgrates/cgrates.json
+    expose:
+    - 3868/tcp
+    volumes:
+    - diameter:/usr/share/cgrates/diameter/dict/
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM golang:alpine AS build
+        RUN wget -O - https://github.com/cgrates/cgrates/archive/refs/tags/v0.10.4.tar.gz | tar -xzf -
+        WORKDIR /go/cgrates-0.10.4/cmd/cgr-engine/
+        RUN go build
+        FROM scratch
+        COPY --from=build /go/cgrates-0.10.4/cmd/cgr-engine/cgr-engine /bin/cgr-engine
+        ENTRYPOINT ["/bin/cgr-engine"]
+
+
+configs:
+  cgrates.json:
+    content: |
+      {
+          "general": {
+              "logger": "*stdout",
+              "log_level": 7,
+          },
+
+          // requested by diameter_agent
+          "sessions": {
+              "enabled": true,
+          },
+
+          "diameter_agent": {
+              "enabled": true,
+              "listen": "0.0.0.0:3868",
+              "listen_net": "tcp",
+              "origin_host": "CGR-DA",
+              "origin_realm": "cgrates.org",
+          },
+      }
+
+
+volumes:
+  diameter:
