@@ -2,8 +2,12 @@ services:
   promtail:
     image: grafana/promtail:2.9.2
     command: -config.file=/etc/promtail/config.yml
+    configs:
+    - source: promtail.yml
+      target: /etc/promtail/config.yml
     volumes:
-    - /var/log:/var/log
+    - /var/lib/docker:/var/lib/docker
+    - /var/run/docker.sock:/var/run/docker.sock
 
   loki:
     image: grafana/loki:2.9.2
@@ -27,14 +31,38 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
     configs:
-    - source: grafana.yml
+    - source: datasources.yml
       target: /etc/grafana/provisioning/datasources/ds.yaml
+    - source: dashboards.yml
+      target: /etc/grafana/provisioning/dashboards/ds.yaml
+    - source: logs.json
+      target: /etc/dashboards/logs.json
     ports:
     - 3000:3000
 
 
 configs:
-  grafana.yml:
+  promtail.yml:
+    content: |
+      server:
+        http_listen_port: 9080
+        grpc_listen_port: 0
+      positions:
+        filename: /tmp/positions.yaml
+      clients:
+      - url: http://loki:3100/loki/api/v1/push
+      scrape_configs:
+      - job_name: system
+        docker_sd_configs:
+        - host: unix:///var/run/docker.sock
+          refresh_interval: 5s
+        relabel_configs:
+        - source_labels: ['__meta_docker_container_name']
+          regex: '/(.*)'
+          target_label: 'container'
+        #pipeline_stages:
+
+  datasources.yml:
     content: |
       apiVersion: 1
       datasources:
@@ -52,6 +80,19 @@ configs:
         access: proxy
         url: http://prometheus:9090
         basicAuth: false
+
+  dashboards.yml:
+    content: |
+      apiVersion: 1
+      providers:
+      - name: dashboards
+        type: file
+        updateIntervalSeconds: 3600
+        options:
+          path: /etc/dashboards
+
+  logs.json:
+    file: dash_log.json
 
   prometheus.yml:
     content: |
