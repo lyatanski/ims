@@ -156,7 +156,6 @@ services:
       context: .
       dockerfile_inline: |
         FROM ubuntu:jammy AS build
-
         RUN apt update && apt install -y --no-install-recommends \
         git build-essential cmake libtool yasm \
         ragel \
@@ -171,11 +170,10 @@ services:
         RUN cmake --build out
 
         FROM ubuntu:jammy
-        RUN apt update && apt install -y python3-pip iproute2
+        RUN apt update && apt install --no-install-recommends -y python3-pip iproute2
         COPY --from=build /doubango/out/_deps/libmnl/usr/lib/libmnl.so* /usr/local/lib/
-        COPY --from=build /doubango/out/bindings/python/ /opt/python
         COPY --from=build /doubango/out/plugins/ipsec_linux/ipsec.so /opt/
-        RUN ldconfig && pip install /opt/python
+        RUN --mount=type=bind,from=build,source=/doubango/out/bindings/python/,target=/opt/python,rw ldconfig && pip install /opt/python
     configs:
     - source: test.py
       target: /opt/test.py
