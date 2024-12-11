@@ -30,6 +30,7 @@ Why another setup:
     - [x] rtpengine
     - [x] DNS
 - Core Network (core.yml)
+    - [ ] DRA
     - [x] HSS
     - [ ] PCRF
     - [ ] PGW
@@ -37,7 +38,7 @@ Why another setup:
     - [x] CGRateS
     - [ ] CGRAdmin
 - Monitoring (monitor.yml)
-    - [ ] Fluent Bit
+    - [x] Promtail
     - [x] Loki
     - [x] Prometheus
     - [ ] Alertmanager
