@@ -6,6 +6,7 @@ Why another setup:
 - go into a bit more depth of the Kamailio configuration for better understanding
 - provide entirely software based playground for testing
 
+
 ## Specifications
 - SIP [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html)
 - IMS (Stage 2) [TS 23.228](https://www.etsi.org/deliver/etsi_ts/123200_123299/123228/18.07.00_60/ts_123228v180700p.pdf)
@@ -17,26 +18,26 @@ Why another setup:
 - Emergency [TS 23.167](https://www.etsi.org/deliver/etsi_ts/123100_123199/123167/18.02.00_60/ts_123167v180200p.pdf)
 
 
-[Images](doc/images.md)
-
 ## Transactions:
 - [registration](doc/registration.md)
 
+
 ## Components
 - IMS (compose.yml)
+  - [CSCF](doc/images.md#kamailio-p-cscfi-cscfs-cscf)
     - [x] Proxy
     - [x] Interrogating
     - [x] Serving
-    - [x] rtpengine
-    - [x] DNS
+  - [x] [rtpengine](doc/images.md#rtpengine)
+  - [x] DNS
 - Core Network (core.yml)
     - [ ] DRA
-    - [x] HSS
+    - [x] [HSS](doc/images.md#open5gs-hsspcrfpgw)
     - [ ] PCRF
     - [ ] PGW
     - [ ] SMSC
 - Billing (billing.yml)
-    - [x] CGRateS
+    - [x] [CGRateS](doc/images.md#cgrates-billing)
     - [ ] CGRAdmin
 - Monitoring (monitor.yml)
     - [x] Promtail
