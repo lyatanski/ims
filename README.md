@@ -28,23 +28,28 @@ Why another setup:
     - [x] Proxy
     - [x] Interrogating
     - [x] Serving
+  - [x] MariaDB
   - [x] [rtpengine](doc/images.md#rtpengine)
   - [x] DNS
 - Core Network (core.yml)
-    - [ ] DRA
-    - [x] [HSS](doc/images.md#open5gs-hsspcrfpgw)
-    - [ ] PCRF
-    - [ ] PGW
-    - [ ] SMSC
+  - [ ] DRA
+  - [x] [HSS](doc/images.md#open5gs-hsspcrfpgw)
+  - [x] HSS UI
+  - [ ] PCRF
+  - [ ] PGW
+  - [ ] SMSC
+  - [x] MongoDB
 - Billing (billing.yml)
-    - [x] [CGRateS](doc/images.md#cgrates-billing)
-    - [ ] CGRAdmin
+  - [x] [CGRateS](doc/images.md#cgrates-billing)
+  - [ ] Redis
+  - [ ] MariaDB
+  - [ ] CGRAdmin
 - Monitoring (monitor.yml)
-    - [x] Promtail
-    - [x] Loki
-    - [ ] cAdvisor
-    - [x] Prometheus
-    - [ ] Alertmanager
-    - [x] Grafana
+  - [x] Promtail
+  - [x] Loki
+  - [ ] cAdvisor
+  - [x] Prometheus
+  - [ ] Alertmanager
+  - [x] Grafana
 - Testing (compose.yml)
-    - [x] Doubango
+  - [x] Doubango
