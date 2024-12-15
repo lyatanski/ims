@@ -34,12 +34,14 @@ Why another setup:
     - [x] HSS
     - [ ] PCRF
     - [ ] PGW
+    - [ ] SMSC
 - Billing (billing.yml)
     - [x] CGRateS
     - [ ] CGRAdmin
 - Monitoring (monitor.yml)
     - [x] Promtail
     - [x] Loki
+    - [ ] cAdvisor
     - [x] Prometheus
     - [ ] Alertmanager
     - [x] Grafana
