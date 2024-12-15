@@ -24,7 +24,7 @@ Why another setup:
 
 ## Components
 - IMS (compose.yml)
-  - [CSCF](doc/images.md#kamailio-p-cscfi-cscfs-cscf)
+  - [x] [CSCF](doc/images.md#kamailio-p-cscfi-cscfs-cscf)
     - [x] Proxy
     - [x] Interrogating
     - [x] Serving
