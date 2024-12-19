@@ -67,7 +67,7 @@ class SipCallback(s.SipCallback):
         if msg.isResponse() and msg.getResponseCode() == 200:
             self.log.info(f"sending subscribe")
             sip = event.getStack()
-            #sip.setIMPU(f"sip:{self.msisdn}@{self.domain}")
+            sip.setIMPU(f"sip:{self.msisdn}@{self.domain}")
             #sip.setRealm(f"sip:{self.msisdn}@{self.domain}")
             sip.addHeader("Event", "reg")
             sip.addHeader("Accept", "application/reginfo+xml")
