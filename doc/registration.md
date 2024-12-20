@@ -29,6 +29,27 @@ sequenceDiagram
     S-CSCF->>I-CSCF: SIP 200 - OK
     I-CSCF->>P-CSCF: SIP 200 - OK
     P-CSCF->>UE: SIP 200 - OK
+```
 
+```mermaid
+---
+title: Subscription
+config:
+  mirrorActors: false
+---
+sequenceDiagram
+    UE->>P-CSCF: SIP - SUBSCRIBE
+    P-CSCF->>DNS: SRV scscf
+    DNS->>P-CSCF: SRV S-CSCF
+    Note over P-CSCF: add P-Asserted-Identity
+    P-CSCF->>S-CSCF: SIP - SUBSCRIBE
+    S-CSCF->>P-CSCF: SIP 200 - OK
+    P-CSCF->>UE: SIP 200 - OK
+    S-CSCF->>DNS: SRV pcscf
+    DNS->>S-CSCF: SRV P-CSCF
+    S-CSCF->>P-CSCF: SIP - NOTIFY
+    P-CSCF->>UE: SIP - NOTIFY
+    UE->>P-CSCF: SIP 200 - OK
+    P-CSCF->>S-CSCF: SIP 200 - OK
 ```
 
