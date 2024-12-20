@@ -41,6 +41,7 @@ sequenceDiagram
     UE->>P-CSCF: SIP - SUBSCRIBE
     P-CSCF->>DNS: SRV scscf
     DNS->>P-CSCF: SRV S-CSCF
+    Note over P-CSCF: add P-Asserted-Identity
     P-CSCF->>S-CSCF: SIP - SUBSCRIBE
     S-CSCF->>P-CSCF: SIP 200 - OK
     P-CSCF->>UE: SIP 200 - OK
