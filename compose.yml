@@ -7,6 +7,8 @@ include:
 x-kamailio: &kamailio
   image: kamailio
   command: -f /etc/ims/kamailio.cfg
+  environment: &env
+    REALM: ${REALM}
   expose:
   - 5060/tcp
   - 5060/udp
@@ -16,7 +18,7 @@ services:
   pcscf:
     << : *kamailio
     environment:
-      REALM: mnc${MNC}.mcc${MCC}.3gppnetwork.org
+      << : *env
       IPSEC: ${IPSEC}
     configs:
     - source: pcscf.cfg
@@ -42,8 +44,6 @@ services:
 
   icscf:
     << : *kamailio
-    environment:
-      REALM: mnc${MNC}.mcc${MCC}.3gppnetwork.org
     configs:
     - source: icscf.cfg
       target: /etc/ims/kamailio.cfg
@@ -57,8 +57,6 @@ services:
 
   scscf:
     << : *kamailio
-    environment:
-      REALM: mnc${MNC}.mcc${MCC}.3gppnetwork.org
     configs:
     - source: scscf.cfg
       target: /etc/ims/kamailio.cfg
@@ -147,8 +145,8 @@ services:
     - test
     command: python3 /opt/test.py ${IMSI} ${MSISDN} ${K} ${OPC}
     environment:
+      REALM: ims.${REALM}
       PCSCF: pcscf
-      REALM: ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org
       IPSEC: /opt/ipsec.so
     cap_add:
     - NET_ADMIN
@@ -201,20 +199,16 @@ configs:
     content: |
       <?xml version="1.0" encoding="UTF-8"?>
       <DiameterPeer
-          FQDN="pcscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
-          Realm="ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
+          FQDN="pcscf.ims.${REALM}"
+          Realm="ims.${REALM}"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
           Workers="1"
       >
-              <Peer
-                  FQDN="pcrf.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
-                  Realm="epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
-                  port="3868"
-              />
+              <Peer FQDN="pcrf.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
               <Auth id="16777236" vendor="10415"/> <!-- Rx 3GPP -->
               <SupportedVendor vendor="10415" />
-              <DefaultRoute FQDN="pcrf.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org" metric="1"/>
+              <DefaultRoute FQDN="pcrf.epc.${REALM}" metric="1"/>
       </DiameterPeer>
 
   icscf.cfg:
@@ -224,20 +218,16 @@ configs:
     content: |
       <?xml version="1.0" encoding="UTF-8"?>
       <DiameterPeer
-          FQDN="icscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
-          Realm="ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
+          FQDN="icscf.ims.${REALM}"
+          Realm="ims.${REALM}"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
           Workers="1"
       >
-              <Peer
-                  FQDN="hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
-                  Realm="epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
-                  port="3868"
-              />
+              <Peer FQDN="hss.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
               <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
               <SupportedVendor vendor="10415" />
-              <DefaultRoute FQDN="hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org" metric="1"/>
+              <DefaultRoute FQDN="hss.epc.${REALM}" metric="1"/>
       </DiameterPeer>
 
   icscf.sql:
@@ -263,7 +253,7 @@ configs:
         s_cscf_uri varchar(83) NOT NULL DEFAULT '',
         PRIMARY KEY (id)
       );
-      INSERT IGNORE INTO s_cscf (s_cscf_uri) VALUES ('sip:scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org:5060');
+      INSERT IGNORE INTO s_cscf (s_cscf_uri) VALUES ('sip:scscf.ims.${REALM}');
 
   scscf.cfg:
     file: scscf.cfg
@@ -272,21 +262,17 @@ configs:
     content: |
       <?xml version="1.0" encoding="UTF-8"?>
       <DiameterPeer
-          FQDN="scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
-          Realm="ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
+          FQDN="scscf.ims.${REALM}"
+          Realm="ims.${REALM}"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
           Workers="1"
       >
-              <Peer
-                  FQDN="hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
-                  Realm="epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org"
-                  port="3868"
-              />
+              <Peer FQDN="hss.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
               <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
               <Auth id="4"        vendor="10415"/> <!-- Ro 3GPP -->
               <SupportedVendor vendor="10415" />
-              <DefaultRoute FQDN="hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org" metric="1"/>
+              <DefaultRoute FQDN="hss.epc.${REALM}" metric="1"/>
       </DiameterPeer>
 
   rtpengine:
@@ -314,7 +300,7 @@ configs:
           }
           ready
           template IN SRV {
-              match (^|[.])(?P<name>.cscf*)\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
+              match (^|[.])(?P<name>.cscf)\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
               answer "{{ .Name }} 1D SRV 0 0 5060 {{ .Group.name }}."
               fallthrough
           }
@@ -343,4 +329,4 @@ networks:
   default:
     ipam:
       config:
-        - subnet: 192.168.69.0/24
+        - subnet: ${SUBNET}
