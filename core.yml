@@ -139,8 +139,8 @@ configs:
         {
             _id: new ObjectId(),
             schema_version: NumberInt(1),
-            imsi: '${IMSI}{i}',
-            msisdn: ['${MSISDN}'],
+            imsi: `${IMSI}$${i}`,
+            msisdn: [`${MSISDN}$${i}`],
             imeisv: [],
             mme_host: [],
             mm_realm: [],
