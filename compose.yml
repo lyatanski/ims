@@ -193,7 +193,7 @@ configs:
       }
 
   pcscf.cfg:
-    file: pcscf.cfg
+    file: cscf/proxy.cfg
 
   pcscf.xml:
     content: |
@@ -212,7 +212,7 @@ configs:
       </DiameterPeer>
 
   icscf.cfg:
-    file: icscf.cfg
+    file: cscf/interrogating.cfg
 
   icscf.xml:
     content: |
@@ -256,7 +256,7 @@ configs:
       INSERT IGNORE INTO s_cscf (s_cscf_uri) VALUES ('sip:scscf.ims.${REALM}');
 
   scscf.cfg:
-    file: scscf.cfg
+    file: cscf/serving.cfg
 
   scscf.xml:
     content: |
