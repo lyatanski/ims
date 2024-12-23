@@ -1,7 +1,7 @@
 {
   "__inputs": [
     {
-      "name": "prometheus",
+      "name": "DS_PROMETHEUS",
       "label": "Prometheus",
       "description": "",
       "type": "datasource",
@@ -62,7 +62,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${DS_PROMETHEUS}"
       },
       "fieldConfig": {
         "defaults": {
@@ -120,7 +120,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
           "exemplar": false,
@@ -143,7 +143,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${DS_PROMETHEUS}"
       },
       "fieldConfig": {
         "defaults": {
@@ -205,12 +205,16 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${DS_PROMETHEUS}"
           },
+          "editorMode": "code",
+          "exemplar": false,
           "expr": "sum(container_memory_usage_bytes{image!=\"\"})/1024/1024",
-          "intervalFactor": 2,
+          "instant": true,
+          "intervalFactor": 1,
           "legendFormat": "",
           "metric": "container_memory_usage_bytes",
+          "range": false,
           "refId": "A",
           "step": 240
         }
@@ -222,7 +226,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${DS_PROMETHEUS}"
       },
       "fieldConfig": {
         "defaults": {
@@ -286,12 +290,16 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${DS_PROMETHEUS}"
           },
+          "editorMode": "code",
+          "exemplar": false,
           "expr": "sum(rate(container_cpu_user_seconds_total{image!=\"\"}[5m]) * 100)",
-          "intervalFactor": 2,
+          "instant": true,
+          "intervalFactor": 1,
           "legendFormat": "",
           "metric": "container_memory_usage_bytes",
+          "range": false,
           "refId": "A",
           "step": 240
         }
@@ -303,7 +311,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${DS_PROMETHEUS}"
       },
       "fieldConfig": {
         "defaults": {
@@ -388,12 +396,16 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${DS_PROMETHEUS}"
           },
+          "editorMode": "code",
+          "exemplar": false,
           "expr": "rate(container_cpu_user_seconds_total{image!=\"\"}[5m]) * 100",
-          "intervalFactor": 2,
+          "instant": true,
+          "intervalFactor": 1,
           "legendFormat": "{{name}}",
           "metric": "cpu",
+          "range": false,
           "refId": "A",
           "step": 10
         }
@@ -489,15 +501,17 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
+          "exemplar": false,
           "expr": "container_memory_usage_bytes{image!=\"\"}",
           "hide": false,
-          "intervalFactor": 2,
+          "instant": true,
+          "intervalFactor": 1,
           "legendFormat": "{{name}}",
           "metric": "container_memory_usage_bytes",
-          "range": true,
+          "range": false,
           "refId": "A",
           "step": 10
         }
@@ -508,7 +522,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${DS_PROMETHEUS}"
       },
       "fieldConfig": {
         "defaults": {
@@ -590,12 +604,16 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${DS_PROMETHEUS}"
           },
+          "editorMode": "code",
+          "exemplar": false,
           "expr": "irate(container_network_receive_bytes_total{image!=\"\"}[5m])",
-          "intervalFactor": 2,
+          "instant": true,
+          "intervalFactor": 1,
           "legendFormat": "{{name}}",
           "metric": "container_network_receive_bytes_total",
+          "range": false,
           "refId": "A",
           "step": 20
         }
@@ -606,7 +624,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${DS_PROMETHEUS}"
       },
       "fieldConfig": {
         "defaults": {
@@ -688,11 +706,15 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "prometheus"
+            "uid": "${DS_PROMETHEUS}"
           },
+          "editorMode": "code",
+          "exemplar": false,
           "expr": "irate(container_network_transmit_bytes_total{image!=\"\"}[5m])",
-          "intervalFactor": 2,
+          "instant": true,
+          "intervalFactor": 1,
           "legendFormat": "{{name}}",
+          "range": false,
           "refId": "A",
           "step": 20
         }
@@ -713,8 +735,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "monitor Copy Copy",
-  "uid": "ae7tehrytccn4c",
+  "title": "monitor 13",
+  "uid": "fe7tf27yopq0wd",
   "version": 1,
   "weekStart": ""
 }
