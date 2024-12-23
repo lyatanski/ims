@@ -30,7 +30,7 @@ services:
         COPY --from=build /opt /opt
 
   certificate:
-    command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
+    command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.${REALM}
     working_dir: /var/hss
     volumes:
     - certificate:/var/hss
@@ -96,7 +96,7 @@ configs:
       db_uri: mongodb://mongo/open5gs
       hss:
         freeDiameter: /etc/hss/diameter.conf
-          #identity: hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org
+          #identity: hss.epc.${REALM}
           #load_extension:
           #- module: /opt/lib/freeDiameter/dbg_msg_dumps.fdx
           #  conf: 0x4444
@@ -115,7 +115,7 @@ configs:
 
   hss.diameter:
     content: |
-      Identity = "hss.epc.mnc${MNC}.mcc${MCC}.3gppnetwork.org";
+      Identity = "hss.epc.${REALM}";
       No_SCTP;
       TLS_Cred = "/var/hss/crt.pem", "/var/hss/key.pem";
       TLS_CA = "/var/hss/crt.pem";
@@ -128,66 +128,68 @@ configs:
       LoadExtension = "/opt/lib/freeDiameter/dict_dcca.fdx";
       LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
 
-      ConnectPeer = "icscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" { No_TLS; };
-      ConnectPeer = "scscf.ims.mnc${MNC}.mcc${MCC}.3gppnetwork.org" { No_TLS; };
+      ConnectPeer = "icscf.ims.${REALM}" { No_TLS; };
+      ConnectPeer = "scscf.ims.${REALM}" { No_TLS; };
 
   subscribers:
     content: |
       db = db.getSiblingDB('open5gs')
-      db.subscribers.insertOne(
-      {
-          _id: new ObjectId(),
-          schema_version: NumberInt(1),
-          imsi: '${IMSI}',
-          msisdn: ['${MSISDN}'],
-          imeisv: [],
-          mme_host: [],
-          mm_realm: [],
-          purge_flag: [],
-          slice:[
-          {
-              sst: NumberInt(1),
-              default_indicator: true,
-              session: [
-              {
-                  name : 'internet',
-                  type : NumberInt(3),
-                  qos : {
-                      index: NumberInt(9),
-                      arp: {
-                          priority_level : NumberInt(8),
-                          pre_emption_capability: NumberInt(1),
-                          pre_emption_vulnerability: NumberInt(2)
-                      }
-                  },
-                  ambr: {
-                      downlink: { value: NumberInt(1000000000), unit: NumberInt(0) },
-                      uplink: { value: NumberInt(1000000000), unit: NumberInt(0) }
-                  },
-                  pcc_rule: [],
-                  _id: new ObjectId(),
-              }],
-              _id: new ObjectId(),
-          }],
-          security:
-          {
-              k : '${K}',
-              op : null,
-              opc : '${OPC}',
-              amf : '8000',
-          },
-          ambr :
-          {
-              downlink : { value: NumberInt(1000000000), unit: NumberInt(0)},
-              uplink : { value: NumberInt(1000000000), unit: NumberInt(0)}
-          },
-          access_restriction_data: 32,
-          network_access_mode: 0,
-          subscriber_status: 0,
-          operator_determined_barring: 0,
-          subscribed_rau_tau_timer: 12,
-          __v: 0
-      })
+      for(i = 0; i <= 9; i++){
+        db.subscribers.insertOne(
+        {
+            _id: new ObjectId(),
+            schema_version: NumberInt(1),
+            imsi: `${IMSI}$${i}`,
+            msisdn: [`${MSISDN}$${i}`],
+            imeisv: [],
+            mme_host: [],
+            mm_realm: [],
+            purge_flag: [],
+            slice:[
+            {
+                sst: NumberInt(1),
+                default_indicator: true,
+                session: [
+                {
+                    name : 'internet',
+                    type : NumberInt(3),
+                    qos : {
+                        index: NumberInt(9),
+                        arp: {
+                            priority_level : NumberInt(8),
+                            pre_emption_capability: NumberInt(1),
+                            pre_emption_vulnerability: NumberInt(2)
+                        }
+                    },
+                    ambr: {
+                        downlink: { value: NumberInt(1000000000), unit: NumberInt(0) },
+                        uplink: { value: NumberInt(1000000000), unit: NumberInt(0) }
+                    },
+                    pcc_rule: [],
+                    _id: new ObjectId(),
+                }],
+                _id: new ObjectId(),
+            }],
+            security:
+            {
+                k : '${K}',
+                op : null,
+                opc : '${OPC}',
+                amf : '8000',
+            },
+            ambr :
+            {
+                downlink : { value: NumberInt(1000000000), unit: NumberInt(0)},
+                uplink : { value: NumberInt(1000000000), unit: NumberInt(0)}
+            },
+            access_restriction_data: 32,
+            network_access_mode: 0,
+            subscriber_status: 0,
+            operator_determined_barring: 0,
+            subscribed_rau_tau_timer: 12,
+            __v: 0
+        })
+      }
 
 
 volumes:
