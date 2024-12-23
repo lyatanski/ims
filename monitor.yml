@@ -15,6 +15,16 @@ services:
     expose:
     - 3100/tcp
 
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor
+    volumes:
+    - /:/rootfs:ro
+    - /var/run:/var/run:ro
+    - /sys:/sys:ro
+    - /var/lib/docker/:/var/lib/docker:ro
+    expose:
+    - 8080/tcp
+
   prometheus:
     image: prom/prometheus
     command: --config.file=/etc/prometheus/prometheus.yml
@@ -92,13 +102,20 @@ configs:
           path: /etc/dashboards
 
   logs.json:
-    file: dash_log.json
+    file: graf/dash_log.json
+
+  rsrc.json:
+    file: graf/dash_rsrc.json
 
   prometheus.yml:
     content: |
       global:
         scrape_interval: 10s
       scrape_configs:
+      - job_name: cadvisor
+        static_configs:
+        - targets:
+          - cadvisor:8080
       - job_name: pcscf
         honor_timestamps: false
         static_configs:
