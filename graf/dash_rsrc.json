@@ -62,7 +62,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": null
       },
       "fieldConfig": {
         "defaults": {
@@ -124,7 +124,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": null
           },
           "expr": "count(container_last_seen{image!=\"\"})",
           "intervalFactor": 2,
@@ -141,7 +141,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": null
       },
       "fieldConfig": {
         "defaults": {
