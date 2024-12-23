@@ -143,15 +143,19 @@ services:
   test:
     profiles:
     - test
-    command: python3 /opt/test.py ${IMSI} ${MSISDN} ${K} ${OPC}
+    command: python3 /opt/test.py
     environment:
+      K:     ${K}
+      OPC:   ${OPC}
+      PLMN:  ${MCC}${MNC}
+      DIAL:  ${DIAL}
       REALM: ims.${REALM}
       PCSCF: pcscf
       IPSEC: /opt/ipsec.so
     cap_add:
     - NET_ADMIN
     deploy:
-      replicas: 2
+      replicas: ${SCALE}
     build:
       context: .
       dockerfile_inline: |

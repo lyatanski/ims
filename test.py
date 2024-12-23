@@ -126,13 +126,13 @@ def gen(cscf, domain, transport="tcp", ipsec=None):
 
 if __name__ == "__main__":
     import subprocess
-    idx = subprocess.check_output("host $(hostname -i) | grep -o 'ims-test-\([0-9]\+\)' | cut -d - -f 3", shell=True).decode("utf-8").strip()
+    idx = int(subprocess.check_output("host $(hostname -i) | grep -o 'ims-test-\([0-9]\+\)' | cut -d - -f 3", shell=True).decode("utf-8").strip())
     run = gen(cscf=os.environ["PCSCF"], domain=os.environ["REALM"], ipsec=os.environ["IPSEC"])
-    time.sleep(50+int(idx)*3)
-    s0 = run(imsi = sys.argv[1]+idx,
-             msisdn = sys.argv[2]+idx,
-             Ki = sys.argv[3],
-             opc = sys.argv[4])
+    time.sleep(50+idx*3)
+    s0 = run(imsi = f'{os.environ["PLMN"]}{idx:010}',
+             msisdn = f'{os.environ["DIAL"]}{idx:09}',
+             Ki = os.environ["K"],
+             opc = os.environ["OPC"])
     time.sleep(10)
     #del s0
 
