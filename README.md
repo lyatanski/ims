@@ -47,7 +47,7 @@ Why another setup:
 - Monitoring (monitor.yml)
   - [x] Promtail
   - [x] Loki
-  - [ ] cAdvisor
+  - [x] cAdvisor
   - [x] Prometheus
   - [ ] Alertmanager
   - [x] Grafana

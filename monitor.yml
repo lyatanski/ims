@@ -47,6 +47,8 @@ services:
       target: /etc/grafana/provisioning/dashboards/ds.yaml
     - source: logs.json
       target: /etc/dashboards/logs.json
+    - source: cadvisor.json
+      target: /etc/dashboards/cadvisor.json
     ports:
     - 3000:3000
 
@@ -104,7 +106,7 @@ configs:
   logs.json:
     file: graf/dash_log.json
 
-  rsrc.json:
+  cadvisor.json:
     file: graf/dash_rsrc.json
 
   prometheus.yml:
