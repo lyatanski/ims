@@ -134,13 +134,13 @@ configs:
   subscribers:
     content: |
       db = db.getSiblingDB('open5gs')
-      for(i = 0; i <= 9; i++){
+      for(i = 1; i <= ${SCALE}; i++){
         db.subscribers.insertOne(
         {
             _id: new ObjectId(),
             schema_version: NumberInt(1),
-            imsi: `${IMSI}$${i}`,
-            msisdn: [`${MSISDN}$${i}`],
+            imsi: '${MCC}${MNC}'+'000000000000000'.substring('${MCC}${MNC}'.length+`$${i}`.length)+`$${i}`,
+            msisdn: ['${DIAL}'+'000000000'.substring(`$${i}`.length)+`$${i}`],
             imeisv: [],
             mme_host: [],
             mm_realm: [],
