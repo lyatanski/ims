@@ -90,6 +90,7 @@ configs:
       - name: Prometheus
         type: prometheus
         access: proxy
+        uid: prometheus
         url: http://prometheus:9090
         basicAuth: false
 
