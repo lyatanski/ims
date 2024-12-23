@@ -124,7 +124,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "count(container_last_seen{name!=''})",
+          "expr": "count(time() - container_last_seen{name!=''} < 30)",
           "format": "time_series",
           "instant": true,
           "interval": "",
