@@ -141,7 +141,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Log",
+  "title": "logs",
   "uid": "loki-logs",
   "version": 1,
   "weekStart": ""

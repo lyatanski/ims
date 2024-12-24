@@ -15,6 +15,16 @@ services:
     expose:
     - 3100/tcp
 
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor
+    volumes:
+    - /:/rootfs:ro
+    - /var/run:/var/run:ro
+    - /sys:/sys:ro
+    - /var/lib/docker/:/var/lib/docker:ro
+    expose:
+    - 8080/tcp
+
   prometheus:
     image: prom/prometheus
     command: --config.file=/etc/prometheus/prometheus.yml
@@ -37,6 +47,8 @@ services:
       target: /etc/grafana/provisioning/dashboards/ds.yaml
     - source: logs.json
       target: /etc/dashboards/logs.json
+    - source: cadvisor.json
+      target: /etc/dashboards/cadvisor.json
     ports:
     - 3000:3000
 
@@ -78,6 +90,7 @@ configs:
       - name: Prometheus
         type: prometheus
         access: proxy
+        uid: prometheus
         url: http://prometheus:9090
         basicAuth: false
 
@@ -92,13 +105,20 @@ configs:
           path: /etc/dashboards
 
   logs.json:
-    file: dash_log.json
+    file: dash/log.json
+
+  cadvisor.json:
+    file: dash/stat.json
 
   prometheus.yml:
     content: |
       global:
         scrape_interval: 10s
       scrape_configs:
+      - job_name: cadvisor
+        static_configs:
+        - targets:
+          - cadvisor:8080
       - job_name: pcscf
         honor_timestamps: false
         static_configs:
