@@ -105,10 +105,10 @@ configs:
           path: /etc/dashboards
 
   logs.json:
-    file: graf/dash_log.json
+    file: dash/log.json
 
   cadvisor.json:
-    file: graf/dash_rsrc.json
+    file: dash/stat.json
 
   prometheus.yml:
     content: |
