@@ -15,6 +15,7 @@ sequenceDiagram
     alt
         UE1->>P-CSCF: SIP - CANCEL
         P-CSCF->>S-CSCF: SIP - CANCEL
+        S-CSCF->>P-CSCF: SIP - CANCEL
         P-CSCF->>UE2: SIP - CANCEL
     else
         UE2->>P-CSCF: SIP 183 - Session Progress
