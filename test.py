@@ -126,7 +126,7 @@ if __name__ == "__main__":
         #call.set100rel(True)
         #call.setSessionTimer(3600, "none")
         #call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
-        call.call(f'tel:{os.environ["DIAL"]}{idx-1:09};phone-context=', s.twrap_media_audio)
+        call.call(f'sip:+{os.environ["DIAL"]}{idx-1:09}@{os.environ["REALM"]};user=phone', s.twrap_media_audio)
 
         time.sleep(10)
 
