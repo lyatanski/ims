@@ -9,6 +9,8 @@ Why another setup:
 
 ## Specifications
 - SIP [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html)
+- SDP [RFC 2327](https://www.rfc-editor.org/rfc/rfc2327.html)
+- RTP [RFC 1889](https://www.rfc-editor.org/rfc/rfc1889.html)
 - IMS (Stage 2) [TS 23.228](https://www.etsi.org/deliver/etsi_ts/123200_123299/123228/18.07.00_60/ts_123228v180700p.pdf)
 - IMS (Stage 3) [TS 24.229](https://www.etsi.org/deliver/etsi_ts/124200_124299/124229/18.06.00_60/ts_124229v180600p.pdf)
 - Diameter Cx [TS 29.229](https://www.etsi.org/deliver/etsi_ts/129200_129299/129229/18.01.00_60/ts_129229v180100p.pdf)
