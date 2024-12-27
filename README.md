@@ -22,6 +22,7 @@ Why another setup:
 
 ## Transactions
 - [registration](doc/registration.md)
+- [invite](doc/invite.md)
 
 
 ## Components
