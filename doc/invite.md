@@ -6,8 +6,6 @@ config:
 ---
 sequenceDiagram
     UE1->>P-CSCF: SIP - INVITE
-    P-CSCF->>DNS: SRV scscf
-    DNS->>P-CSCF: SRV S-CSCF
     P-CSCF->>S-CSCF: SIP - INVITE
     Note over S-CSCF: rewrite request URI to registered address
     S-CSCF->>P-CSCF: SIP - INVITE
