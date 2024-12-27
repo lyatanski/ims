@@ -18,7 +18,7 @@ Why another setup:
 - Emergency [TS 23.167](https://www.etsi.org/deliver/etsi_ts/123100_123199/123167/18.02.00_60/ts_123167v180200p.pdf)
 
 
-## Transactions:
+## Transactions
 - [registration](doc/registration.md)
 
 
