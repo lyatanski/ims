@@ -120,14 +120,15 @@ if __name__ == "__main__":
 
     time.sleep(10)
 
-    #s0.removeHeader("Event")
-    call = s.CallSession(s0)
-    #call.set100rel(True)
-    #call.setSessionTimer(3600, "none")
-    #call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
-    call.call(f'tel:{os.environ["DIAL"]}{idx-1:09};phone-context=', s.twrap_media_audio)
+    if idx % 2 == 0:
+        #s0.removeHeader("Event")
+        call = s.CallSession(s0)
+        #call.set100rel(True)
+        #call.setSessionTimer(3600, "none")
+        #call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
+        call.call(f'tel:{os.environ["DIAL"]}{idx-1:09};phone-context=', s.twrap_media_audio)
 
-    time.sleep(10)
+        time.sleep(10)
 
     #del s0
 
