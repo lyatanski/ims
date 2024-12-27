@@ -7,13 +7,12 @@ import logging
 import tinyWRAP as s
 
 class SipCallback(s.SipCallback):
-    def __init__(self, imsi, msisdn, domain, call):
+    def __init__(self, imsi, msisdn, domain):
         super().__init__()
         self.log = logging.getLogger(f"----------{imsi}----------")
         self.imsi = imsi
         self.msisdn = msisdn
         self.domain = domain
-        self.call = call
         self.__disown__()
 
     def OnDialogEvent(self, event):
@@ -79,27 +78,12 @@ class SipCallback(s.SipCallback):
 
     def OnSubscriptionEvent(self, event):
         self.log.info(f"subscription {event.getStack()} type {event.getType()}")
-        msg = event.getSipMessage()
-        if not msg: return 0
-        if msg.isResponse() and msg.getResponseCode() == 200:
-            if self.call:
-                sip = event.getStack()
-                sip.removeHeader("Event")
-                call = s.CallSession(sip)
-                #call.set100rel(True)
-                call.setSessionTimer(3600, "none")
-                call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
-                call.call(f"tel:{self.call};phone-context=", s.twrap_media_audio)
-        #if event.getType() == s.tsip_i_notify and self.call:
-        #    sip = event.getStack()
-        #    sip.removeHeader("Event")
-        #    s.CallSession(sip).call(f"tel:{self.call};phone-context=", s.twrap_media_audio)
         return 0
 
 
 def gen(cscf, domain, transport="tcp", ipsec=None):
-    def run_ue(imsi, msisdn, Ki, opc, bind=None, call=None):
-        sip = s.SipStack(SipCallback(imsi, msisdn, domain, call),
+    def run_ue(imsi, msisdn, Ki, opc, bind=None):
+        sip = s.SipStack(SipCallback(imsi, msisdn, domain),
                          realm_uri=domain,
                          impi_uri=f"{imsi}@{domain}",
                          impu_uri=f"sip:{imsi}@{domain}")
@@ -133,6 +117,17 @@ if __name__ == "__main__":
              msisdn = f'{os.environ["DIAL"]}{idx:09}',
              Ki = os.environ["K"],
              opc = os.environ["OPC"])
+
     time.sleep(10)
+
+    #s0.removeHeader("Event")
+    call = s.CallSession(s0)
+    #call.set100rel(True)
+    #call.setSessionTimer(3600, "none")
+    #call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
+    call.call(f'tel:{os.environ["DIAL"]}{idx-1:09};phone-context=', s.twrap_media_audio)
+
+    time.sleep(10)
+
     #del s0
 
