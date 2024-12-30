@@ -161,7 +161,7 @@ services:
       dockerfile_inline: |
         FROM ubuntu:jammy AS build
         RUN apt update && apt install -y --no-install-recommends \
-        git build-essential cmake libtool yasm \
+        git build-essential cmake ninja-build libtool yasm \
         ragel \
         libsrtp2-dev libssl-dev libopus-dev \
         libspeexdsp-dev \
@@ -170,8 +170,8 @@ services:
         python3-dev  python3-pip
         RUN git clone --depth=1 https://github.com/lyatanski/doubango.git
         WORKDIR doubango
-        RUN cmake -B out
-        RUN cmake --build out
+        RUN cmake -B out -G Ninja
+        RUN cmake --build out --target install
 
         FROM ubuntu:jammy
         RUN apt update && apt install --no-install-recommends -y python3-pip iproute2 bind9-host
