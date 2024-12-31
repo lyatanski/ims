@@ -9,16 +9,16 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set Up
-      run: docker compose --profile test up -d
+      run: docker compose --profile test up --detach
 
     - name: Wait
       run: sleep 90
 
     - name: Check
-      run: docker compose --profile test ps -a
+      run: docker compose --profile test ps --all
 
     - name: Logs
       run: docker compose --profile test logs
 
     - name: Tear Down
-      run: docker compose --profile test down
+      run: docker compose --profile test down --volumes
