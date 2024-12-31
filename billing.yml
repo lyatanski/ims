@@ -1,5 +1,5 @@
 services:
-  cgrates:
+  ocs:
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
