@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import logging
+import threading
 import tinyWRAP as s
 
 class SipCallback(s.SipCallback):
@@ -39,8 +40,7 @@ class SipCallback(s.SipCallback):
                 call = event.takeCallSessionOwnership()
                 call.setSessionTimer(3600, "none")
                 call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
-                call.accept()
-            self.log.info(f"after accept")
+                threading.Timer(1, call.accept).start()
         return 0
 
     def OnMessagingEvent(self, event):
