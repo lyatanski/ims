@@ -1,22 +1,26 @@
 services:
-  cgrates:
+  ocs:
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
     expose:
     - 3868/tcp
-    volumes:
-    - diameter:/usr/share/cgrates/diameter/dict/
     build:
       context: .
       dockerfile_inline: |
         FROM golang:alpine AS build
-        RUN wget -O - https://github.com/cgrates/cgrates/archive/refs/tags/v0.10.4.tar.gz | tar -xzf -
-        WORKDIR /go/cgrates-0.10.4/cmd/cgr-engine/
-        RUN go build
+        RUN apk add jq
+        RUN VERSION=$(wget -qO - https://api.github.com/repos/cgrates/cgrates/releases/latest | jq -r .tag_name | cut -dv -f2) && \
+            wget -O - https://github.com/cgrates/cgrates/archive/refs/tags/v$$VERSION.tar.gz | tar -xzf - && \
+            mv cgrates-$$VERSION cgrates
+        WORKDIR /go/cgrates/cmd/cgr-engine/
+        RUN go build -ldflags "-s -w"
         FROM scratch
-        COPY --from=build /go/cgrates-0.10.4/cmd/cgr-engine/cgr-engine /bin/cgr-engine
-        ENTRYPOINT ["/bin/cgr-engine"]
+        RUN --mount=type=bind,from=build,source=/lib/,target=/lib \
+            --mount=type=bind,from=build,source=/bin/,target=/bin \
+            --mount=type=bind,from=build,source=/go/cgrates/cmd/cgr-engine/,target=/opt/build \
+            mkdir -p /sbin /usr/share/cgrates/diameter/dict/ && cp /opt/build/cgr-engine /sbin/
+        ENTRYPOINT ["/sbin/cgr-engine"]
 
 
 configs:
@@ -41,7 +45,3 @@ configs:
               "origin_realm": "cgrates.org",
           },
       }
-
-
-volumes:
-  diameter:

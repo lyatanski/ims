@@ -275,6 +275,7 @@ configs:
           Workers="1"
       >
               <Peer FQDN="hss.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
+              <Peer FQDN="ocs.${REALM}" Realm="${REALM}" port="3868"/>
               <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
               <Auth id="4"        vendor="10415"/> <!-- Ro 3GPP -->
               <SupportedVendor vendor="10415" />
