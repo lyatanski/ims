@@ -11,10 +11,14 @@ Why another setup:
 - SIP [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html)
 - SDP [RFC 2327](https://www.rfc-editor.org/rfc/rfc2327.html)
 - RTP [RFC 1889](https://www.rfc-editor.org/rfc/rfc1889.html)
-- IMS [TS 23.228](https://www.etsi.org/deliver/etsi_ts/123200_123299/123228/18.07.00_60/ts_123228v180700p.pdf) [TS 24.229](https://www.etsi.org/deliver/etsi_ts/124200_124299/124229/18.06.00_60/ts_124229v180600p.pdf)
+- IMS
+  - [TS 23.228](https://www.etsi.org/deliver/etsi_ts/123200_123299/123228/18.07.00_60/ts_123228v180700p.pdf)
+  - [TS 24.229](https://www.etsi.org/deliver/etsi_ts/124200_124299/124229/18.06.00_60/ts_124229v180600p.pdf)
 - Diameter Cx [TS 29.229](https://www.etsi.org/deliver/etsi_ts/129200_129299/129229/18.01.00_60/ts_129229v180100p.pdf)
 - Diameter Rx [TS 29.214](https://www.etsi.org/deliver/etsi_ts/129200_129299/129214/18.03.00_60/ts_129214v180300p.pdf)
-- Diameter Ro/Rf [RFC 8506](https://www.rfc-editor.org/rfc/rfc8506.html) [TS 32.299](https://www.etsi.org/deliver/etsi_ts/132200_132299/132299/18.00.00_60/ts_132299v180000p.pdf)
+- Diameter Ro/Rf
+  - [RFC 8506](https://www.rfc-editor.org/rfc/rfc8506.html)
+  - [TS 32.299](https://www.etsi.org/deliver/etsi_ts/132200_132299/132299/18.00.00_60/ts_132299v180000p.pdf)
 - SMS [TS 24.341](https://www.etsi.org/deliver/etsi_ts/124300_124399/124341/18.00.00_60/ts_124341v180000p.pdf)
 - Emergency [TS 23.167](https://www.etsi.org/deliver/etsi_ts/123100_123199/123167/18.02.00_60/ts_123167v180200p.pdf)
 
