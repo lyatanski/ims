@@ -41,7 +41,7 @@ configs:
               "enabled": true,
               "listen": "0.0.0.0:3868",
               "listen_net": "tcp",
-              "origin_host": "CGR-DA",
-              "origin_realm": "cgrates.org",
+              "origin_host": "ocs.${REALM}",
+              "origin_realm": "${REALM}",
           },
       }
