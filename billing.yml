@@ -31,17 +31,64 @@ configs:
               "logger": "*stdout",
               "log_level": 7,
           },
-
-          // requested by diameter_agent
+          "data_db": {
+              "db_type": "*internal",
+          },
+          "stor_db": {
+              "db_type": "*internal",
+          },
           "sessions": {
               "enabled": true,
           },
-
           "diameter_agent": {
               "enabled": true,
               "listen": "0.0.0.0:3868",
               "listen_net": "tcp",
               "origin_host": "ocs.${REALM}",
               "origin_realm": "${REALM}",
+              "request_processors": [
+                  {
+                      "id": "call",
+                      "flags": ["*dryrun", "*event", "*accounts", "*cdrs"],
+                      "request_fields":[
+                          {
+                              "tag": "OriginHost",
+                              "path": "*cgreq.OriginHost",
+                              "mandatory": true,
+                              "type": "*variable",
+                              "value": "*vars.OriginHost",
+                          },
+                          {
+                              "tag": "RequestType",
+                              "path": "*cgreq.RequestType",
+                              "type": "*constant",
+                              "value": "*prepaid",
+                          },
+                      ]
+                  },
+              ],
+              "reply_fields":[
+                  {
+                      "tag": "CCATemplate",
+                      "type": "*template",
+                      "value": "*cca"
+                  },
+                  {
+                      "tag": "ResultCode",
+                      "filters": ["*eq:~*cgrep.MaxUsage:0"],
+                      "path": "*rep.Result-Code",
+                      "blocker": true,
+                      "type": "*constant",
+                      "value": "4012"
+                  },
+                  {
+                      "tag": "ResultCode",
+                      "filters": ["*notempty:~*cgrep.Error:"],
+                      "path": "*rep.Result-Code",
+                      "blocker": true,
+                      "type": "*constant",
+                      "value": "5030"
+                  },
+              ],
           },
       }

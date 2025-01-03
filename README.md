@@ -46,10 +46,7 @@ Why another setup:
   - [ ] SMSC
   - [x] MongoDB
 - Billing (billing.yml)
-  - [x] [CGRateS](doc/images.md#cgrates-billing)
-  - [ ] Redis
-  - [ ] MariaDB
-  - [ ] CGRAdmin
+  - [x] [OCS](doc/images.md#cgrates-billing)
 - Monitoring (monitor.yml)
   - [x] Promtail
   - [x] Loki
