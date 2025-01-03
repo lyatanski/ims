@@ -279,6 +279,9 @@ configs:
               <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
               <Auth id="4"        vendor="10415"/> <!-- Ro 3GPP -->
               <SupportedVendor vendor="10415" />
+              <Realm name="${REALM}">
+                  <Route FQDN="ocs.${REALM}" metric="1"/>
+              </Realm>
               <DefaultRoute FQDN="hss.epc.${REALM}" metric="1"/>
       </DiameterPeer>
 
