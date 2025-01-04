@@ -49,8 +49,21 @@ configs:
               "request_processors": [
                   {
                       "id": "call",
-                      "flags": ["*dryrun", "*event", "*accounts", "*cdrs"],
+                      "flags": ["*event", "*accounts", "*cdrs"],
                       "request_fields":[
+                          {
+                              "tag": "ToR",
+                              "path": "*cgreq.ToR",
+                              "type": "*constant",
+                              "value": "*voice",
+                          },
+                          {
+                              "tag": "OriginID",
+                              "path": "*cgreq.OriginID",
+                              "type": "*variable",
+                              "mandatory": true,
+                              "value": "~*req.Multiple-Services-Credit-Control.Service-Identifier",
+                          },
                           {
                               "tag": "OriginHost",
                               "path": "*cgreq.OriginHost",
@@ -63,6 +76,60 @@ configs:
                               "path": "*cgreq.RequestType",
                               "type": "*constant",
                               "value": "*prepaid",
+                          },
+                          {
+                              "tag": "Category",
+                              "path": "*cgreq.Category",
+                              "type": "*constant",
+                              "value": "voice",
+                          },
+                          {
+                              "tag": "Account",
+                              "path": "*cgreq.Account",
+                              "type": "*variable",
+                              "mandatory": true,
+                              "value": "~*req.Subscription-Id.Subscription-Id-Data",
+                          },
+                          {
+                              "tag": "Destination",
+                              "path": "*cgreq.Destination",
+                              "type": "*variable",
+                              "mandatory": true,
+                              "value": "~*req.Service-Information.IMS-Information.Called-Party-Address",
+                          },
+                          {
+                              "tag": "SetupTime",
+                              "path": "*cgreq.SetupTime",
+                              "type": "*variable",
+                              "mandatory": true,
+                              "value": "~*req.Event-Timestamp",
+                          },
+                          {
+                              "tag": "AnswerTime",
+                              "path": "*cgreq.AnswerTime",
+                              "type": "*variable",
+                              "mandatory": true,
+                              "value": "~*req.Event-Timestamp",
+                          },
+                          {
+                              "tag": "Usage",
+                              "path": "*cgreq.Usage",
+                              "type": "*variable",
+                              "mandatory": true,
+                              "filters":[
+                                  "*notempty:~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time:",
+                              ],
+                              "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time",
+                          },
+                          {
+                              "tag": "Usage",
+                              "path": "*cgreq.Usage",
+                              "type": "*variable",
+                              "mandatory": true,
+                              "filters":[
+                                  "*notempty:~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time:",
+                              ],
+                              "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time",
                           },
                       ]
                   },
