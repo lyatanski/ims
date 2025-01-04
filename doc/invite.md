@@ -40,5 +40,15 @@ sequenceDiagram
         P-CSCF->>S-CSCF: SIP 200 - OK
         S-CSCF->>P-CSCF: SIP 200 - OK
         P-CSCF->>UE1: SIP 200 - OK
+        UE1->>P-CSCF: ACK
+        P-CSCF->>S-CSCF: ACK
+        S-CSCF->>P-CSCF: ACK
+        P-CSCF->>UE2: ACK
+        create participant OCS
+        loop Every 30s
+            S-CSCF->>OCS: CCR
+            OCS->>S-CSCF: CCA
+        end
+        destroy OCS
     end
 ```
