@@ -8,11 +8,11 @@ services:
     - source: hss.diameter
       target: /etc/hss/diameter.conf
     volumes:
-    - certificate:/var/hss
+    - cert-hss:/var/hss
     expose:
     - 3868/tcp
     depends_on:
-      certificate:
+      cert-hss:
         condition: service_completed_successfully
       subscribers:
         condition: service_completed_successfully
@@ -30,12 +30,12 @@ services:
         RUN apk add yaml lksctp-tools gnutls libgcrypt libidn mongo-c-driver libmicrohttpd curl nghttp2 talloc
         COPY --from=build /opt /opt
 
-  certificate:
+  cert-hss:
     image: certificate
     command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.${REALM}
     working_dir: /var/hss
     volumes:
-    - certificate:/var/hss
+    - cert-hss:/var/hss
     build:
       context: .
       dockerfile_inline: |
@@ -247,5 +247,5 @@ configs:
 
 
 volumes:
-  certificate:
+  cert-hss:
   cert-pcrf:
