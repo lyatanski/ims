@@ -1,5 +1,6 @@
 services:
   hss:
+    image: open5gs
     command: /opt/bin/open5gs-hssd -c /etc/hss/open5gs.yaml -t
     configs:
     - source: hss
@@ -30,6 +31,7 @@ services:
         COPY --from=build /opt /opt
 
   certificate:
+    image: certificate
     command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.${REALM}
     working_dir: /var/hss
     volumes:
@@ -78,6 +80,29 @@ services:
         RUN apk add nodejs npm
         COPY --from=build /open5gs/webui /open5gs/webui
         RUN cd /open5gs/webui && npm ci
+
+  pcrf:
+    image: open5gs
+    command: /opt/bin/open5gs-pcrfd -c /etc/pcrf/open5gs.yaml -t
+    configs:
+    - source: pcrf
+      target: /etc/pcrf/open5gs.yaml
+    - source: pcrf.diameter
+      target: /etc/pcrf/diameter.conf
+    volumes:
+    - cert-pcrf:/var/pcrf
+    expose:
+    - 3868/tcp
+    depends_on:
+      cert-pcrf:
+        condition: service_completed_successfully
+
+  cert-pcrf:
+    image: certificate
+    command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=pcrf.epc.${REALM}
+    working_dir: /var/pcrf
+    volumes:
+    - cert-pcrf:/var/pcrf
 
   mongo:
     image: mongo:8.0
@@ -130,6 +155,35 @@ configs:
 
       ConnectPeer = "icscf.ims.${REALM}" { No_TLS; };
       ConnectPeer = "scscf.ims.${REALM}" { No_TLS; };
+
+  pcrf:
+    content: |
+      db_uri: mongodb://mongo/open5gs
+      pcrf:
+        freeDiameter: /etc/pcrf/diameter.conf
+      logger:
+        file:
+          path: /var/log/pcrf.log
+      global:
+        max:
+          ue: 1024
+
+  pcrf.diameter:
+    content: |
+      Identity = "pcrf.epc.${REALM}";
+      No_SCTP;
+      TLS_Cred = "/var/pcrf/crt.pem", "/var/pcrf/key.pem";
+      TLS_CA = "/var/pcrf/crt.pem";
+
+      LoadExtension = "/opt/lib/freeDiameter/dbg_msg_dumps.fdx" : "0x4444";
+      LoadExtension = "/opt/lib/freeDiameter/dict_rfc5777.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_mip6i.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_nasreq.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_nas_mipv6.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_dcca.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
+
+      ConnectPeer = "pcscf.ims.${REALM}" { No_TLS; };
 
   subscribers:
     content: |
@@ -194,3 +248,4 @@ configs:
 
 volumes:
   certificate:
+  cert-pcrf:
