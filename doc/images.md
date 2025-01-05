@@ -17,4 +17,4 @@ Debian does not currently provide any benefits over Ubuntu.
 build from source on alpine
 
 ## [CGRateS](https://github.com/cgrates/cgrates) (billing)
-build from source?
+build from source and place in container FROM SCRATCH
