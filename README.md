@@ -41,7 +41,7 @@ Why another setup:
   - [ ] DRA
   - [x] [HSS](doc/images.md#open5gs-hsspcrfpgw)
   - [x] HSS UI
-  - [ ] PCRF
+  - [x] [PCRF](doc/images.md#open5gs-hsspcrfpgw)
   - [ ] PGW
   - [ ] SMSC
   - [x] MongoDB
