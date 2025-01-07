@@ -9,22 +9,20 @@ services:
       context: .
       dockerfile_inline: |
         FROM golang:alpine AS build
-        RUN apk add jq
-        RUN VERSION=$(wget -qO - https://api.github.com/repos/cgrates/cgrates/releases/latest | jq -r .tag_name | cut -dv -f2) && \
-            wget -O - https://github.com/cgrates/cgrates/archive/refs/tags/v$$VERSION.tar.gz | tar -xzf - && \
-            mv cgrates-$$VERSION cgrates
-        WORKDIR /go/cgrates/cmd/cgr-engine/
-        RUN go build -ldflags "-s -w"
-        RUN mkdir -p /usr/share/cgrates/diameter/dict/ && cp cgr-engine /sbin/
+        RUN apk add jq binutils
+        RUN go install github.com/cgrates/cgrates/cmd/cgr-engine@$$(wget -qO - https://api.github.com/repos/cgrates/cgrates/releases/latest | jq -r .tag_name) && \
+            strip bin/*
+        RUN mkdir -p /usr/share/cgrates/diameter/dict/ && cp bin/* /sbin/
 
         FROM scratch
         RUN --mount=type=bind,from=build,source=/lib/,target=/lib \
             --mount=type=bind,from=build,source=/bin/,target=/bin \
-            --mount=type=bind,from=build,source=/go/cgrates/cmd/cgr-engine/,target=/opt/build \
-            mkdir -p /sbin /usr/share/cgrates/diameter/dict/ && cp /opt/build/cgr-engine /sbin/
+            --mount=type=bind,from=build,source=/go/bin/,target=/opt/bin \
+            mkdir -p /sbin /usr/share/cgrates/diameter/dict/ && cp /opt/bin/cgr-engine /sbin/
         ENTRYPOINT ["/sbin/cgr-engine"]
 
-  loader:
+
+  preload:
     configs:
     - source: Destinations.csv
       target: /var/cgrates/Destinations.csv
@@ -41,19 +39,13 @@ services:
       context: .
       dockerfile_inline: |
         FROM golang:alpine AS build
-        RUN apk add jq
-        RUN VERSION=$(wget -qO - https://api.github.com/repos/cgrates/cgrates/releases/latest | jq -r .tag_name | cut -dv -f2) && \
-            wget -O - https://github.com/cgrates/cgrates/archive/refs/tags/v$$VERSION.tar.gz | tar -xzf - && \
-            mv cgrates-$$VERSION cgrates
-        WORKDIR /go/cgrates/cmd/cgr-loader/
-        RUN go build -ldflags "-s -w"
-        RUN mkdir -p /usr/share/cgrates/diameter/dict/ && cp cgr-loader /sbin/
+        RUN apk add jq binutils
+        RUN go install github.com/cgrates/cgrates/cmd/cgr-loader@$$(wget -qO - https://api.github.com/repos/cgrates/cgrates/releases/latest | jq -r .tag_name) && \
+            strip bin/*
+        RUN cp bin/* /sbin/
 
         FROM scratch
-        RUN --mount=type=bind,from=build,source=/lib/,target=/lib \
-            --mount=type=bind,from=build,source=/bin/,target=/bin \
-            --mount=type=bind,from=build,source=/go/cgrates/cmd/cgr-loader/,target=/opt/build \
-            mkdir -p /sbin /usr/share/cgrates/diameter/dict/ && cp /opt/build/cgr-loader /sbin/
+        COPY --from=build /go/bin/cgr-loader /sbin/cgr-loader
         ENTRYPOINT ["/sbin/cgr-loader", "-verbose", "-datadb_type", "*internal", "-path", "/var/cgrates/"]
 
 
@@ -89,6 +81,10 @@ configs:
           },
           "sessions": {
               "enabled": true,
+              "attributes_conns": ["*localhost"],
+              "chargers_conns": ["*localhost"],
+              "rals_conns": ["*localhost"],
+              "cdrs_conns": ["*localhost"],
           },
           "apiers": {
               "enabled": true,
@@ -100,124 +96,340 @@ configs:
               "listen_net": "tcp",
               "origin_host": "ocs.${REALM}",
               "origin_realm": "${REALM}",
+              //"sessions_conns": ["*bijson_localhost"],
               "request_processors": [
                   {
-                      "id": "call",
-                      "flags": ["*event", "*accounts", "*cdrs"],
-                      "request_fields":[
+                      "id": "VoiceInit",
+                      "filters": [
+                          "*string:~*vars.*cmd:CCR",
+                          "*string:~*req.CC-Request-Type:1",
+                          //"*prefix:~*req.Service-Context-Id:voice"
+                      ],
+                      "flags": [
+                          "*initiate",
+                          "*accounts",
+                          "*attributes",
+                          "*continue"
+                      ],
+                      "request_fields": [
                           {
                               "tag": "ToR",
                               "path": "*cgreq.ToR",
                               "type": "*constant",
-                              "value": "*voice",
+                              "value": "*voice"
                           },
                           {
                               "tag": "OriginID",
                               "path": "*cgreq.OriginID",
                               "type": "*variable",
-                              "mandatory": true,
-                              "value": "~*req.Multiple-Services-Credit-Control.Service-Identifier",
+                              "value": "~*req.Session-Id",
+                              "mandatory": true
                           },
-                          {
-                              "tag": "OriginHost",
-                              "path": "*cgreq.OriginHost",
-                              "mandatory": true,
-                              "type": "*variable",
-                              "value": "*vars.OriginHost",
-                          },
+                          //{
+                          //    "tag": "OriginHost",
+                          //    "path": "*cgreq.OriginHost",
+                          //    "type": "*variable",
+                          //    "value": "~*vars.RemoteHost",
+                          //    "mandatory": true
+                          //},
                           {
                               "tag": "RequestType",
                               "path": "*cgreq.RequestType",
                               "type": "*constant",
-                              "value": "*prepaid",
+                              "value": "*prepaid"
                           },
                           {
                               "tag": "Category",
                               "path": "*cgreq.Category",
                               "type": "*constant",
-                              "value": "voice",
+                              "value": "call"
                           },
                           {
                               "tag": "Account",
                               "path": "*cgreq.Account",
-                              "type": "*variable",
-                              "mandatory": true,
+                              "type": "*constant",
+                              //"value": "*attributes",
                               "value": "~*req.Subscription-Id.Subscription-Id-Data",
                           },
                           {
                               "tag": "Destination",
                               "path": "*cgreq.Destination",
                               "type": "*variable",
-                              "mandatory": true,
                               "value": "~*req.Service-Information.IMS-Information.Called-Party-Address",
-                          },
-                          {
-                              "tag": "SetupTime",
-                              "path": "*cgreq.SetupTime",
-                              "type": "*variable",
-                              "mandatory": true,
-                              "value": "~*req.Event-Timestamp",
+                              "mandatory": true
                           },
                           {
                               "tag": "AnswerTime",
                               "path": "*cgreq.AnswerTime",
                               "type": "*variable",
-                              "mandatory": true,
                               "value": "~*req.Event-Timestamp",
+                              "mandatory": true
                           },
                           {
                               "tag": "Usage",
                               "path": "*cgreq.Usage",
                               "type": "*variable",
-                              "mandatory": true,
-                              "filters":[
-                                  "*notempty:~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time:",
-                              ],
+                              //"value": "~*req.Requested-Service-Unit.CC-Time:s/(.*)/$${1}s/",
                               "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time",
+                              "mandatory": true
                           },
                           {
-                              "tag": "Usage",
-                              "path": "*cgreq.Usage",
+                              "tag": "SubscriberID",
+                              "path": "*cgreq.SubscriberId",
                               "type": "*variable",
-                              "mandatory": true,
-                              "filters":[
-                                  "*notempty:~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time:",
+                              "value": "~*req.Subscription-Id.Subscription-Id-Data",
+                              "mandatory": true
+                          }
+                      ],
+                      "reply_fields": [
+                          {
+                              "tag": "ResultCode",
+                              "filters": [
+                                  "*notempty:~*cgrep.Error:"
                               ],
-                              "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time",
+                              "path": "*rep.Result-Code",
+                              "type": "*constant",
+                              "value": "5030",
+                              "blocker": true
                           },
+                          {
+                              "tag": "ResultCode",
+                              "path": "*rep.Result-Code",
+                              "type": "*constant",
+                              "value": "2001"
+                          },
+                          {
+                              "tag": "GrantedUnits",
+                              "path": "*rep.Granted-Service-Unit.CC-Time",
+                              "type": "*variable",
+                              "value": "~*cgrep.MaxUsage{*duration_seconds}",
+                              "mandatory": true
+                          }
                       ]
                   },
-              ],
-              "reply_fields":[
+                  //{
+                  //    "id": "VoiceUpdate",
+                  //    "filters": [
+                  //        "*string:~*vars.*cmd:CCR",
+                  //        "*string:~*req.CC-Request-Type:2",
+                  //        //"*prefix:~*req.Service-Context-Id:voice"
+                  //    ],
+                  //    "flags": [
+                  //        "*update",
+                  //        "*accounts",
+                  //        "*attributes"
+                  //    ],
+                  //    "request_fields": [
+                  //        {
+                  //            "tag": "ToR",
+                  //            "path": "*cgreq.ToR",
+                  //            "type": "*constant",
+                  //            "value": "*voice"
+                  //        },
+                  //        {
+                  //            "tag": "OriginID",
+                  //            "path": "*cgreq.OriginID",
+                  //            "type": "*variable",
+                  //            "value": "~*req.Session-Id",
+                  //            "mandatory": true
+                  //        },
+                  //        {
+                  //            "tag": "OriginHost",
+                  //            "path": "*cgreq.OriginHost",
+                  //            "type": "*variable",
+                  //            "value": "~*vars.RemoteHost",
+                  //            "mandatory": true
+                  //        },
+                  //        {
+                  //            "tag": "RequestType",
+                  //            "path": "*cgreq.RequestType",
+                  //            "type": "*constant",
+                  //            "value": "*attributes"
+                  //        },
+                  //        {
+                  //            "tag": "Category",
+                  //            "path": "*cgreq.Category",
+                  //            "type": "*constant",
+                  //            "value": "call"
+                  //        },
+                  //        {
+                  //            "tag": "Account",
+                  //            "path": "*cgreq.Account",
+                  //            "type": "*constant",
+                  //            "value": "*attributes"
+                  //        },
+                  //        {
+                  //            "tag": "Destination",
+                  //            "path": "*cgreq.Destination",
+                  //            "type": "*variable",
+                  //            "value": "~*req.Service-Information.IN-Information.Real-Called-Number",
+                  //            "mandatory": true
+                  //        },
+                  //        {
+                  //            "tag": "AnswerTime",
+                  //            "path": "*cgreq.AnswerTime",
+                  //            "type": "*variable",
+                  //            "value": "~*req.Event-Timestamp",
+                  //            "mandatory": true
+                  //        },
+                  //        {
+                  //            "tag": "Usage",
+                  //            "path": "*cgreq.Usage",
+                  //            "type": "*variable",
+                  //            "value": "~*req.Requested-Service-Unit.CC-Time:s/(.*)/$${1}s/",
+                  //            "mandatory": true
+                  //        },
+                  //        {
+                  //            "tag": "LastUsed",
+                  //            "path": "*cgreq.LastUsed",
+                  //            "type": "*variable",
+                  //            "value": "~*req.Used-Service-Unit.CC-Time:s/(.*)/$${1}s/",
+                  //            "mandatory": true
+                  //        },
+                  //        {
+                  //            "tag": "SubscriberID",
+                  //            "path": "*cgreq.SubscriberId",
+                  //            "type": "*variable",
+                  //            "value": "~*req.Subscription-Id.Subscription-Id-Data",
+                  //            "mandatory": true
+                  //        }
+                  //    ],
+                  //    "reply_fields": [
+                  //        {
+                  //            "tag": "ResultCode",
+                  //            "filters": [
+                  //                "*notempty:~*cgrep.Error:"
+                  //            ],
+                  //            "path": "*rep.Result-Code",
+                  //            "type": "*constant",
+                  //            "value": "5030",
+                  //            "blocker": true
+                  //        },
+                  //        {
+                  //            "tag": "ResultCode",
+                  //            "path": "*rep.Result-Code",
+                  //            "type": "*constant",
+                  //            "value": "2001"
+                  //        },
+                  //        {
+                  //            "tag": "GrantedUnits",
+                  //            "path": "*rep.Granted-Service-Unit.CC-Time",
+                  //            "type": "*variable",
+                  //            "value": "~*cgrep.MaxUsage{*duration_seconds}",
+                  //            "mandatory": true
+                  //        }
+                  //    ]
+                  //},
                   {
-                      "tag": "CCATemplate",
-                      "type": "*template",
-                      "value": "*cca"
-                  },
-                  {
-                      "tag": "ResultCode",
-                      "filters": ["*eq:~*cgrep.MaxUsage:0"],
-                      "path": "*rep.Result-Code",
-                      "blocker": true,
-                      "type": "*constant",
-                      "value": "4012"
-                  },
-                  {
-                      "tag": "ResultCode",
-                      "filters": ["*notempty:~*cgrep.Error:"],
-                      "path": "*rep.Result-Code",
-                      "blocker": true,
-                      "type": "*constant",
-                      "value": "5030"
-                  },
-              ],
-          },
+                      "id": "VoiceTerminate",
+                      "filters": [
+                          "*string:~*vars.*cmd:CCR",
+                          "*string:~*req.CC-Request-Type:3",
+                          //"*prefix:~*req.Service-Context-Id:voice"
+                      ],
+                      "flags": [
+                          "*terminate",
+                          "*accounts",
+                          "*attributes",
+                          "*cdrs"
+                      ],
+                      "request_fields": [
+                          {
+                              "tag": "ToR",
+                              "path": "*cgreq.ToR",
+                              "type": "*constant",
+                              "value": "*voice"
+                          },
+                          {
+                              "tag": "OriginID",
+                              "path": "*cgreq.OriginID",
+                              "type": "*variable",
+                              "value": "~*req.Session-Id",
+                              "mandatory": true
+                          },
+                          //{
+                          //    "tag": "OriginHost",
+                          //    "path": "*cgreq.OriginHost",
+                          //    "type": "*variable",
+                          //    "value": "~*vars.RemoteHost",
+                          //    "mandatory": true
+                          //},
+                          {
+                              "tag": "RequestType",
+                              "path": "*cgreq.RequestType",
+                              "type": "*constant",
+                              "value": "*attributes"
+                          },
+                          {
+                              "tag": "Account",
+                              "path": "*cgreq.Account",
+                              "type": "*constant",
+                              "value": "*attributes"
+                          },
+                          //{
+                          //    "tag": "Destination",
+                          //    "path": "*cgreq.Destination",
+                          //    "type": "*variable",
+                          //    "value": "~*req.Service-Information.IN-Information.Real-Called-Number",
+                          //    "mandatory": true
+                          //},
+                          {
+                              "tag": "AnswerTime",
+                              "path": "*cgreq.AnswerTime",
+                              "type": "*variable",
+                              "value": "~*req.Event-Timestamp",
+                              "mandatory": true
+                          },
+                          {
+                              "tag": "Usage",
+                              "path": "*cgreq.Usage",
+                              "type": "*cc_usage",
+                              "mandatory": true,
+                              //"value": "~*req.CC-Request-Number;~*req.Used-Service-Unit.CC-Time:s/(.*)/$${1}s/;5m"
+                              "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time",
+                          },
+                          {
+                              "tag": "LastUsed",
+                              "path": "*cgreq.LastUsed",
+                              "type": "*variable",
+                              "value": "~*req.Used-Service-Unit.CC-Time:s/(.*)/$${1}s/",
+                              "mandatory": true
+                          },
+                          {
+                              "tag": "SubscriberID",
+                              "path": "*cgreq.SubscriberId",
+                              "type": "*variable",
+                              "value": "~*req.Subscription-Id.Subscription-Id-Data",
+                              "mandatory": true
+                          }
+                      ],
+                      "reply_fields": [
+                          {
+                              "tag": "ResultCode",
+                              "filters": [
+                                  "*notempty:~*cgrep.Error:"
+                              ],
+                              "path": "*rep.Result-Code",
+                              "type": "*constant",
+                              "value": "5030",
+                              "blocker": true
+                          },
+                          {
+                              "tag": "ResultCode",
+                              "path": "*rep.Result-Code",
+                              "type": "*constant",
+                              "value": "2001"
+                          }
+                      ]
+                  }
+              ]
+          }
       }
 
   Destinations.csv:
     content: |
       #Id,Prefix
-      DST_BG,359
+      DST_BG,$DIAL
 
   Rates.csv:
     content: |
