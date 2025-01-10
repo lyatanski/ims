@@ -9,7 +9,7 @@ Why another setup:
 
 ## Specifications
 - SIP [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html)
-- SDP [RFC 2327](https://www.rfc-editor.org/rfc/rfc2327.html)
+- SDP [RFC 8866](https://www.rfc-editor.org/rfc/rfc8866.html)
 - RTP [RFC 1889](https://www.rfc-editor.org/rfc/rfc1889.html)
 - IMS
   - [TS 23.228](https://www.etsi.org/deliver/etsi_ts/123200_123299/123228/18.07.00_60/ts_123228v180700p.pdf)
