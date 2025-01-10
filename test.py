@@ -127,6 +127,16 @@ if __name__ == "__main__":
         #call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
         call.call(f'sip:{os.environ["DIAL"]}{idx-1:09}@{os.environ["REALM"]};user=phone', s.twrap_media_audio)
 
+        #time.sleep(10)
+        #call.hold()
+        #time.sleep(10)
+        #call.resume()
+
+        time.sleep(181)
+        call.hangup()
+    else:
+        time.sleep(180)
+
     time.sleep(30)
 
     #del s0
