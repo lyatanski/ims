@@ -158,15 +158,19 @@ configs:
 
   pcrf:
     content: |
-      db_uri: mongodb://mongo/open5gs
-      pcrf:
-        freeDiameter: /etc/pcrf/diameter.conf
       logger:
         file:
           path: /var/log/pcrf.log
       global:
         max:
           ue: 1024
+      pcrf:
+        freeDiameter: /etc/pcrf/diameter.conf
+        metrics:
+          server:
+          - address: 0.0.0.0
+            port: 9090
+
 
   pcrf.diameter:
     content: |
