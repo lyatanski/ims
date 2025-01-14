@@ -7,6 +7,11 @@ import logging
 import threading
 import tinyWRAP as s
 
+def talk(call):
+    call.accept()
+    time.sleep(5)
+    call.hangup()
+
 class SipCallback(s.SipCallback):
     def __init__(self, imsi, msisdn, domain):
         super().__init__()
@@ -40,7 +45,7 @@ class SipCallback(s.SipCallback):
                 call = event.takeCallSessionOwnership()
                 call.setSessionTimer(3600, "none")
                 call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
-                threading.Timer(1, call.accept).start()
+                threading.Timer(1, talk, (call,)).start()
         return 0
 
     def OnMessagingEvent(self, event):

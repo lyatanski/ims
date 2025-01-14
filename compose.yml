@@ -16,8 +16,8 @@ x-kamailio: &kamailio
   healthcheck:
     test: wget -qO- 127.0.0.1:9090/check
     retries: 60
-    interval: 1s
-    start_period: 1s
+    interval: 5s
+    start_period: 5s
 
 services:
   pcscf:
