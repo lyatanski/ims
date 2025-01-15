@@ -50,7 +50,6 @@ sequenceDiagram
         end
         S-CSCF->>OCS: final CCR
         OCS->>S-CSCF: final CCA
-        destroy OCS
         alt
             S-CSCF->>P-CSCF: BYE
             P-CSCF->>UE1: BYE
