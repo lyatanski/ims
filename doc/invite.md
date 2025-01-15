@@ -1,8 +1,6 @@
 ```mermaid
 ---
 title: Invite
-config:
-  mirrorActors: false
 ---
 sequenceDiagram
     UE1->>P-CSCF: SIP - INVITE
@@ -44,11 +42,14 @@ sequenceDiagram
         P-CSCF->>S-CSCF: ACK
         S-CSCF->>P-CSCF: ACK
         P-CSCF->>UE2: ACK
-        create participant OCS
+        S-CSCF->>OCS: initial CCR
+        OCS->>S-CSCF: initial CCA
         loop Every 30s
             S-CSCF->>OCS: CCR
             OCS->>S-CSCF: CCA
         end
+        S-CSCF->>OCS: final CCR
+        OCS->>S-CSCF: final CCA
         destroy OCS
     end
 ```
