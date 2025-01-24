@@ -9,7 +9,7 @@ import tinyWRAP as s
 
 def talk(call):
     call.accept()
-    time.sleep(5)
+    time.sleep(40)
     call.hangup()
 
 class SipCallback(s.SipCallback):

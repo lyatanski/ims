@@ -195,12 +195,32 @@ configs:
                           {
                               "tag": "GrantedUnits",
                               "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
-                              "type": "*variable",
                               "type": "*constant",
                               //"value": "~*cgrep.MaxUsage{*duration_seconds}",
                               "value": "30",
                               "mandatory": true
-                          }
+                          },
+                          {
+                              "tag": "FinalUnitAction",
+                              "path": "*rep.Multiple-Services-Credit-Control.Final-Unit-Indication.Final-Unit-Action",
+                              "type": "*constant",
+                              "value": "1", // REDIRECT
+                              "mandatory": true
+                          },
+                          {
+                              "tag": "FinalUnitAction",
+                              "path": "*rep.Multiple-Services-Credit-Control.Final-Unit-Indication.Redirect-Server.Redirect-Address-Type",
+                              "type": "*constant",
+                              "value": "3", // SIP URI
+                              "mandatory": true
+                          },
+                          {
+                              "tag": "FinalUnitAction",
+                              "path": "*rep.Multiple-Services-Credit-Control.Final-Unit-Indication.Redirect-Server.Redirect-Server-Address",
+                              "type": "*constant",
+                              "value": "sip://ocs",
+                              "mandatory": true
+                          },
                       ]
                   },
                   //{
