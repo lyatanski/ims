@@ -16,8 +16,8 @@ x-kamailio: &kamailio
   healthcheck:
     test: wget -qO- 127.0.0.1:9090/check
     retries: 60
-    interval: 1s
-    start_period: 1s
+    interval: 5s
+    start_period: 5s
 
 services:
   pcscf:
@@ -195,7 +195,7 @@ services:
 configs:
   monitor.cfg:
     content: |
-      listen=0.0.0.0:9090
+      listen=tcp:0.0.0.0:9090
       http_reply_parse=yes
       tcp_accept_no_cl=yes
       loadmodule "xhttp.so"
