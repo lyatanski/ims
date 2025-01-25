@@ -12,7 +12,7 @@ services:
         FROM golang:alpine AS build
         RUN apk add jq binutils
         RUN mkdir -p /usr/share/cgrates/diameter/dict/
-        RUN go install github.com/cgrates/cgrates/cmd/cgr-engine@$$(wget -qO - https://api.github.com/repos/cgrates/cgrates/releases/latest | jq -r .tag_name)
+        RUN go install github.com/cgrates/cgrates/cmd/cgr-engine@latest
         #RUN go install github.com/go-delve/delve/cmd/dlv@latest
         RUN strip bin/*
 
@@ -42,7 +42,7 @@ services:
       dockerfile_inline: |
         FROM golang:alpine AS build
         RUN apk add jq binutils
-        RUN go install github.com/cgrates/cgrates/cmd/cgr-loader@$$(wget -qO - https://api.github.com/repos/cgrates/cgrates/releases/latest | jq -r .tag_name)
+        RUN go install github.com/cgrates/cgrates/cmd/cgr-loader@latest
         RUN strip bin/*
 
         FROM scratch
@@ -88,7 +88,7 @@ configs:
           },
           "apiers": {
               "enabled": true,
-              "caches_conns":["*internal"],
+              "caches_conns":["*localhost"],
           },
           "diameter_agent": {
               "enabled": true,
@@ -101,8 +101,6 @@ configs:
                       "id": "VoiceInit",
                       "filters": [
                           "*string:~*vars.*cmd:CCR",
-                          "*string:~*req.CC-Request-Type:1",
-                          //"*prefix:~*req.Service-Context-Id:voice"
                       ],
                       "flags": [
                           "*initiate",
@@ -168,7 +166,6 @@ configs:
                               "tag": "Usage",
                               "path": "*cgreq.Usage",
                               "type": "*variable",
-                              //"value": "~*req.Requested-Service-Unit.CC-Time:s/(.*)/$${1}s/",
                               "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time",
                               "mandatory": true
                           },
@@ -227,7 +224,7 @@ configs:
                   //    "id": "VoiceUpdate",
                   //    "filters": [
                   //        "*string:~*vars.*cmd:CCR",
-                  //        "*string:~*req.CC-Request-Type:2",
+                  //        "*string:~*req.CC-Request-Type:3",
                   //    ],
                   //    "flags": [
                   //        "*update",
@@ -339,7 +336,7 @@ configs:
                   //    "id": "VoiceTerminate",
                   //    "filters": [
                   //        "*string:~*vars.*cmd:CCR",
-                  //        "*string:~*req.CC-Request-Type:3",
+                  //        "*string:~*req.CC-Request-Type:4",
                   //    ],
                   //    "flags": [
                   //        "*terminate",
