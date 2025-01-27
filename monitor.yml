@@ -1,6 +1,6 @@
 services:
   promtail:
-    image: grafana/promtail:2.9.2
+    image: grafana/promtail
     command: -config.file=/etc/promtail/config.yml
     configs:
     - source: promtail.yml
@@ -10,7 +10,7 @@ services:
     - /var/run/docker.sock:/var/run/docker.sock
 
   loki:
-    image: grafana/loki:2.9.2
+    image: grafana/loki
     command: -config.file=/etc/loki/local-config.yaml
     expose:
     - 3100/tcp
