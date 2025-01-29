@@ -119,6 +119,8 @@ services:
     depends_on:
       cert-smf:
         condition: service_completed_successfully
+      upf:
+        condition: service_started
 
   cert-smf:
     image: certificate
@@ -233,23 +235,29 @@ configs:
       smf:
         metrics:
           server:
-            - address: 0.0.0.0
-              port: 9091
+          - address: 0.0.0.0
+            port: 9091
         pfcp:
           server:
-            - address: 0.0.0.0
+          - address: 0.0.0.0
           client:
             upf:
-              - address: upf
+            - address: upf
         gtpc:
           server:
-            - address: 0.0.0.0
+          - address: 0.0.0.0
+        gtpu:
+          server:
+          - address: 0.0.0.0
+            advertise: 1.2.3.4
         session:
         - subnet: 10.10.0.0/16
           gateway: 10.10.0.1
           dnn: ims
+        dns:
+        - ${DNSIP}
         p-cscf:
-        - PCSCF_IP
+        - ${IPSEC}
 
   smf.diameter:
     content: |
@@ -279,18 +287,18 @@ configs:
       upf:
         metrics:
           server:
-            - address: 0.0.0.0
-              port: 9091
+          - address: 0.0.0.0
+            port: 9091
         pfcp:
           server:
-            - address: 0.0.0.0
+          - address: 0.0.0.0
           client:
             smf:
-              - address: smf
+            - address: smf
         gtpu:
           server:
-            - address: 0.0.0.0
-              advertise: 1.2.3.4
+          - address: 0.0.0.0
+            advertise: 1.2.3.4
         session:
         - subnet: 10.10.0.0/16
           gateway: 10.10.0.1
