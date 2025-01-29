@@ -106,7 +106,7 @@ services:
 
   smf:
     image: open5gs
-    command: /opt/bin/open5gs-smf -c /etc/pcrf/open5gs.yaml -t
+    command: /opt/bin/open5gs-smfd -c /etc/pcrf/open5gs.yaml -t
     configs:
     - source: smf.yaml
       target: /etc/smf/open5gs.yaml
@@ -129,7 +129,7 @@ services:
 
   upf:
     image: open5gs
-    command: /opt/bin/open5gs-upf -c /etc/upf/open5gs.yaml -t
+    command: /opt/bin/open5gs-upfd -c /etc/upf/open5gs.yaml -t
     configs:
     - source: upf.yaml
       target: /etc/upf/open5gs.yaml
