@@ -3,7 +3,7 @@ services:
     image: open5gs
     command: /opt/bin/open5gs-hssd -c /etc/hss/open5gs.yaml -t
     configs:
-    - source: hss
+    - source: hss.yaml
       target: /etc/hss/open5gs.yaml
     - source: hss.diameter
       target: /etc/hss/diameter.conf
@@ -85,7 +85,7 @@ services:
     image: open5gs
     command: /opt/bin/open5gs-pcrfd -c /etc/pcrf/open5gs.yaml -t
     configs:
-    - source: pcrf
+    - source: pcrf.yaml
       target: /etc/pcrf/open5gs.yaml
     - source: pcrf.diameter
       target: /etc/pcrf/diameter.conf
@@ -104,6 +104,39 @@ services:
     volumes:
     - cert-pcrf:/var/pcrf
 
+  smf:
+    image: open5gs
+    command: /opt/bin/open5gs-smf -c /etc/pcrf/open5gs.yaml -t
+    configs:
+    - source: smf.yaml
+      target: /etc/smf/open5gs.yaml
+    - source: smf.diameter
+      target: /etc/smf/diameter.conf
+    volumes:
+    - cert-smf:/var/smf
+    expose:
+    - 3868/tcp
+    depends_on:
+      cert-smf:
+        condition: service_completed_successfully
+
+  cert-smf:
+    image: certificate
+    command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=smf.epc.${REALM}
+    working_dir: /var/smf
+    volumes:
+    - cert-smf:/var/smf
+
+  upf:
+    image: open5gs
+    command: /opt/bin/open5gs-upf -c /etc/upf/open5gs.yaml -t
+    configs:
+    - source: upf.yaml
+      target: /etc/upf/open5gs.yaml
+    expose:
+    - 8805/udp
+    - 2152/udp
+
   mongo:
     image: mongo:8.0
     command: --bind_ip 0.0.0.0
@@ -116,7 +149,7 @@ services:
 
 
 configs:
-  hss:
+  hss.yaml:
     content: |
       db_uri: mongodb://mongo/open5gs
       hss:
@@ -156,7 +189,7 @@ configs:
       ConnectPeer = "icscf.ims.${REALM}" { No_TLS; };
       ConnectPeer = "scscf.ims.${REALM}" { No_TLS; };
 
-  pcrf:
+  pcrf.yaml:
     content: |
       logger:
         file:
@@ -170,7 +203,6 @@ configs:
           server:
           - address: 0.0.0.0
             port: 9090
-
 
   pcrf.diameter:
     content: |
@@ -188,6 +220,82 @@ configs:
       LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
 
       ConnectPeer = "pcscf.ims.${REALM}" { No_TLS; };
+      ConnectPeer = "smf.epc.${REALM}" { No_TLS; };
+
+  smf.yaml:
+    content: |
+      logger:
+        file:
+          path: /var/log/smf.log
+      global:
+        max:
+          ue: 1024
+      smf:
+        metrics:
+          server:
+            - address: 0.0.0.0
+              port: 9091
+        pfcp:
+          server:
+            - address: 0.0.0.0
+          client:
+            upf:
+              - address: upf
+        gtpc:
+          server:
+            - address: 0.0.0.0
+        session:
+        - subnet: 10.10.0.0/16
+          gateway: 10.10.0.1
+          dnn: ims
+        p-cscf:
+        - PCSCF_IP
+
+  smf.diameter:
+    content: |
+      Identity = "smf.epc.${REALM}";
+      No_SCTP;
+      TLS_Cred = "/var/smf/crt.pem", "/var/smf/key.pem";
+      TLS_CA = "/var/smf/crt.pem";
+
+      LoadExtension = "/opt/lib/freeDiameter/dbg_msg_dumps.fdx" : "0x4444";
+      LoadExtension = "/opt/lib/freeDiameter/dict_rfc5777.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_mip6i.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_nasreq.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_nas_mipv6.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_dcca.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
+
+      ConnectPeer = "pcrf.epc.${REALM}" { No_TLS; };
+
+  upf.yaml:
+    content: |
+      logger:
+        file:
+          path: /var/log/upf.log
+      global:
+        max:
+          ue: 1024
+      upf:
+        metrics:
+          server:
+            - address: 0.0.0.0
+              port: 9091
+        pfcp:
+          server:
+            - address: 0.0.0.0
+          client:
+            smf:
+              - address: smf
+        gtpu:
+          server:
+            - address: 0.0.0.0
+              advertise: 1.2.3.4
+        session:
+        - subnet: 10.10.0.0/16
+          gateway: 10.10.0.1
+          dnn: ims
+          dev: tunue
 
   subscribers:
     content: |
@@ -253,3 +361,4 @@ configs:
 volumes:
   cert-hss:
   cert-pcrf:
+  cert-smf:
