@@ -121,6 +121,8 @@ services:
         condition: service_completed_successfully
       upf:
         condition: service_started
+      pcrf:
+        condition: service_started
 
   cert-smf:
     image: certificate
@@ -237,6 +239,7 @@ configs:
         max:
           ue: 1024
       smf:
+        freeDiameter: /etc/smf/diameter.conf
         metrics:
           server:
           - address: 0.0.0.0
@@ -278,7 +281,7 @@ configs:
       LoadExtension = "/opt/lib/freeDiameter/dict_dcca.fdx";
       LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
 
-      ConnectPeer = "pcrf.epc.${REALM}" { No_TLS; };
+      ConnectPeer = "pcrf.epc.${REALM}" { ConnectTo = "pcrf"; No_TLS; };
 
   upf.yaml:
     content: |
