@@ -138,6 +138,10 @@ services:
     expose:
     - 8805/udp
     - 2152/udp
+    devices:
+    - /dev/net/tun
+    cap_add:
+    - NET_ADMIN
 
   mongo:
     image: mongo:8.0
