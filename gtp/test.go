@@ -18,6 +18,10 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 	return nil
 }
 
+func CreateBearerRequest(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
+	return nil
+}
+
 func ModifyBearerResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
 	return nil
 }
@@ -56,6 +60,7 @@ func main() {
 
 	con.AddHandlers(map[uint8]gtpv2.HandlerFunc{
 		message.MsgTypeCreateSessionResponse: CreateSessionResponse,
+		message.MsgTypeCreateBearerRequest:   CreateBearerRequest,
 		message.MsgTypeModifyBearerResponse:  ModifyBearerResponse,
 		message.MsgTypeDeleteSessionResponse: DeleteSessionResponse,
 	})
