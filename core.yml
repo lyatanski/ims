@@ -337,7 +337,7 @@ configs:
         gtpu:
           server:
           - address: 0.0.0.0
-            advertise: 1.2.3.4
+            advertise: upf
         session:
         - subnet: 10.10.0.0/16
           gateway: 10.10.0.1
