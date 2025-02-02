@@ -12,10 +12,14 @@ import (
 	"github.com/wmnsk/go-gtp/gtpv2/ie"
 )
 
-var pgwc = flag.String("pgwc", "smf", "PGWC FQDN/IP")
+var (
+	pgwc = flag.String("pgwc", "smf", "PGWC FQDN/IP")
+	mcc = flag.String("mcc", "001", "MCC")
+	mnc = flag.String("mnc", "01", "MNC")
+)
 
 func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
-	ses, err := con.GetSessionByIMSI(fmt.Sprintf("%s%s%0.10d", mcc, mnc, 1))
+	ses, err := con.GetSessionByIMSI(fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, 1))
 	if err != nil {
 		return err
 	}
@@ -38,7 +42,7 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 }
 
 func CreateBearerRequest(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
-	ses, err := con.GetSessionByIMSI(fmt.Sprintf("%s%s%0.10d", mcc, mnc, 1))
+	ses, err := con.GetSessionByIMSI(fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, 1))
 	if err != nil {
 		return err
 	}
@@ -54,7 +58,7 @@ func CreateBearerRequest(con *gtpv2.Conn, pgw net.Addr, msg message.Message) err
 			ie.NewBearerQoS(1, 1, 1, 1, 0x52, 0x52, 0x52, 0x52),
 		),
 	)
-	_, err := con.SendMessageTo(res, pgw)
+	_, err = con.SendMessageTo(res, pgw)
 	return err
 }
 
@@ -77,8 +81,6 @@ func ResolveLocalAddr() (*net.UDPAddr, error) {
 }
 
 func main() {
-	mcc, mnc := "001", "01"
-
 	ctx := context.Background()
 	pgw, err := net.ResolveUDPAddr("udp", *pgwc+gtpv2.GTPCPort)
 	if err != nil {
@@ -103,8 +105,8 @@ func main() {
 
 	ses, _, err := con.CreateSession(
 		pgw,
-		ie.NewIMSI(fmt.Sprintf("%s%s%0.10d", mcc, mnc, 1)),
-		ie.NewServingNetwork(mcc, mnc),
+		ie.NewIMSI(fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, 1)),
+		ie.NewServingNetwork(*mcc, *mnc),
 		ie.NewRATType(gtpv2.RATTypeEUTRAN),
 		ie.NewFullyQualifiedTEID(gtpv2.IFTypeS5S8SGWGTPC, uint32(1), bind.IP.String(), ""),
 		ie.NewAccessPointName("ims"),
@@ -114,7 +116,7 @@ func main() {
 		ie.NewAPNRestriction(gtpv2.APNRestrictionNoExistingContextsorRestriction),
 		ie.NewAggregateMaximumBitRate(0x11111111, 0x22222222),
 		ie.NewUserLocationInformation(0, 0, 0, 0, 0, 0, 0, 0,
-			mcc, mnc, 1, 1, 1, 1, 1,
+			*mcc, *mnc, 1, 1, 1, 1, 1,
 			1, 1, 1,
 		),
 		ie.NewBearerContext(
