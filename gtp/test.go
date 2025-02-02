@@ -15,11 +15,47 @@ import (
 var pgwc = flag.String("pgwc", "smf", "PGWC FQDN/IP")
 
 func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
+	ses, err := con.GetSessionByIMSI(fmt.Sprintf("%s%s%0.10d", mcc, mnc, 1))
+	if err != nil {
+		return err
+	}
+	res := msg.(*message.CreateSessionResponse)
+	if fteidcIE := res.PGWS5S8FTEIDC; fteidcIE != nil {
+		it, err := fteidcIE.InterfaceType()
+		if err != nil {
+			return err
+		}
+		teid, err := fteidcIE.TEID()
+		if err != nil {
+			return err
+		}
+		ses.AddTEID(it, teid)
+	} else {
+		con.RemoveSession(ses)
+		return &gtpv2.RequiredIEMissingError{Type: ie.FullyQualifiedTEID}
+	}
 	return nil
 }
 
 func CreateBearerRequest(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
-	return nil
+	ses, err := con.GetSessionByIMSI(fmt.Sprintf("%s%s%0.10d", mcc, mnc, 1))
+	if err != nil {
+		return err
+	}
+	teid, err := ses.GetTEID(gtpv2.IFTypeS5S8PGWGTPC)
+	if err != nil {
+		return err
+	}
+	res := message.NewCreateBearerResponse(
+		teid, 2,
+		ie.NewCause(gtpv2.CauseRequestAccepted, 0, 0, 0, nil),
+		ie.NewBearerContext(
+			ie.NewEPSBearerID(5),
+			ie.NewBearerQoS(1, 1, 1, 1, 0x52, 0x52, 0x52, 0x52),
+		),
+	)
+	_, err := con.SendMessageTo(res, pgw)
+	return err
 }
 
 func ModifyBearerResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
