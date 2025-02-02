@@ -42,7 +42,9 @@ Why another setup:
   - [x] [HSS](doc/images.md#open5gs-hsspcrfpgw)
   - [x] HSS UI
   - [x] [PCRF](doc/images.md#open5gs-hsspcrfpgw)
-  - [ ] PGW
+  - [x] PGW (CUPS)
+    - [x] SMF
+    - [x] UPF
   - [ ] SMSC
   - [x] MongoDB
 - Billing (billing.yml)
