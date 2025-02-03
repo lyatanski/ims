@@ -16,6 +16,7 @@ var (
 	pgwc = flag.String("pgwc", "smf", "PGWC FQDN/IP")
 	mcc = flag.String("mcc", "001", "MCC")
 	mnc = flag.String("mnc", "01", "MNC")
+	bind *net.UDPAddr
 )
 
 func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
@@ -50,15 +51,22 @@ func CreateBearerRequest(con *gtpv2.Conn, pgw net.Addr, msg message.Message) err
 	if err != nil {
 		return err
 	}
+	req := msg.(*message.CreateBearerRequest)
 	res := message.NewCreateBearerResponse(
-		teid, 2,
+		teid, req.SequenceNumber,
 		ie.NewCause(gtpv2.CauseRequestAccepted, 0, 0, 0, nil),
 		ie.NewBearerContext(
+			ie.NewCause(gtpv2.CauseRequestAccepted, 0, 0, 0, nil),
 			ie.NewEPSBearerID(5),
+			ie.NewFullyQualifiedTEID(gtpv2.IFTypeS5S8SGWGTPU, uint32(1), bind.IP.String(), ""),
 			ie.NewBearerQoS(1, 1, 1, 1, 0x52, 0x52, 0x52, 0x52),
 		),
 	)
-	_, err = con.SendMessageTo(res, pgw)
+	payload, err := message.Marshal(res)
+	if err != nil {
+		return err
+	}
+	_, err = con.WriteTo(payload, pgw)
 	return err
 }
 
@@ -86,7 +94,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	bind, err := ResolveLocalAddr()
+	bind, err = ResolveLocalAddr()
 	if err != nil {
 		log.Fatal(err)
 	}
