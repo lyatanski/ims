@@ -191,6 +191,24 @@ services:
     - source: test.py
       target: /opt/test.py
 
+  gtptest:
+    profiles:
+    - gtptest
+    image: golang
+      #command: go run test.go
+    command: sleep inf
+    privileged: true
+    cap_add:
+    - NET_ADMIN
+    - SYS_MODULE
+    depends_on:
+      #  icscf:
+      #    condition: service_healthy
+      scscf:
+        condition: service_healthy
+    volumes:
+    - ./gtp:/go
+
 
 configs:
   monitor.cfg:
