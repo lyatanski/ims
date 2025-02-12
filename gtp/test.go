@@ -66,6 +66,7 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 		}
 	}
 
+	log.Println("MS IP", msIP)
 	pdp := &netlink.PDP{
 		Version:     1,
 		PeerAddress: net.ParseIP(upfIP),
@@ -261,16 +262,17 @@ func main() {
 		log.Fatal(err)
 	}
 
-	time.Sleep(8 * time.Second)
+	log.Println(ses)
+	//time.Sleep(8 * time.Second)
 
-	teid, err := ses.GetTEID(gtpv2.IFTypeS5S8PGWGTPC)
-	if err != nil {
-		log.Fatal(err)
-	}
-	con.DeleteSession(
-		teid,
-		ses,
-		ie.NewEPSBearerID(ses.GetDefaultBearer().EBI),
-	)
+	//teid, err := ses.GetTEID(gtpv2.IFTypeS5S8PGWGTPC)
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	//con.DeleteSession(
+	//	teid,
+	//	ses,
+	//	ie.NewEPSBearerID(ses.GetDefaultBearer().EBI),
+	//)
 	time.Sleep(1 * time.Second)
 }

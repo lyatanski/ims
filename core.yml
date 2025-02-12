@@ -145,6 +145,19 @@ services:
     cap_add:
     - NET_ADMIN
 
+  upftun:
+    image: alpine
+    command:
+    - sh
+    - -c
+    - |
+      sleep 3
+      ip addr add ${UEGW}/16 dev tunue;
+      ip link set tunue up
+    network_mode: service:upf
+    cap_add:
+    - NET_ADMIN
+
   mongo:
     image: mongo:8.0
     command: --bind_ip 0.0.0.0
