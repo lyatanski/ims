@@ -6,6 +6,7 @@ import (
 	"net"
 	"flag"
 	"time"
+	"os/exec"
 	"context"
 	"github.com/wmnsk/go-gtp/gtpv2"
 	"github.com/wmnsk/go-gtp/gtpv2/message"
@@ -121,6 +122,15 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 	if err := netlink.RuleAdd(rule); err != nil {
 		log.Fatal("12 ", err)
 	}
+
+	log.Println("before starting process")
+	cmd := exec.Command("python3", "/opt/test.py")
+	out, err := cmd.Output()
+	if err != nil {
+		return err
+	}
+	log.Println(string(out))
+	log.Println("process finished")
 
 	return nil
 }
@@ -243,6 +253,11 @@ func main() {
 		ie.NewRATType(gtpv2.RATTypeEUTRAN),
 		ie.NewFullyQualifiedTEID(gtpv2.IFTypeS5S8SGWGTPC, uint32(1), foo, ""),
 		ie.NewAccessPointName("ims"),
+		ie.NewProtocolConfigurationOptions(
+			gtpv2.ConfigProtocolPPPWithIP,
+			ie.NewPCOContainer(gtpv2.ProtoIDIPCP, []byte{0x01, 0x00, 0x00, 0x10, 0x03, 0x06, 0x01, 0x01, 0x01, 0x01, 0x81, 0x06, 0x02, 0x02, 0x02, 0x02}),
+			ie.NewPCOContainer(0x000c, nil),
+		),
 		ie.NewSelectionMode(gtpv2.SelectionModeMSorNetworkProvidedAPNSubscribedVerified),
 		ie.NewPDNType(gtpv2.PDNTypeIPv4),
 		ie.NewPDNAddressAllocation("0.0.0.0"),
@@ -274,5 +289,5 @@ func main() {
 	//	ses,
 	//	ie.NewEPSBearerID(ses.GetDefaultBearer().EBI),
 	//)
-	time.Sleep(1 * time.Second)
+	time.Sleep(300 * time.Second)
 }
