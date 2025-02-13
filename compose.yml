@@ -147,7 +147,7 @@ services:
   test:
     profiles:
     - test
-    command: python3 /opt/test.py
+    command: gtp
     environment:
       K:     ${K}
       OPC:   ${OPC}
@@ -158,8 +158,6 @@ services:
       IPSEC: /usr/lib/ipsec.so
     cap_add:
     - NET_ADMIN
-    deploy:
-      replicas: ${SCALE}
     depends_on:
       icscf:
         condition: service_healthy
@@ -182,14 +180,17 @@ services:
         RUN cmake -B out -G Ninja #-D CMAKE_BUILD_TYPE=Debug
         RUN cmake --build out --target install && cp out/_deps/libmnl/usr/lib/libmnl.so* /usr/local/lib/ && ldconfig
 
+        FROM golang AS gobld
+        COPY ./gtp /go
+        RUN go build -o gtp
+
         FROM ubuntu:jammy
         RUN apt update && apt install --no-install-recommends -y python3-pip iproute2 bind9-host
         COPY --from=build /doubango/out/_deps/libmnl/usr/lib/libmnl.so* /usr/local/lib/
         COPY --from=build /doubango/out/plugins/ipsec_linux/ipsec.so /usr/lib/
+        COPY --from=gobld /go/gtp /usr/bin/
+        COPY ./test.py /opt/
         RUN --mount=type=bind,from=build,source=/doubango/out/bindings/python/,target=/opt/python,rw ldconfig && pip install /opt/python
-    configs:
-    - source: test.py
-      target: /opt/test.py
 
 
 configs:
@@ -342,9 +343,6 @@ configs:
           reload
           loadbalance
       }
-
-  test.py:
-    file: test.py
 
 
 networks:

@@ -21,8 +21,8 @@ services:
       dockerfile_inline: |
         FROM alpine AS build
         RUN apk add alpine-sdk bison flex git cmake meson bash sudo linux-headers bsd-compat-headers yaml-dev lksctp-tools-dev gnutls-dev libgcrypt-dev libidn-dev mongo-c-driver-dev libmicrohttpd-dev curl-dev nghttp2-dev talloc-dev
-        RUN git clone --depth=1 https://github.com/open5gs/open5gs
-        WORKDIR open5gs
+        RUN wget -qO- https://github.com/open5gs/open5gs/archive/refs/tags/v2.7.2.tar.gz | tar -xzf-
+        WORKDIR open5gs-2.7.2
         RUN meson build --prefix=/opt
         RUN ninja -C build install
 
@@ -142,6 +142,19 @@ services:
     - 2152/udp
     devices:
     - /dev/net/tun
+    cap_add:
+    - NET_ADMIN
+
+  upftun:
+    image: alpine
+    command:
+    - sh
+    - -c
+    - |
+      sleep 3
+      ip addr add ${UEGW}/16 dev tunue;
+      ip link set tunue up
+    network_mode: service:upf
     cap_add:
     - NET_ADMIN
 
@@ -339,8 +352,8 @@ configs:
           - address: 0.0.0.0
             advertise: upf
         session:
-        - subnet: 10.10.0.0/16
-          gateway: 10.10.0.1
+        - subnet: ${UENET}
+          gateway: ${UEGW}
           dnn: ims
         dns:
         - ${DNSIP}
@@ -388,8 +401,8 @@ configs:
           - address: 0.0.0.0
             advertise: upf
         session:
-        - subnet: 10.10.0.0/16
-          gateway: 10.10.0.1
+        - subnet: ${UENET}
+          gateway: ${UEGW}
           dnn: ims
           dev: tunue
 
