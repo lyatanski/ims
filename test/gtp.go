@@ -28,6 +28,7 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 	var msIP, upfIP, pcscfIP string
 	var oteiU uint32
 	var addr netlink.Addr
+	var call []string
 
 	log.Println("searching session for TEID", msg.TEID())
 	ses, err := con.GetSessionByTEID(msg.TEID(), pgw)
@@ -140,12 +141,18 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 	}
 
 	log.Println("before starting process", ses.IMSI)
-	cmd := exec.Command("python3", "/opt/sip.py", "--imsi", ses.IMSI, "--msisdn", fmt.Sprintf("%s%0.9d", os.Getenv("DIAL"), msg.TEID()), "--bind", msIP, pcscfIP)
-	out, err := cmd.Output()
+	call = append(call, "/opt/sip.py", "--imsi", ses.IMSI, "--msisdn", fmt.Sprintf("%s%0.9d", os.Getenv("DIAL"), msg.TEID()), "--bind", msIP)
+	if msg.TEID() % 2 == 0 {
+		call = append(call, "--call", fmt.Sprintf("%s%0.9d", os.Getenv("DIAL"), msg.TEID()-1))
+	}
+	call = append(call, pcscfIP)
+	cmd := exec.Command("python3", call...)
+	log.Println(cmd)
+	out, err := cmd.CombinedOutput()
+	log.Println(string(out))
 	if err != nil {
 		log.Fatal("13 ", err)
 	}
-	log.Println(string(out))
 	log.Println("process finished")
 
 	return nil
