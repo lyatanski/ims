@@ -6,6 +6,12 @@ Why another setup:
 - go into a bit more depth of the Kamailio configuration for better understanding
 - provide entirely software based playground for testing
 
+## How to use
+
+    docker compose --profile test up -d
+
+For always up to date commands, check out [CI](.github/workflows/compose.yml) config
+
 
 ## Specifications
 - SIP [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html)
