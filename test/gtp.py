@@ -136,7 +136,7 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 	}
 
 	log.Println("before starting process")
-	cmd := exec.Command("python3", "/opt/test.py", "--imsi", fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, 1), "--msisdn", "12345678", "--bind", msIP, pcscfIP)
+	cmd := exec.Command("python3", "/opt/sip.py", "--imsi", fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, 1), "--msisdn", "12345678", "--bind", msIP, pcscfIP)
 	out, err := cmd.Output()
 	if err != nil {
 		log.Fatal("13 ", err)

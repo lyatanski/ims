@@ -154,7 +154,6 @@ services:
       PLMN:  ${MCC}${MNC}
       DIAL:  ${DIAL}
       REALM: ims.${REALM}
-      PCSCF: pcscf
       IPSEC: /usr/lib/ipsec.so
     cap_add:
     - NET_ADMIN
@@ -181,7 +180,7 @@ services:
         RUN cmake --build out --target install && cp out/_deps/libmnl/usr/lib/libmnl.so* /usr/local/lib/ && ldconfig
 
         FROM golang AS gobld
-        COPY ./gtp /go
+        COPY ./test /go
         RUN go build -o gtp
 
         FROM ubuntu:jammy
@@ -189,7 +188,7 @@ services:
         COPY --from=build /doubango/out/_deps/libmnl/usr/lib/libmnl.so* /usr/local/lib/
         COPY --from=build /doubango/out/plugins/ipsec_linux/ipsec.so /usr/lib/
         COPY --from=gobld /go/gtp /usr/bin/
-        COPY ./test.py /opt/
+        COPY ./test/sip.py /opt/
         RUN --mount=type=bind,from=build,source=/doubango/out/bindings/python/,target=/opt/python,rw ldconfig && pip install /opt/python
 
 
