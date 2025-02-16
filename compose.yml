@@ -95,14 +95,13 @@ services:
          RUN apt update && apt install --no-install-recommends -y rtpengine-daemon
          ENTRYPOINT ["rtpengine"]
 
-  ## as UE IPs will not be in the setup IP range, they need special attention
-  ## TODO: to be relevant when PGW is involved
-  #route:
-  #  image: alpine
-  #  command: ip route add ${POOL} via ${SGI}
-  #  network_mode: service:pcscf
-  #  cap_add:
-  #  - NET_ADMIN
+  # as UE IPs will not be in the setup IP range, they need special attention
+  route:
+    image: alpine
+    command: ip route add ${UENET} via ${UPFIP}
+    network_mode: service:pcscf
+    cap_add:
+    - NET_ADMIN
 
   kmod:
     image: alpine
