@@ -152,6 +152,7 @@ services:
       OPC:   ${OPC}
       PLMN:  ${MCC}${MNC}
       DIAL:  ${DIAL}
+      SCALE: ${SCALE}
       REALM: ims.${REALM}
       IPSEC: /usr/lib/ipsec.so
     cap_add:

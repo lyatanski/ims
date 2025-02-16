@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"fmt"
 	"log"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"time"
 	"os/exec"
 	"context"
+	"strconv"
 	"github.com/wmnsk/go-gtp/gtpv2"
 	"github.com/wmnsk/go-gtp/gtpv2/message"
 	"github.com/wmnsk/go-gtp/gtpv2/ie"
@@ -27,10 +29,12 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 	var oteiU uint32
 	var addr netlink.Addr
 
-	ses, err := con.GetSessionByIMSI(fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, 1))
+	log.Println("searching session for TEID", msg.TEID())
+	ses, err := con.GetSessionByTEID(msg.TEID(), pgw)
 	if err != nil {
 		return err
 	}
+
 	res := msg.(*message.CreateSessionResponse)
 	if fteidcIE := res.PGWS5S8FTEIDC; fteidcIE != nil {
 		it, err := fteidcIE.InterfaceType()
@@ -85,11 +89,11 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 		PeerAddress: net.ParseIP(upfIP),
 		MSAddress:   net.ParseIP(msIP),
 		OTEI:        oteiU,
-		ITEI:        uint32(1),
+		ITEI:        msg.TEID(),
 	}
 
 	if err := netlink.GTPPDPAdd(gtpu, pdp); err != nil {
-		log.Fatal("8 ", err)
+		log.Fatal("8 ", ses.IMSI, err)
 	}
 
 	link, err := netlink.LinkByName("eth0")
@@ -135,8 +139,8 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 		log.Fatal("12 ", err)
 	}
 
-	log.Println("before starting process")
-	cmd := exec.Command("python3", "/opt/sip.py", "--imsi", fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, 1), "--msisdn", "12345678", "--bind", msIP, pcscfIP)
+	log.Println("before starting process", ses.IMSI)
+	cmd := exec.Command("python3", "/opt/sip.py", "--imsi", ses.IMSI, "--msisdn", fmt.Sprintf("%s%0.9d", os.Getenv("DIAL"), msg.TEID()), "--bind", msIP, pcscfIP)
 	out, err := cmd.Output()
 	if err != nil {
 		log.Fatal("13 ", err)
@@ -258,38 +262,44 @@ func main() {
 		message.MsgTypeDeleteSessionResponse: DeleteSessionResponse,
 	})
 
-	ses, _, err := con.CreateSession(
-		pgw,
-		ie.NewIMSI(fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, 1)),
-		ie.NewServingNetwork(*mcc, *mnc),
-		ie.NewRATType(gtpv2.RATTypeEUTRAN),
-		ie.NewFullyQualifiedTEID(gtpv2.IFTypeS5S8SGWGTPC, uint32(1), foo, ""),
-		ie.NewAccessPointName("ims"),
-		ie.NewProtocolConfigurationOptions(
-			gtpv2.ConfigProtocolPPPWithIP,
-			ie.NewPCOContainer(gtpv2.ProtoIDIPCP, []byte{0x01, 0x00, 0x00, 0x10, 0x03, 0x06, 0x01, 0x01, 0x01, 0x01, 0x81, 0x06, 0x02, 0x02, 0x02, 0x02}),
-			ie.NewPCOContainer(0x000c, nil),
-		),
-		ie.NewSelectionMode(gtpv2.SelectionModeMSorNetworkProvidedAPNSubscribedVerified),
-		ie.NewPDNType(gtpv2.PDNTypeIPv4),
-		ie.NewPDNAddressAllocation("0.0.0.0"),
-		ie.NewAPNRestriction(gtpv2.APNRestrictionNoExistingContextsorRestriction),
-		ie.NewAggregateMaximumBitRate(0x11111111, 0x22222222),
-		ie.NewUserLocationInformation(0, 0, 0, 0, 0, 0, 0, 0,
-			*mcc, *mnc, 1, 1, 1, 1, 1,
-			1, 1, 1,
-		),
-		ie.NewBearerContext(
-			ie.NewEPSBearerID(5),
-			ie.NewFullyQualifiedTEID(gtpv2.IFTypeS5S8SGWGTPU, uint32(1), foo, "").WithInstance(2),
-			ie.NewBearerQoS(1, 2, 1, 0xff, 0, 0, 0, 0),
-		),
-	)
+	ues, err := strconv.Atoi(os.Getenv("SCALE"))
 	if err != nil {
 		log.Fatal(err)
 	}
+	for i := 1; i <= ues; i++ {
+		ses, _, err := con.CreateSession(
+			pgw,
+			ie.NewIMSI(fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, i)),
+			ie.NewServingNetwork(*mcc, *mnc),
+			ie.NewRATType(gtpv2.RATTypeEUTRAN),
+			ie.NewFullyQualifiedTEID(gtpv2.IFTypeS5S8SGWGTPC, uint32(i), foo, ""),
+			ie.NewAccessPointName("ims"),
+			ie.NewProtocolConfigurationOptions(
+				gtpv2.ConfigProtocolPPPWithIP,
+				ie.NewPCOContainer(gtpv2.ProtoIDIPCP, []byte{0x01, 0x00, 0x00, 0x10, 0x03, 0x06, 0x01, 0x01, 0x01, 0x01, 0x81, 0x06, 0x02, 0x02, 0x02, 0x02}),
+				ie.NewPCOContainer(0x000c, nil),
+			),
+			ie.NewSelectionMode(gtpv2.SelectionModeMSorNetworkProvidedAPNSubscribedVerified),
+			ie.NewPDNType(gtpv2.PDNTypeIPv4),
+			ie.NewPDNAddressAllocation("0.0.0.0"),
+			ie.NewAPNRestriction(gtpv2.APNRestrictionNoExistingContextsorRestriction),
+			ie.NewAggregateMaximumBitRate(0x11111111, 0x22222222),
+			ie.NewUserLocationInformation(0, 0, 0, 0, 0, 0, 0, 0,
+				*mcc, *mnc, 1, 1, 1, 1, 1,
+				1, 1, 1,
+			),
+			ie.NewBearerContext(
+				ie.NewEPSBearerID(5),
+				ie.NewFullyQualifiedTEID(gtpv2.IFTypeS5S8SGWGTPU, uint32(i), foo, "").WithInstance(2),
+				ie.NewBearerQoS(1, 2, 1, 0xff, 0, 0, 0, 0),
+			),
+		)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println(ses)
+	}
 
-	log.Println(ses)
 	//time.Sleep(8 * time.Second)
 
 	//teid, err := ses.GetTEID(gtpv2.IFTypeS5S8PGWGTPC)
