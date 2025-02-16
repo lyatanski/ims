@@ -114,33 +114,43 @@ def gen(cscf, domain, transport="tcp", ipsec=None):
 
 
 if __name__ == "__main__":
-    import subprocess
-    idx = int(subprocess.check_output("host $(hostname -i) | grep -o 'ims-test-\([0-9]\+\)' | cut -d - -f 3", shell=True).decode("utf-8").strip())
-    run = gen(cscf=os.environ["PCSCF"], domain=os.environ["REALM"], ipsec=os.environ["IPSEC"])
-    s0 = run(imsi = f'{os.environ["PLMN"]}{idx:010}',
-             msisdn = f'{os.environ["DIAL"]}{idx:09}',
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="IMS SIP client")
+    parser.add_argument('--bind', help="local bind IP")
+    parser.add_argument('--imsi', help="International Mobile Subscriber Identity")
+    parser.add_argument('--msisdn', help="Mobile Station International Subscriber Directory Number")
+    parser.add_argument('cscf', help="CSCF IP address")
+    args = parser.parse_args()
+
+    print(" ".join(sys.argv))
+
+    run = gen(cscf=args.cscf, domain=os.environ["REALM"], ipsec=os.environ["IPSEC"])
+    s0 = run(imsi = args.imsi,
+             msisdn = args.msisdn,
              Ki = os.environ["K"],
-             opc = os.environ["OPC"])
+             opc = os.environ["OPC"],
+             bind = args.bind)
 
-    time.sleep(6)
+    #time.sleep(6)
 
-    if idx % 2 == 0:
-        #s0.removeHeader("Event")
-        call = s.CallSession(s0)
-        #call.set100rel(True)
-        #call.setSessionTimer(3600, "none")
-        #call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
-        call.call(f'sip:{os.environ["DIAL"]}{idx-1:09}@{os.environ["REALM"]};user=phone', s.twrap_media_audio)
+    #if idx % 2 == 0:
+    #    #s0.removeHeader("Event")
+    #    call = s.CallSession(s0)
+    #    #call.set100rel(True)
+    #    #call.setSessionTimer(3600, "none")
+    #    #call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
+    #    call.call(f'sip:{os.environ["DIAL"]}{idx-1:09}@{os.environ["REALM"]};user=phone', s.twrap_media_audio)
 
-        #time.sleep(10)
-        #call.hold()
-        #time.sleep(10)
-        #call.resume()
+    #    #time.sleep(10)
+    #    #call.hold()
+    #    #time.sleep(10)
+    #    #call.resume()
 
-        time.sleep(181)
-        call.hangup()
-    else:
-        time.sleep(180)
+    #    time.sleep(181)
+    #    call.hangup()
+    #else:
+    #    time.sleep(180)
 
     time.sleep(30)
 

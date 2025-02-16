@@ -23,7 +23,7 @@ var (
 )
 
 func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
-	var msIP, upfIP string
+	var msIP, upfIP, pcscfIP string
 	var oteiU uint32
 	var addr netlink.Addr
 
@@ -51,6 +51,18 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 		msIP, err = paaIE.IPAddress()
 		if err != nil {
 			return err
+		}
+	}
+
+	if pcoIE := res.PCO; pcoIE != nil {
+		pco, err := pcoIE.ProtocolConfigurationOptions()
+		if err != nil {
+			return err
+		}
+		for _, childIE := range pco.ProtocolOrContainers {
+			if childIE.ID == 0xc {
+				pcscfIP = fmt.Sprintf("%d.%d.%d.%d", childIE.Contents[0], childIE.Contents[1], childIE.Contents[2], childIE.Contents[3])
+			}
 		}
 	}
 
@@ -124,10 +136,10 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 	}
 
 	log.Println("before starting process")
-	cmd := exec.Command("python3", "/opt/test.py")
+	cmd := exec.Command("python3", "/opt/test.py", "--imsi", fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, 1), "--msisdn", "12345678", "--bind", msIP, pcscfIP)
 	out, err := cmd.Output()
 	if err != nil {
-		return err
+		log.Fatal("13 ", err)
 	}
 	log.Println(string(out))
 	log.Println("process finished")
