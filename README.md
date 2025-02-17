@@ -7,6 +7,18 @@ Why another setup:
 - provide entirely software based playground for testing
 
 
+## How to use
+As the setup loads and uses kernel module, best to test in VM
+
+    docker compose --profile test up -d
+
+For always up to date commands, check out [CI](.github/workflows/compose.yml) configuration
+
+To observe the packets
+
+    wireshark -i any --display-filter 'gtpv2 or sip or diameter.cmd.code != 280'
+
+
 ## Specifications
 - SIP [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html)
 - SDP [RFC 8866](https://www.rfc-editor.org/rfc/rfc8866.html)
@@ -43,8 +55,8 @@ Why another setup:
   - [x] HSS UI
   - [x] [PCRF](doc/images.md#open5gs-hsspcrfpgw)
   - [x] PGW (CUPS)
-    - [x] SMF
-    - [x] UPF
+    - [x] [SMF](doc/images.md#open5gs-hsspcrfpgw)
+    - [x] [UPF](doc/images.md#open5gs-hsspcrfpgw)
   - [ ] SMSC
   - [x] MongoDB
 - Billing (billing.yml)
