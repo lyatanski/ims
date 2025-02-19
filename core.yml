@@ -188,6 +188,11 @@ configs:
           #- module: /opt/lib/freeDiameter/dict_nas_mipv6.fdx
           #- module: /opt/lib/freeDiameter/dict_dcca.fdx
           #- module: /opt/lib/freeDiameter/dict_dcca_3gpp.fdx
+        metrics:
+          server:
+          - address: 0.0.0.0
+            port: 9090
+        sms_over_ims: "sip:smsc.epc.${REALM}"
       logger:
         file:
           path: /var/log/hss.log
