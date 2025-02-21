@@ -67,6 +67,8 @@ services:
       target: /etc/ims/kamailio.cfg
     - source: scscf.xml
       target: /etc/ims/diameter.xml
+    - source: CxData.xsd
+      target: /etc/ims/CxData.xsd
     - source: monitor.cfg
       target: /etc/ims/monitor.cfg
 
@@ -275,6 +277,9 @@ configs:
 
   scscf.cfg:
     file: cscf/serving.cfg
+
+  CxData.xsd:
+    file: cscf/CxData_Type_Rel18.xsd
 
   scscf.xml:
     content: |
