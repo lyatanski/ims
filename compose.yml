@@ -44,16 +44,21 @@ services:
       context: .
       dockerfile_inline: |
         FROM alpine:edge
-        RUN apk add kamailio-extras kamailio-ims kamailio-mysql kamailio-presence kamailio-debugger
+        RUN apk add kamailio-extras kamailio-ims kamailio-redis kamailio-presence kamailio-debugger
         ENTRYPOINT ["kamailio", "-DD", "-E"]
 
   icscf:
     << : *kamailio
+    environment:
+      << : *env
+      DBURL: redis://redis/icscf
     configs:
     - source: icscf.cfg
       target: /etc/ims/kamailio.cfg
     - source: icscf.xml
       target: /etc/ims/diameter.xml
+    - source: s_cscf.map
+      target: /etc/ims/schema/s_cscf
     - source: monitor.cfg
       target: /etc/ims/monitor.cfg
     depends_on:
@@ -126,24 +131,12 @@ services:
     - /lib/modules:/lib/modules
 
   dbprep:
-    image: mariadb
-    command:
-    - sh
-    - -c
-    - mariadb --skip-ssl --host maria < /opt/icscf.sql
-    tmpfs:
-    - /var/lib/mysql
-    configs:
-    - source: icscf.sql
-      target: /opt/icscf.sql
+    image: valkey/valkey:8.1-alpine
+    command: valkey-cli -u redis://redis/icscf HSET s_cscf s_cscf_uri sip:scscf.ims.${REALM}
     restart: on-failure
 
-  maria:
-    image: mariadb
-    environment:
-      MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: true
-    tmpfs:
-    - /var/lib/mysql
+  redis:
+    image: valkey/valkey:8.1-alpine
 
   test:
     profiles:
@@ -250,30 +243,10 @@ configs:
               <DefaultRoute FQDN="hss.epc.${REALM}" metric="1"/>
       </DiameterPeer>
 
-  icscf.sql:
+  s_cscf.map:
     content: |
-      CREATE DATABASE IF NOT EXISTS icscf;
-      USE icscf;
-      CREATE TABLE IF NOT EXISTS nds_trusted_domains (
-        id int(11) NOT NULL AUTO_INCREMENT,
-        trusted_domain varchar(83) NOT NULL DEFAULT '',
-        PRIMARY KEY (id)
-      );
-      CREATE TABLE IF NOT EXISTS s_cscf_capabilities (
-        id int(11) NOT NULL AUTO_INCREMENT,
-        id_s_cscf int(11) NOT NULL DEFAULT 0,
-        capability int(11) NOT NULL DEFAULT 0,
-        PRIMARY KEY (id),
-        KEY idx_capability (capability),
-        KEY idx_id_s_cscf (id_s_cscf)
-      );
-      CREATE TABLE IF NOT EXISTS s_cscf (
-        id int(11) NOT NULL AUTO_INCREMENT,
-        name varchar(83) NOT NULL DEFAULT '',
-        s_cscf_uri varchar(83) NOT NULL DEFAULT '',
-        PRIMARY KEY (id)
-      );
-      INSERT IGNORE INTO s_cscf (s_cscf_uri) VALUES ('sip:scscf.ims.${REALM}');
+      name/string,s_cscf_uri/string
+      1
 
   scscf.cfg:
     file: cscf/serving.cfg
