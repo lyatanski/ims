@@ -51,7 +51,7 @@ services:
     << : *kamailio
     environment:
       << : *env
-      DBURL: redis://redis/icscf
+      DBURL: redis://redis:6379/1
     configs:
     - source: icscf.cfg
       target: /etc/ims/kamailio.cfg
@@ -59,6 +59,10 @@ services:
       target: /etc/ims/diameter.xml
     - source: s_cscf.map
       target: /etc/ims/schema/s_cscf
+    - source: s_cscf_capabilities.map
+      target: /etc/ims/schema/s_cscf_capabilities
+    - source: nds_trusted_domains.map
+      target: /etc/ims/schema/nds_trusted_domains
     - source: monitor.cfg
       target: /etc/ims/monitor.cfg
     depends_on:
@@ -132,11 +136,13 @@ services:
 
   dbprep:
     image: valkey/valkey:8.1-alpine
-    command: valkey-cli -u redis://redis/icscf HSET s_cscf s_cscf_uri sip:scscf.ims.${REALM}
+    command: valkey-cli -u redis://redis:6379/1 HSET s_cscf:entry::1 s_cscf_uri sip:scscf.ims.${REALM}
     restart: on-failure
 
   redis:
     image: valkey/valkey:8.1-alpine
+    expose:
+    - 6379/tcp
 
   test:
     profiles:
@@ -245,7 +251,17 @@ configs:
 
   s_cscf.map:
     content: |
-      name/string,s_cscf_uri/string
+      id/int,name/string,s_cscf_uri/string
+      1
+
+  s_cscf_capabilities.map:
+    content: |
+      id/int,id_s_cscf/int,capability/int
+      1
+
+  nds_trusted_domains.map:
+    content: |
+      id/int,trusted_domain/string
       1
 
   scscf.cfg:
