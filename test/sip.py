@@ -102,6 +102,8 @@ def gen(cscf, domain, transport="tcp", ipsec=None):
         sip.setPassword(Ki)
         sip.setOperatorIdConcealed(opc)
 
+        sip.addHeader("P-Access-Network-Info", "3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=4250319f10053212")
+
         if(ipsec):
             if(not sip.setIPsecPlugin(ipsec)): sys.exit(1)
             sip.setIPSecSecAgree(True)
