@@ -46,9 +46,9 @@ To observe the packets
     - [x] Proxy
     - [x] Interrogating
     - [x] Serving
-  - [x] MariaDB
+  - [x] [DB](doc/images.md#ims-db)
   - [x] [rtpengine](doc/images.md#rtpengine)
-  - [x] DNS
+  - [x] [DNS](doc/images.md#coredns)
 - Core Network (core.yml)
   - [ ] DRA
   - [x] [HSS](doc/images.md#open5gs-hsspcrfpgw)
