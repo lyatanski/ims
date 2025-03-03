@@ -45,7 +45,7 @@ RUN apk --no-cache upgrade \
         wireshark-common \
     && adduser -D build && addgroup build abuild \
     && echo "%abuild ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abuild
-COPY kamailio /kamailio
+RUN git clone https://github.com/lyatanski/kamailio.git
 RUN cmake -S /kamailio -B /out -D CMAKE_BUILD_TYPE=Release -D MODULE_GROUP_NAME="DEFAULT KIMS KREDIS KPRESENCE" \
     && cmake --build /out --target install -j 6
 
@@ -79,6 +79,6 @@ COPY --from=build /usr/local/lib/kamailio/modules/xhttp.so \
     /usr/local/lib/kamailio/modules/textops.so \
     /usr/local/lib/kamailio/modules/tm.so \
     /usr/local/lib/kamailio/modules/xlog.so /usr/local/lib/kamailio/modules/
-#COPY cscf /etc/ims
+COPY cscf /etc/ims
 
 ENTRYPOINT ["sh", "-c", "kamailio -DD -E -f /etc/ims/$CSCF.cfg"]
