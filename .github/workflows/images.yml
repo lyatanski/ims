@@ -1,6 +1,7 @@
 name: build
 on:
   push:
+permissions: write-all
 
 jobs:
   images:
