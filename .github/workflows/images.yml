@@ -1,7 +1,7 @@
 name: build
 on:
   push:
-permissions: write-all
+permissions: write_package
 
 jobs:
   images:
