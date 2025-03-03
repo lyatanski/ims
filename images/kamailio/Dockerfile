@@ -79,5 +79,6 @@ COPY --from=build /usr/local/lib/kamailio/modules/xhttp.so \
     /usr/local/lib/kamailio/modules/textops.so \
     /usr/local/lib/kamailio/modules/tm.so \
     /usr/local/lib/kamailio/modules/xlog.so /usr/local/lib/kamailio/modules/
+#COPY cscf /etc/ims
 
-#ENTRYPOINT ["kamailio", "-DD", "-E"]
+ENTRYPOINT ["sh", "-c", "kamailio -DD -E -f /etc/ims/$CSCF.cfg"]
