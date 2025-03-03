@@ -6,8 +6,14 @@ jobs:
   images:
     runs-on: ubuntu-latest
     steps:
-    #- uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-    - name: Set Up
+    - name: Log In
       run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+    - name: Build
+      run: docker build -t ghcr.io/${{ github.actor }}/cscf images/kamailio
+
+    - name: Publish
+      run: docker push ghcr.io/${{ github.actor }}/cscf
 
