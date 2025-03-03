@@ -1,9 +1,9 @@
-name: compose
+name: build
 on:
   push:
-  
+
 jobs:
-  test:
+  images:
     runs-on: ubuntu-latest
     steps:
     #- uses: actions/checkout@v4
