@@ -80,5 +80,10 @@ COPY --from=build /usr/local/lib/kamailio/modules/xhttp.so \
     /usr/local/lib/kamailio/modules/tm.so \
     /usr/local/lib/kamailio/modules/xlog.so /usr/local/lib/kamailio/modules/
 COPY cscf /etc/ims
+COPY --from=build \
+    /kamailio/utils/kamctl/db_redis/kamailio/s_cscf \
+    /kamailio/utils/kamctl/db_redis/kamailio/s_cscf_capabilities \
+    /kamailio/utils/kamctl/db_redis/kamailio/nds_trusted_domains \
+    /etc/ims/schema/
 
 ENTRYPOINT ["sh", "-c", "kamailio -DD -E -f /etc/ims/$CSCF.cfg"]
