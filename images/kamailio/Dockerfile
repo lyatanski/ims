@@ -7,6 +7,7 @@ RUN apk --no-cache upgrade \
         gcc \
         build-base \
         cmake \
+        ninja-build \
         bison \
         db-dev \
         gawk \
@@ -43,11 +44,12 @@ RUN apk --no-cache upgrade \
         sqlite-dev \
         unixodbc-dev \
         wireshark-common \
+    && ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/ \
     && adduser -D build && addgroup build abuild \
     && echo "%abuild ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abuild
 RUN git clone https://github.com/lyatanski/kamailio.git
-RUN cmake -S /kamailio -B /out -D CMAKE_BUILD_TYPE=Release -D MODULE_GROUP_NAME="DEFAULT KIMS KREDIS KPRESENCE" \
-    && cmake --build /out --target install -j 6
+RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release -D MODULE_GROUP_NAME="DEFAULT KIMS KREDIS KPRESENCE" \
+    && cmake --build /out --target install
 
 FROM alpine:latest
 RUN apk add libxml2
