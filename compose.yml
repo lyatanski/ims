@@ -6,8 +6,6 @@ include:
 
 x-kamailio: &kamailio
   image: ghcr.io/lyatanski/cscf:6.1.0
-  environment: &env
-    REALM: ${REALM}
   expose:
   - 5060/tcp
   - 5060/udp
@@ -22,7 +20,7 @@ services:
   pcscf:
     << : *kamailio
     environment:
-      << : *env
+      REALM: ${REALM}
       CSCF: proxy
       IPSEC: ${IPSEC}
     configs:
@@ -40,7 +38,7 @@ services:
   icscf:
     << : *kamailio
     environment:
-      << : *env
+      REALM: ${REALM}
       CSCF: interrogating
       DBURL: redis://redis:6379/1
     configs:
@@ -53,7 +51,7 @@ services:
   scscf:
     << : *kamailio
     environment:
-      << : *env
+      REALM: ${REALM}
       CSCF: serving
     configs:
     - source: scscf.xml
