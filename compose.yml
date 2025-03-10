@@ -5,8 +5,7 @@ include:
 
 
 x-kamailio: &kamailio
-  image: kamailio
-  command: -f /etc/ims/kamailio.cfg
+  image: ghcr.io/lyatanski/cscf:6.1.0
   environment: &env
     REALM: ${REALM}
   expose:
@@ -26,12 +25,8 @@ services:
       << : *env
       IPSEC: ${IPSEC}
     configs:
-    - source: pcscf.cfg
-      target: /etc/ims/kamailio.cfg
     - source: pcscf.xml
       target: /etc/ims/diameter.xml
-    - source: monitor.cfg
-      target: /etc/ims/monitor.cfg
     cap_add:
     - NET_ADMIN
     networks:
@@ -40,12 +35,6 @@ services:
     depends_on:
       kmod:
         condition: service_completed_successfully
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM alpine:edge
-        RUN apk add kamailio-extras kamailio-ims kamailio-redis kamailio-presence kamailio-debugger
-        ENTRYPOINT ["kamailio", "-DD", "-E"]
 
   icscf:
     << : *kamailio
@@ -53,18 +42,8 @@ services:
       << : *env
       DBURL: redis://redis:6379/1
     configs:
-    - source: icscf.cfg
-      target: /etc/ims/kamailio.cfg
     - source: icscf.xml
       target: /etc/ims/diameter.xml
-    - source: s_cscf.map
-      target: /etc/ims/schema/s_cscf
-    - source: s_cscf_capabilities.map
-      target: /etc/ims/schema/s_cscf_capabilities
-    - source: nds_trusted_domains.map
-      target: /etc/ims/schema/nds_trusted_domains
-    - source: monitor.cfg
-      target: /etc/ims/monitor.cfg
     depends_on:
       dbprep:
         condition: service_completed_successfully
@@ -72,14 +51,8 @@ services:
   scscf:
     << : *kamailio
     configs:
-    - source: scscf.cfg
-      target: /etc/ims/kamailio.cfg
     - source: scscf.xml
       target: /etc/ims/diameter.xml
-    - source: CxData.xsd
-      target: /etc/ims/CxData.xsd
-    - source: monitor.cfg
-      target: /etc/ims/monitor.cfg
 
   dns:
     image: coredns/coredns
@@ -194,26 +167,6 @@ services:
 
 
 configs:
-  monitor.cfg:
-    content: |
-      listen=tcp:0.0.0.0:9090
-      http_reply_parse=yes
-      tcp_accept_no_cl=yes
-      loadmodule "xhttp.so"
-      loadmodule "xhttp_prom.so"
-      modparam("xhttp_prom", "xhttp_prom_stats", "all")
-      event_route[xhttp:request] {
-      	if(prom_check_uri())
-      		prom_dispatch();
-      	else if(HEALTH)
-      		xhttp_reply("200", "OK", "text/plain", "ready to serve");
-      	else
-      		xhttp_reply("500", "KO", "text/plain", "try again later");
-      }
-
-  pcscf.cfg:
-    file: cscf/proxy.cfg
-
   pcscf.xml:
     content: |
       <?xml version="1.0" encoding="UTF-8"?>
@@ -230,9 +183,6 @@ configs:
               <DefaultRoute FQDN="pcrf.epc.${REALM}" metric="1"/>
       </DiameterPeer>
 
-  icscf.cfg:
-    file: cscf/interrogating.cfg
-
   icscf.xml:
     content: |
       <?xml version="1.0" encoding="UTF-8"?>
@@ -248,27 +198,6 @@ configs:
               <SupportedVendor vendor="10415" />
               <DefaultRoute FQDN="hss.epc.${REALM}" metric="1"/>
       </DiameterPeer>
-
-  s_cscf.map:
-    content: |
-      id/int,name/string,s_cscf_uri/string
-      1
-
-  s_cscf_capabilities.map:
-    content: |
-      id/int,id_s_cscf/int,capability/int
-      1
-
-  nds_trusted_domains.map:
-    content: |
-      id/int,trusted_domain/string
-      1
-
-  scscf.cfg:
-    file: cscf/serving.cfg
-
-  CxData.xsd:
-    file: cscf/CxData_Type_Rel18.xsd
 
   scscf.xml:
     content: |
