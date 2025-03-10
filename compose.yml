@@ -23,6 +23,7 @@ services:
     << : *kamailio
     environment:
       << : *env
+      CSCF: proxy
       IPSEC: ${IPSEC}
     configs:
     - source: pcscf.xml
@@ -40,6 +41,7 @@ services:
     << : *kamailio
     environment:
       << : *env
+      CSCF: interrogating
       DBURL: redis://redis:6379/1
     configs:
     - source: icscf.xml
@@ -50,6 +52,9 @@ services:
 
   scscf:
     << : *kamailio
+    environment:
+      << : *env
+      CSCF: serving
     configs:
     - source: scscf.xml
       target: /etc/ims/diameter.xml
