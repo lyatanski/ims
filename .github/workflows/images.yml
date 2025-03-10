@@ -28,5 +28,7 @@ jobs:
       run: docker tag ghcr.io/${{ github.actor }}/cscf ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
 
     - name: Publish
-      run: docker push ghcr.io/${{ github.actor }}/cscf ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
+      run: |
+        docker push ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
+        docker push ghcr.io/${{ github.actor }}/cscf
 
