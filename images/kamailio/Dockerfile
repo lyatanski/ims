@@ -52,7 +52,7 @@ RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release -D MODULE_GR
     && cmake --build /out --target install
 
 FROM alpine:latest
-RUN apk add libxml2
+RUN apk add libxml2 hiredis
 COPY --from=build /usr/local/sbin/kamailio /sbin/
 COPY --from=build /usr/local/lib/kamailio/modules/xhttp.so \
     /usr/local/lib/kamailio/modules/xhttp_prom.so \
