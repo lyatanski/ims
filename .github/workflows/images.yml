@@ -1,5 +1,7 @@
 name: build
 on:
+  schedule:
+  - cron: '0 1 * *'
   push:
 permissions: write-all
 
@@ -15,6 +17,13 @@ jobs:
     - name: Build
       run: docker build -t ghcr.io/${{ github.actor }}/cscf images/kamailio
 
+    - name: Get Version
+      id: get
+      run: docker run --rm -ti ghcr.io/${{ github.actor }}/cscf --version | sed -n 's/: kamailio \([0-9]\+\.[0-9]\+\.[0-9]\+\).*/=\1/p' >> "$GITHUB_OUTPUT"
+
+    - name: Tag
+      run: docker tag ghcr.io/${{ github.actor }}/cscf ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
+
     - name: Publish
-      run: docker push ghcr.io/${{ github.actor }}/cscf
+      run: docker push ghcr.io/${{ github.actor }}/cscf ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
 
