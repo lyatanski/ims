@@ -13,7 +13,7 @@ RUN cmake -B out -G Ninja #-D CMAKE_BUILD_TYPE=Debug
 RUN cmake --build out --target install && cp out/_deps/libmnl/usr/lib/libmnl.so* /usr/local/lib/ && ldconfig
 
 FROM golang AS gobld
-COPY ./test /go
+COPY ./gtp.go /go
 RUN go build -o gtp
 
 FROM ubuntu:jammy
@@ -21,6 +21,6 @@ RUN apt update && apt install --no-install-recommends -y python3-pip iproute2 bi
 COPY --from=build /doubango/out/_deps/libmnl/usr/lib/libmnl.so* /usr/local/lib/
 COPY --from=build /doubango/out/plugins/ipsec_linux/ipsec.so /usr/lib/
 COPY --from=gobld /go/gtp /usr/bin/
-COPY ./test/sip.py /opt/
+COPY ./sip.py /opt/
 RUN --mount=type=bind,from=build,source=/doubango/out/bindings/python/,target=/opt/python,rw ldconfig && pip install /opt/python
 
