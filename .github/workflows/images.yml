@@ -1,4 +1,4 @@
-name: build
+name: images
 on:
   schedule:
   - cron: '0 1 * * *'
@@ -8,6 +8,16 @@ permissions: write-all
 jobs:
   images:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+        - context: kamailio
+          image: cscf
+        - context: rtpengine
+          image: rtpengine
+        - context: test
+          image: test
+
     steps:
     - uses: actions/checkout@v4
 
@@ -15,20 +25,22 @@ jobs:
       run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
     - name: Build
-      run: docker build -t ghcr.io/${{ github.actor }}/cscf images/kamailio
+      run: docker build -t ghcr.io/${{ github.actor }}/${{ matrix.image }} images/${{ matrix.context }}
 
-    - name: Get Version
-      id: get
-      run: >
-        docker run --rm ghcr.io/${{ github.actor }}/cscf kamailio --version |
-        sed -n "s/: kamailio \([0-9]\+\.[0-9]\+\.[0-9]\+\).*/=\1/p" >>
-        "$GITHUB_OUTPUT"
+#    - name: Get Version
+#      id: get
+#      run: >
+#        docker run --rm ghcr.io/${{ github.actor }}/${{ matrix.image }} --version
 
-    - name: Tag
-      run: docker tag ghcr.io/${{ github.actor }}/cscf ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
+#        sed -n "s/\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/version=\1/p" >>
+#        "$GITHUB_OUTPUT"
+
+#    - name: Tag
+#      run: echo ${{ steps.get.outputs.version }}
+#      run: docker tag ghcr.io/${{ github.actor }}/cscf ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
+#        docker push ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
 
     - name: Publish
       run: |
-        docker push ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
-        docker push ghcr.io/${{ github.actor }}/cscf
+        docker push ghcr.io/${{ github.actor }}/${{ matrix.image }}
 

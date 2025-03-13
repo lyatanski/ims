@@ -1,7 +1,11 @@
 name: compose
 on:
-  push:
-  
+  workflow_run:
+    workflows:
+    - images
+    types:
+    - completed
+
 jobs:
   test:
     runs-on: ubuntu-latest
