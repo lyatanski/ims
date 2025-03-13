@@ -88,5 +88,6 @@ COPY --from=build \
     /kamailio/utils/kamctl/db_redis/kamailio/nds_trusted_domains \
     /etc/ims/schema/
 
-CMD kamailio -DD -E -f /etc/ims/$CSCF.cfg
+ENTRYPOINT ["kamailio", "-DD", "-E"]
+CMD -f /etc/ims/$CSCF.cfg
 
