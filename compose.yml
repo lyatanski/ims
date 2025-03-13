@@ -118,6 +118,7 @@ services:
   test:
     profiles:
     - test
+    image: ghcr.io/lyatanski/test
     command: gtp
     environment:
       K:     ${K}
