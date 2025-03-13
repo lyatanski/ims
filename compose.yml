@@ -5,7 +5,7 @@ include:
 
 
 x-kamailio: &kamailio
-  image: ghcr.io/lyatanski/cscf:6.1.0
+  image: ghcr.io/lyatanski/cscf
   expose:
   - 5060/tcp
   - 5060/udp
@@ -68,6 +68,7 @@ services:
         ipv4_address: ${DNSIP}
 
   rtpengine:
+    image: ghcr.io/lyatanski/rtpengine
     command: --no-log-timestamps --config-file=/etc/rtpengine.conf
     configs:
     - source: rtpengine
@@ -75,12 +76,6 @@ services:
     networks:
       default:
         ipv4_address: ${RTPIP}
-    build:
-      context: .
-      dockerfile_inline: |
-         FROM ubuntu:noble
-         RUN apt update && apt install --no-install-recommends -y rtpengine-daemon
-         ENTRYPOINT ["rtpengine"]
 
   # as UE IPs will not be in the setup IP range, they need special attention
   route:
