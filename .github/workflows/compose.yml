@@ -3,6 +3,9 @@ on:
   workflow_run:
     workflows:
     - images
+    types:
+    - completed
+
 
 jobs:
   test:
