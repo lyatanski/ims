@@ -5,6 +5,8 @@ on:
     - images
     types:
     - completed
+    branches:
+    - *
 
 
 jobs:
