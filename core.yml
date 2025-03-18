@@ -8,6 +8,9 @@ services:
     - cert-dra:/var/dra
     expose:
     - 3868/tcp
+    depends_on:
+      cert-dra:
+        condition: service_completed_successfully
 
   cert-dra:
     image: ghcr.io/lyatanski/openssl
