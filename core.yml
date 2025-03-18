@@ -17,7 +17,7 @@ services:
     command: req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=dra.epc
     working_dir: /var/dra
     volumes:
-    - cert-hss:/var/dra
+    - cert-dra:/var/dra
 
   hss:
     image: open5gs
