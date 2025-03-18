@@ -155,9 +155,6 @@ services:
     expose:
     - 8805/udp
     - 2152/udp
-    networks:
-      default:
-        ipv4_address: ${UPFIP}
     devices:
     - /dev/net/tun
     cap_add:
