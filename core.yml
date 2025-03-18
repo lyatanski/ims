@@ -190,7 +190,7 @@ services:
 configs:
   dra.conf:
     content: |
-      Identity = "dra.mnc001.mcc001.3gppnetwork.org";
+      Identity = "dra.epc";
       No_SCTP;
       TLS_Cred = "/var/dra/crt.pem", "/var/dra/key.pem";
       TLS_CA = "/var/dra/crt.pem";
