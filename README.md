@@ -50,7 +50,7 @@ To observe the packets
   - [x] [rtpengine](doc/images.md#rtpengine)
   - [x] [DNS](doc/images.md#coredns)
 - Core Network (core.yml)
-  - [ ] DRA
+  - [x] [DRA](doc/images.md#freeDiameter-dra)
   - [x] [HSS](doc/images.md#open5gs-hsspcrfpgw)
   - [x] HSS UI
   - [x] [PCRF](doc/images.md#open5gs-hsspcrfpgw)

@@ -44,6 +44,15 @@ approach. The build will be Alpine based for size reduction. For detailed build
 instructions, please check the Dockerfile for its creation.
 
 
+## [freeDiameter](https://github.com/freeDiameter/freeDiameter) (DRA)
+DRA could be built using freeDiameter, like in the example from Nick vs Networking blog.
+The image should contain basic freeDiameter daemon build.
+[1](https://nickvsnetworking.com/diameter-routing-agents-part-3-building-a-dra-with-freediameter/)
+[2](https://nickvsnetworking.com/diameter-routing-agents-part-4-advanced-freediameter-dra-routing/)
+[3](https://nickvsnetworking.com/diameter-routing-agents-part-5-avp-transformations/)
+[4](https://nickvsnetworking.com/diameter-routing-agents-part-5-avp-transformations-with-freediameter-and-python-in-rt_pyform/)
+
+
 ## [CGRateS](https://github.com/cgrates/cgrates) (billing)
 It seem there are not any prebuild options so build from source will be the
 approach to be taken. This will allow creation of distroless image with only
