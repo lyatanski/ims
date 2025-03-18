@@ -1,4 +1,21 @@
 services:
+  dra:
+    image: ghcr.io/lyatanski/dra
+    configs:
+    - source: dra.conf
+      target: /etc/dra.conf
+    volumes:
+    - cert-dra:/var/dra
+    expose:
+    - 3868/tcp
+
+  cert-dra:
+    image: ghcr.io/lyatanski/openssl
+    command: req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=dra.epc
+    working_dir: /var/dra
+    volumes:
+    - cert-hss:/var/dra
+
   hss:
     image: open5gs
     command: /opt/bin/open5gs-hssd -c /etc/hss/open5gs.yaml -t
@@ -31,16 +48,11 @@ services:
         COPY --from=build /opt /opt
 
   cert-hss:
-    image: certificate
-    command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.${REALM}
+    image: ghcr.io/lyatanski/openssl
+    command: req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.${REALM}
     working_dir: /var/hss
     volumes:
     - cert-hss:/var/hss
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM alpine
-        RUN apk add openssl
 
   subscribers:
     image: mongo:8.0
@@ -98,8 +110,8 @@ services:
         condition: service_completed_successfully
 
   cert-pcrf:
-    image: certificate
-    command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=pcrf.epc.${REALM}
+    image: ghcr.io/lyatanski/openssl
+    command: req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=pcrf.epc.${REALM}
     working_dir: /var/pcrf
     volumes:
     - cert-pcrf:/var/pcrf
@@ -125,8 +137,8 @@ services:
         condition: service_started
 
   cert-smf:
-    image: certificate
-    command: openssl req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=smf.epc.${REALM}
+    image: ghcr.io/lyatanski/openssl
+    command: req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=smf.epc.${REALM}
     working_dir: /var/smf
     volumes:
     - cert-smf:/var/smf
@@ -173,6 +185,17 @@ services:
 
 
 configs:
+  dra.conf:
+    content: |
+      Identity = "dra.mnc001.mcc001.3gppnetwork.org";
+      No_SCTP;
+      TLS_Cred = "/var/dra/crt.pem", "/var/dra/key.pem";
+      TLS_CA = "/var/dra/crt.pem";
+
+      LoadExtension = "dbg_msg_dumps.fdx" : "0x8888";
+      ConnectPeer = "hss.epc.${REALM}" { No_TLS; };
+
+
   hss.yaml:
     content: |
       db_uri: mongodb://mongo/open5gs
@@ -476,6 +499,7 @@ configs:
 
 
 volumes:
+  cert-dra:
   cert-hss:
   cert-pcrf:
   cert-smf:
