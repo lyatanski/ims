@@ -80,7 +80,7 @@ services:
   # as UE IPs will not be in the setup IP range, they need special attention
   route:
     image: alpine
-    command: ip route add ${UENET} via $$(getent hosts upf | cut -d' ' -f1)
+    command: sh -c "ip route add ${UENET} via $$(getent hosts upf | cut -d' ' -f1)"
     network_mode: service:pcscf
     cap_add:
     - NET_ADMIN
