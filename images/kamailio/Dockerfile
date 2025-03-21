@@ -43,6 +43,7 @@ COPY --from=build \
     /kamailio/utils/kamctl/db_redis/kamailio/s_cscf \
     /kamailio/utils/kamctl/db_redis/kamailio/s_cscf_capabilities \
     /kamailio/utils/kamctl/db_redis/kamailio/nds_trusted_domains \
+    /kamailio/utils/kamctl/db_redis/kamailio/globalblocklist \
     /kamailio/utils/kamctl/db_redis/kamailio/userblocklist \
     /kamailio/utils/kamctl/db_redis/kamailio/acc_cdrs \
     /etc/cscf/schema/
