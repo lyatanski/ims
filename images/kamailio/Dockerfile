@@ -9,10 +9,8 @@ RUN apk --no-cache upgrade \
         cmake \
         ninja-build \
         bison \
-        db-dev \
         gawk \
         flex \
-        expat-dev \
         openssl-dev \
         hiredis-dev \
         libev-dev \
@@ -21,10 +19,6 @@ RUN apk --no-cache upgrade \
         libunistring-dev \
         libwebsockets-dev \
         libxml2-dev \
-        linux-headers \
-        lksctp-tools-dev \
-        lua-dev \
-        pcre2-dev \
         icu-dev \
     && ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/ \
     && adduser -D build && addgroup build abuild \
