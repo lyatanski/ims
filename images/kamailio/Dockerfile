@@ -13,7 +13,7 @@ RUN apk --no-cache upgrade \
         gawk \
         flex \
         expat-dev \
-	openssl-dev \
+        openssl-dev \
         hiredis-dev \
         libev-dev \
         libevent-dev \
@@ -25,7 +25,7 @@ RUN apk --no-cache upgrade \
         lksctp-tools-dev \
         lua-dev \
         pcre2-dev \
-	icu-dev \
+        icu-dev \
     && ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/ \
     && adduser -D build && addgroup build abuild \
     && echo "%abuild ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abuild
