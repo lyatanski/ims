@@ -19,13 +19,13 @@ x-kamailio: &kamailio
 services:
   pcscf:
     << : *kamailio
+    command: -f /etc/cscf/proxy.cfg
     environment:
       REALM: ${REALM}
-      CSCF: proxy
       IPSEC: ${IPSEC}
     configs:
     - source: pcscf.xml
-      target: /etc/ims/diameter.xml
+      target: /etc/cscf/diameter.xml
     cap_add:
     - NET_ADMIN
     networks:
@@ -37,25 +37,25 @@ services:
 
   icscf:
     << : *kamailio
+    command: -f /etc/cscf/interrogating.cfg
     environment:
       REALM: ${REALM}
-      CSCF: interrogating
       DBURL: redis://redis:6379/1
     configs:
     - source: icscf.xml
-      target: /etc/ims/diameter.xml
+      target: /etc/cscf/diameter.xml
     depends_on:
       dbprep:
         condition: service_completed_successfully
 
   scscf:
     << : *kamailio
+    command: -f /etc/cscf/serving.cfg
     environment:
       REALM: ${REALM}
-      CSCF: serving
     configs:
     - source: scscf.xml
-      target: /etc/ims/diameter.xml
+      target: /etc/cscf/diameter.xml
 
   dns:
     image: coredns/coredns
