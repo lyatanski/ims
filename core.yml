@@ -20,7 +20,7 @@ services:
     - cert-dra:/var/dra
 
   hss:
-    image: open5gs
+    image: ghcr.io/lyatanski/open5gs
     command: /opt/bin/open5gs-hssd -c /etc/hss/open5gs.yaml -t
     configs:
     - source: hss.yaml
@@ -36,19 +36,6 @@ services:
         condition: service_completed_successfully
       subscribers:
         condition: service_completed_successfully
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM alpine AS build
-        RUN apk add alpine-sdk bison flex git cmake meson bash sudo linux-headers bsd-compat-headers yaml-dev lksctp-tools-dev gnutls-dev libgcrypt-dev libidn-dev mongo-c-driver-dev libmicrohttpd-dev curl-dev nghttp2-dev talloc-dev
-        RUN wget -qO- https://github.com/open5gs/open5gs/archive/refs/tags/v2.7.2.tar.gz | tar -xzf-
-        WORKDIR open5gs-2.7.2
-        RUN meson build --prefix=/opt
-        RUN ninja -C build install
-
-        FROM alpine
-        RUN apk add yaml lksctp-tools gnutls libgcrypt libidn mongo-c-driver libmicrohttpd curl nghttp2 talloc
-        COPY --from=build /opt /opt
 
   cert-hss:
     image: ghcr.io/lyatanski/openssl
@@ -97,7 +84,7 @@ services:
         RUN cd /open5gs/webui && npm ci
 
   pcrf:
-    image: open5gs
+    image: ghcr.io/lyatanski/open5gs
     command: /opt/bin/open5gs-pcrfd -c /etc/pcrf/open5gs.yaml -t
     configs:
     - source: pcrf.yaml
@@ -120,7 +107,7 @@ services:
     - cert-pcrf:/var/pcrf
 
   smf:
-    image: open5gs
+    image: ghcr.io/lyatanski/open5gs
     command: /opt/bin/open5gs-smfd -c /etc/smf/open5gs.yaml -t
     configs:
     - source: smf.yaml
@@ -147,7 +134,7 @@ services:
     - cert-smf:/var/smf
 
   upf:
-    image: open5gs
+    image: ghcr.io/lyatanski/open5gs
     command: /opt/bin/open5gs-upfd -c /etc/upf/open5gs.yaml -t
     configs:
     - source: upf.yaml

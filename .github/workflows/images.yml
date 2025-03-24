@@ -21,6 +21,8 @@ jobs:
           image: dra
         - context: openssl
           image: openssl
+        - context: open5gs
+          image: open5gs
 
     steps:
     - uses: actions/checkout@v4
