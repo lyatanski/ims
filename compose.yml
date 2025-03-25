@@ -53,6 +53,7 @@ services:
     command: -f /etc/cscf/serving.cfg
     environment:
       REALM: ${REALM}
+      RTPADR: udp:rtpengine:9910
     configs:
     - source: scscf.xml
       target: /etc/cscf/diameter.xml
@@ -71,11 +72,10 @@ services:
     image: ghcr.io/lyatanski/rtpengine
     command: --no-log-timestamps --config-file=/etc/rtpengine.conf
     configs:
-    - source: rtpengine
+    - source: rtpengine.conf
       target: /etc/rtpengine.conf
-    networks:
-      default:
-        ipv4_address: ${RTPIP}
+    expose:
+    - 9910/udp
 
   # as UE IPs will not be in the setup IP range, they need special attention
   route:
@@ -191,15 +191,13 @@ configs:
               <DefaultRoute FQDN="hss.epc.${REALM}" metric="1"/>
       </DiameterPeer>
 
-  rtpengine:
+  rtpengine.conf:
     content: |
       [rtpengine]
-      foreground = true
-      log-level = 6
-      log-stderr = true
+      log-level = 7
       table = -1
       listen-ng = 0.0.0.0:9910
-      interface = internal/${RTPIP}
+      interface = any
       timeout = 60
       silent-timeout = 3600
       tos = 184
