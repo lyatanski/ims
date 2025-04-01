@@ -19,8 +19,8 @@ RUN apk --no-cache upgrade \
         libwebsockets-dev \
         libxml2-dev \
         icu-dev \
-	curl-dev \
-	nghttp2-dev \
+        curl-dev \
+        nghttp2-dev \
     && ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/ \
     && adduser -D build && addgroup build abuild \
     && echo "%abuild ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abuild
@@ -36,12 +36,28 @@ COPY --from=build \
     /usr/local/lib/kamailio/modules/* \
     /usr/local/lib/kamailio/modules/
 COPY --from=build \
+    /kamailio/utils/kamctl/db_redis/kamailio/pcscf_location \
+\
     /kamailio/utils/kamctl/db_redis/kamailio/s_cscf \
     /kamailio/utils/kamctl/db_redis/kamailio/s_cscf_capabilities \
     /kamailio/utils/kamctl/db_redis/kamailio/nds_trusted_domains \
+\
+    /kamailio/utils/kamctl/db_redis/kamailio/contact \
+    /kamailio/utils/kamctl/db_redis/kamailio/impu \
+    /kamailio/utils/kamctl/db_redis/kamailio/impu_contact \
+    /kamailio/utils/kamctl/db_redis/kamailio/subscriber_scscf \
+    /kamailio/utils/kamctl/db_redis/kamailio/impu_subscriber \
+    /kamailio/utils/kamctl/db_redis/kamailio/ro_session \
+\
+    /kamailio/utils/kamctl/db_redis/kamailio/dialog_in \
+    /kamailio/utils/kamctl/db_redis/kamailio/dialog_out \
+    /kamailio/utils/kamctl/db_redis/kamailio/dialog_vars \
+\
     /kamailio/utils/kamctl/db_redis/kamailio/globalblocklist \
     /kamailio/utils/kamctl/db_redis/kamailio/userblocklist \
+\
     /kamailio/utils/kamctl/db_redis/kamailio/acc_cdrs \
+\
     /etc/cscf/schema/
 COPY cscf/ /etc/cscf
 
