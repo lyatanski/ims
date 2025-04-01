@@ -60,27 +60,39 @@ sequenceDiagram
 
         alt
             S-CSCF->>P-CSCF: BYE
+            P-CSCF->>PCRF: STR
+            PCRF->>P-CSCF: STA
             P-CSCF->>UE1: BYE
             UE1->>P-CSCF: OK (BYE)
             P-CSCF->>S-CSCF: OK (BYE)
             S-CSCF->>P-CSCF: BYE
+            P-CSCF->>PCRF: STR
+            PCRF->>P-CSCF: STA
             P-CSCF->>UE2: BYE
             UE2->>P-CSCF: OK (BYE)
             P-CSCF->>S-CSCF: OK (BYE)
         else
             UE1->>P-CSCF: BYE
+            P-CSCF->>PCRF: STR
+            PCRF->>P-CSCF: STA
             P-CSCF->>S-CSCF: BYE
             S-CSCF->>P-CSCF: BYE
             P-CSCF->>UE2: BYE
             UE2->>P-CSCF: OK (BYE)
+            P-CSCF->>PCRF: STR
+            PCRF->>P-CSCF: STA
             P-CSCF->>S-CSCF: OK (BYE)
             S-CSCF->>P-CSCF: OK (BYE)
             P-CSCF->>UE1: OK (BYE)
         else
             UE2->>P-CSCF: BYE
+            P-CSCF->>PCRF: STR
+            PCRF->>P-CSCF: STA
             P-CSCF->>S-CSCF: BYE
             S-CSCF->>P-CSCF: BYE
             P-CSCF->>UE1: BYE
+            P-CSCF->>PCRF: STR
+            PCRF->>P-CSCF: STA
             UE1->>P-CSCF: OK (BYE)
             P-CSCF->>S-CSCF: OK (BYE)
             S-CSCF->>P-CSCF: OK (BYE)
