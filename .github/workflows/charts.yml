@@ -8,19 +8,14 @@ permissions: write-all
 jobs:
   charts:
     runs-on: ubuntu-latest
-    #strategy:
-    #  matrix:
-    #    include:
-    #    - context: test
-    #    - context: kamailio
-    #    - context: rtpengine
-    #    - context: freediameter
-    #    - context: openssl
-    #    - context: open5gs
+    strategy:
+      matrix:
+        include:
+        - package: ims
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Check
-      run: helm version
+    - name: Package
+      run: helm package charts/${{ matrix.package }}
 
