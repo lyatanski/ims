@@ -6,7 +6,7 @@ on:
 permissions: write-all
 
 jobs:
-  images:
+  charts:
     runs-on: ubuntu-latest
     #strategy:
     #  matrix:
