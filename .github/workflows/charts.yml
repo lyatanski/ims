@@ -19,3 +19,6 @@ jobs:
     - name: Package
       run: helm package charts/${{ matrix.package }}
 
+    - name: Publish
+      run: helm push --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} ${{ matrix.package }}-*.tgz oci://ghcr.io/${{ github.actor }}
+
