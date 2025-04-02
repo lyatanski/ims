@@ -5,7 +5,7 @@ include:
 
 
 x-kamailio: &kamailio
-  image: ghcr.io/lyatanski/cscf
+  image: ghcr.io/lyatanski/kamailio
   expose:
   - 5060/tcp
   - 5060/udp

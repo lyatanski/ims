@@ -11,18 +11,12 @@ jobs:
     strategy:
       matrix:
         include:
-        - context: kamailio
-          image: cscf
-        - context: rtpengine
-          image: rtpengine
         - context: test
-          image: test
-        - context: dra
-          image: dra
+        - context: kamailio
+        - context: rtpengine
+        - context: freediameter
         - context: openssl
-          image: openssl
         - context: open5gs
-          image: open5gs
 
     steps:
     - uses: actions/checkout@v4
@@ -31,12 +25,12 @@ jobs:
       run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
     - name: Build
-      run: docker build -t ghcr.io/${{ github.actor }}/${{ matrix.image }} images/${{ matrix.context }}
+      run: docker build -t ghcr.io/${{ github.actor }}/${{ matrix.context }} images/${{ matrix.context }}
 
 #    - name: Get Version
 #      id: get
 #      run: >
-#        docker run --rm ghcr.io/${{ github.actor }}/${{ matrix.image }} --version
+#        docker run --rm ghcr.io/${{ github.actor }}/${{ matrix.context }} --version
 
 #        sed -n "s/\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/version=\1/p" >>
 #        "$GITHUB_OUTPUT"
@@ -48,5 +42,5 @@ jobs:
 
     - name: Publish
       run: |
-        docker push ghcr.io/${{ github.actor }}/${{ matrix.image }}
+        docker push ghcr.io/${{ github.actor }}/${{ matrix.context }}
 

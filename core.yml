@@ -1,6 +1,6 @@
 services:
   dra:
-    image: ghcr.io/lyatanski/dra
+    image: ghcr.io/lyatanski/freediameter
     configs:
     - source: dra.conf
       target: /etc/dra.conf
