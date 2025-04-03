@@ -35,6 +35,9 @@ COPY --from=build /usr/local/sbin/kamailio /sbin/
 COPY --from=build \
     /usr/local/lib/kamailio/modules/* \
     /usr/local/lib/kamailio/modules/
+RUN --mount=type=bind,from=build,source=/kamailio/utils/kamctl/db_redis/kamailio/,target=/dbmap \
+    mkdir -p /etc/cscf/schema/proxy \
+    && cp /dbmap/pcscf_location /etc/cscf/schema/proxy/
 COPY --from=build \
     /kamailio/utils/kamctl/db_redis/kamailio/dialog_in \
     /kamailio/utils/kamctl/db_redis/kamailio/dialog_out \
