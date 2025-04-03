@@ -22,6 +22,7 @@ services:
     command: -f /etc/cscf/proxy.cfg
     environment:
       REALM: ${REALM}
+      DBURL: redis:6379/1
       IPSEC: ${IPSEC}
     configs:
     - source: pcscf.xml
@@ -40,7 +41,7 @@ services:
     command: -f /etc/cscf/interrogating.cfg
     environment:
       REALM: ${REALM}
-      DBURL: redis://redis:6379/1
+      DBURL: redis://redis:6379/2
     configs:
     - source: icscf.xml
       target: /etc/cscf/diameter.xml
@@ -107,7 +108,7 @@ services:
 
   dbprep:
     image: valkey/valkey:8.1-alpine
-    command: valkey-cli -u redis://redis:6379/1 HSET s_cscf:entry::1 s_cscf_uri sip:scscf.ims.${REALM}
+    command: valkey-cli -u redis://redis:6379/2 HSET s_cscf:entry::1 s_cscf_uri sip:scscf.ims.${REALM}
     restart: on-failure
 
   redis:
