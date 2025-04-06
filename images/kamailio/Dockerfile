@@ -39,9 +39,9 @@ RUN --mount=type=bind,from=build,source=/kamailio/utils/kamctl/db_redis/kamailio
     mkdir -p /etc/cscf/schema/proxy \
     && cp /dbmap/pcscf_location /etc/cscf/schema/proxy/location \
     && cp /dbmap/dialog_in /dbmap/dialog_out /dbmap/dialog_vars /etc/cscf/schema/proxy \
-    mkdir -p /etc/cscf/schema/interrogating \
+    && mkdir -p /etc/cscf/schema/interrogating \
     && cp /dbmap/s_cscf /dbmap/s_cscf_capabilities /dbmap/nds_trusted_domains /etc/cscf/schema/interrogating \
-    mkdir -p /etc/cscf/schema/serving \
+    && mkdir -p /etc/cscf/schema/serving \
     && cp /dbmap/dialog_in /dbmap/dialog_out /dbmap/dialog_vars /etc/cscf/schema/serving \
     && cp /dbmap/contact /dbmap/impu /dbmap/impu_contact /dbmap/subscriber_scscf /dbmap/impu_subscriber /dbmap/ro_session /etc/cscf/schema/serving
 COPY cscf/ /etc/cscf
