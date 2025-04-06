@@ -35,36 +35,15 @@ COPY --from=build /usr/local/sbin/kamailio /sbin/
 COPY --from=build \
     /usr/local/lib/kamailio/modules/* \
     /usr/local/lib/kamailio/modules/
-COPY --from=build \
-    /kamailio/utils/kamctl/db_redis/kamailio/dialog_in \
-    /kamailio/utils/kamctl/db_redis/kamailio/dialog_out \
-    /kamailio/utils/kamctl/db_redis/kamailio/dialog_vars \
-\
-    /kamailio/utils/kamctl/db_redis/kamailio/pcscf_location \
-\
-    /kamailio/utils/kamctl/db_redis/kamailio/s_cscf \
-    /kamailio/utils/kamctl/db_redis/kamailio/s_cscf_capabilities \
-    /kamailio/utils/kamctl/db_redis/kamailio/nds_trusted_domains \
-\
-    /kamailio/utils/kamctl/db_redis/kamailio/contact \
-    /kamailio/utils/kamctl/db_redis/kamailio/impu \
-    /kamailio/utils/kamctl/db_redis/kamailio/impu_contact \
-    /kamailio/utils/kamctl/db_redis/kamailio/subscriber_scscf \
-    /kamailio/utils/kamctl/db_redis/kamailio/impu_subscriber \
-    /kamailio/utils/kamctl/db_redis/kamailio/ro_session \
-\
-    /kamailio/utils/kamctl/db_redis/kamailio/presentity \
-    /kamailio/utils/kamctl/db_redis/kamailio/active_watchers \
-    /kamailio/utils/kamctl/db_redis/kamailio/watchers \
-    /kamailio/utils/kamctl/db_redis/kamailio/xcap \
-    /kamailio/utils/kamctl/db_redis/kamailio/pua \
-\
-    /kamailio/utils/kamctl/db_redis/kamailio/globalblocklist \
-    /kamailio/utils/kamctl/db_redis/kamailio/userblocklist \
-\
-    /kamailio/utils/kamctl/db_redis/kamailio/acc_cdrs \
-\
-    /etc/cscf/schema/
+RUN --mount=type=bind,from=build,source=/kamailio/utils/kamctl/db_redis/kamailio/,target=/dbmap \
+    mkdir -p /etc/cscf/schema/proxy \
+    && cp /dbmap/pcscf_location /etc/cscf/schema/proxy/location \
+    && cp /dbmap/dialog_in /dbmap/dialog_out /dbmap/dialog_vars /etc/cscf/schema/proxy \
+    && mkdir -p /etc/cscf/schema/interrogating \
+    && cp /dbmap/s_cscf /dbmap/s_cscf_capabilities /dbmap/nds_trusted_domains /etc/cscf/schema/interrogating \
+    && mkdir -p /etc/cscf/schema/serving \
+    && cp /dbmap/dialog_in /dbmap/dialog_out /dbmap/dialog_vars /etc/cscf/schema/serving \
+    && cp /dbmap/contact /dbmap/impu /dbmap/impu_contact /dbmap/subscriber_scscf /dbmap/impu_subscriber /dbmap/ro_session /etc/cscf/schema/serving
 COPY cscf/ /etc/cscf
 
 ENTRYPOINT ["kamailio", "-DD", "-E"]
