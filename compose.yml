@@ -41,7 +41,7 @@ services:
     command: -f /etc/cscf/interrogating.cfg
     environment:
       REALM: ${REALM}
-      DBURL: redis://redis:6379/2
+      DBURL: redis:6379/2
     configs:
     - source: icscf.xml
       target: /etc/cscf/diameter.xml
@@ -54,6 +54,7 @@ services:
     command: -f /etc/cscf/serving.cfg
     environment:
       REALM: ${REALM}
+      DBURL: redis:6379/3
       RTPADR: udp:rtpengine:9910
     configs:
     - source: scscf.xml
