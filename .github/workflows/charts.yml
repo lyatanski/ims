@@ -1,0 +1,24 @@
+name: charts
+on:
+  schedule:
+  - cron: '0 1 * * SUN'
+  push:
+permissions: write-all
+
+jobs:
+  charts:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+        - package: ims
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Package
+      run: helm package charts/${{ matrix.package }}
+
+    - name: Publish
+      run: helm push --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} ${{ matrix.package }}-*.tgz oci://ghcr.io/${{ github.actor }}
+
