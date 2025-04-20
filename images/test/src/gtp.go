@@ -147,9 +147,9 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 	}
 	call = append(call, pcscfIP)
 	cmd := exec.Command("python3", call...)
-	log.Println(cmd)
+	//log.Println(cmd)
 	out, err := cmd.CombinedOutput()
-	log.Println(string(out))
+	log.Printf("CMD: %s, OUT:\n%s\n", cmd, out)
 	if err != nil {
 		log.Fatal("13 ", err)
 	}
