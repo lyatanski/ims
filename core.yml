@@ -374,7 +374,7 @@ configs:
           gateway: ${UEGW}
           dnn: ims
         dns:
-        - ${DNSIP}
+        - ${DNSv4}
         p-cscf:
         - ${IPSEC}
 
