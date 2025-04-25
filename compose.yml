@@ -9,7 +9,7 @@ x-kamailio: &kamailio
   expose:
   - 5060/tcp
   - 5060/udp
-  dns: ${DNSIP}
+  dns: ${DNSv4}
   healthcheck:
     test: wget -qO- 127.0.0.1:9090/check
     retries: 60
@@ -68,7 +68,7 @@ services:
       target: /etc/coredns/Corefile
     networks:
       default:
-        ipv4_address: ${DNSIP}
+        ipv4_address: ${DNSv4}
 
   rtpengine:
     image: ghcr.io/lyatanski/rtpengine
@@ -82,7 +82,7 @@ services:
   # as UE IPs will not be in the setup IP range, they need special attention
   route:
     image: alpine
-    command: sh -c "ip route add ${UENET} via $$(getent hosts upf | cut -d' ' -f1)"
+    command: sh -c "ip route add ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u)"
     network_mode: service:pcscf
     cap_add:
     - NET_ADMIN
@@ -235,6 +235,8 @@ configs:
 
 networks:
   default:
+    enable_ipv6: true
     ipam:
       config:
-        - subnet: ${SUBNET}
+      - subnet: ${NETv4}
+      - subnet: ${NETv6}
