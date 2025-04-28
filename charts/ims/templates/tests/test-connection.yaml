@@ -8,8 +8,7 @@ metadata:
     "helm.sh/hook": test
 spec:
   containers:
-    - name: wget
-      image: busybox
-      command: ['wget']
-      args: ['{{ include "ims.fullname" . }}:{{ .Values.service.port }}']
+  - name: wget
+    image: ghcr.io/lyatanski/test
+    command: ['gtp']
   restartPolicy: Never

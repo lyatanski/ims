@@ -1,7 +1,11 @@
+{{- $outer := . -}}
+{{- range tuple "proxy" "interrogating" "serving" }}
+{{- $cscf := . -}}
+{{- with $outer -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "ims.fullname" . }}
+  name: {{ .Release.Name }}-{{ $cscf }}-cscf
   labels:
     {{- include "ims.labels" . | nindent 4 }}
 spec:
@@ -27,43 +31,40 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "ims.serviceAccountName" . }}
-      {{- with .Values.podSecurityContext }}
-      securityContext:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       containers:
-        - name: {{ .Chart.Name }}
-          {{- with .Values.securityContext }}
-          securityContext:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          ports:
-            - name: http
-              containerPort: {{ .Values.service.port }}
-              protocol: TCP
-          {{- with .Values.livenessProbe }}
-          livenessProbe:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.readinessProbe }}
-          readinessProbe:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          {{- with .Values.volumeMounts }}
-          volumeMounts:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-      {{- with .Values.volumes }}
-      volumes:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+      - name: cscf
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: ["-f", {{ printf  "/etc/cscf/%s.cfg" $cscf | quote }}]
+        env:
+        - name: REALM
+          value: {{ tpl .Values.domain . }}
+        - name: DBURL
+          value: redis:6379/2
+        ports:
+        - name: tcp
+          containerPort: {{ .Values.service.port }}
+          protocol: TCP
+        - name: udp
+          containerPort: {{ .Values.service.port }}
+          protocol: TCP
+        - name: mon
+          containerPort: 9090
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /check
+            port: 9090
+        readinessProbe:
+          httpGet:
+            path: /check
+            port: 9090
+        {{- with .Values.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        volumeMounts: []
+      volumes: []
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -76,3 +77,6 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+---
+{{- end }}
+{{- end }}
