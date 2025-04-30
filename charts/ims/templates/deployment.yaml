@@ -39,8 +39,7 @@ spec:
         env:
         - name: REALM
           value: {{ tpl .Values.domain . }}
-        - name: DBURL
-          value: redis:6379/2
+        {{- index .Values $cscf | toYaml | nindent 8 }}
         ports:
         - name: tcp
           containerPort: {{ .Values.service.port }}
@@ -51,20 +50,29 @@ spec:
         - name: mon
           containerPort: 9090
           protocol: TCP
-        livenessProbe:
-          httpGet:
-            path: /check
-            port: 9090
-        readinessProbe:
-          httpGet:
-            path: /check
-            port: 9090
+        #livenessProbe:
+        #  httpGet:
+        #    path: /check
+        #    port: 9090
+        #readinessProbe:
+        #  httpGet:
+        #    path: /check
+        #    port: 9090
         {{- with .Values.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
         {{- end }}
-        volumeMounts: []
-      volumes: []
+        volumeMounts:
+        - name: diameter
+          mountPath: /etc/cscf/diameter.xml
+          subPath: diameter.xml
+      volumes:
+      - name: diameter
+        configMap:
+          name: {{ .Release.Name }}
+          items:
+          - key: {{ $cscf }}.xml
+            path: diameter.xml
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

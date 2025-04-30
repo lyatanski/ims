@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "ims.labels" . | nindent 4 }}
+data:
+  proxy.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <DiameterPeer
+        FQDN="pcscf.ims.{{ tpl .Values.domain . }}"
+        Realm="ims.{{ tpl .Values.domain . }}"
+        Vendor_Id="10415"
+        Product_Name="CDiameterPeer"
+        Workers="1"
+    >
+            <Peer FQDN="pcrf.epc.{{ tpl .Values.domain . }}" Realm="epc.{{ tpl .Values.domain . }}" port="3868"/>
+            <Auth id="16777236" vendor="10415"/> <!-- Rx 3GPP -->
+            <SupportedVendor vendor="10415" />
+            <DefaultRoute FQDN="pcrf.epc.{{ tpl .Values.domain . }}" metric="1"/>
+    </DiameterPeer>
+
+  interrogating.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <DiameterPeer
+        FQDN="icscf.ims.{{ tpl .Values.domain . }}"
+        Realm="ims.{{ tpl .Values.domain . }}"
+        Vendor_Id="10415"
+        Product_Name="CDiameterPeer"
+        Workers="1"
+    >
+            <Peer FQDN="hss.epc.{{ tpl .Values.domain . }}" Realm="epc.{{ tpl .Values.domain . }}" port="3868"/>
+            <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
+            <SupportedVendor vendor="10415" />
+            <DefaultRoute FQDN="hss.epc.{{ tpl .Values.domain . }}" metric="1"/>
+    </DiameterPeer>
+
+  serving.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <DiameterPeer
+        FQDN="scscf.ims.{{ tpl .Values.domain . }}"
+        Realm="ims.{{ tpl .Values.domain . }}"
+        Vendor_Id="10415"
+        Product_Name="CDiameterPeer"
+        Workers="1"
+    >
+            <Peer FQDN="hss.epc.{{ tpl .Values.domain . }}" Realm="epc.{{ tpl .Values.domain . }}" port="3868"/>
+            <Peer FQDN="ocs.{{ tpl .Values.domain . }}" Realm="{{ tpl .Values.domain . }}" port="3868"/>
+            <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
+            <Auth id="4"        vendor="10415"/> <!-- Ro 3GPP -->
+            <SupportedVendor vendor="10415" />
+            <Realm name="{{ tpl .Values.domain . }}">
+                <Route FQDN="ocs.{{ tpl .Values.domain . }}" metric="1"/>
+            </Realm>
+            <DefaultRoute FQDN="hss.epc.{{ tpl .Values.domain . }}" metric="1"/>
+    </DiameterPeer>
