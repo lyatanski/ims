@@ -21,7 +21,7 @@ serving:
 # convinience variable for doman/realm
 # should not be necessary to be configured explicitly
 # the default shoud suffice in most cases
-domain: epc.mnc{{ .Values.mnc }}.mcc{{ .Values.mcc }}.3gppnetwork.org
+domain: mnc{{ .Values.mnc }}.mcc{{ .Values.mcc }}.3gppnetwork.org
 
 # This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
 replicaCount: 1
