@@ -1,6 +1,5 @@
 services:
   ocs:
-    #entrypoint: sleep inf
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
