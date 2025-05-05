@@ -7,31 +7,80 @@ services:
     expose:
     - 3868/tcp
 
+  preload:
+    command: -config_path /etc/cgrates/ -path /var/cgrates/ -flush_stordb
+    configs:
+    - source: cgrates.json
+      target: /etc/cgrates/cgrates.json
+    - source: AccountActions.csv
+      target: /var/cgrates/AccountActions.csv
+    - source: Chargers.csv
+      target: /var/cgrates/Chargers
+    - source: DestinationRates.csv
+      target: /var/cgrates/DestinationRates.csv
+    - source: Destinations.csv
+      target: /var/cgrates/Destinations.csv
+    - source: Rates.csv
+      target: /var/cgrates/Rates.csv
+    - source: RatingPlans.csv
+      target: /var/cgrates/RatingPlans.csv
+    - source: RatingProfiles.csv
+      target: /var/cgrates/RatingProfiles.csv
+    network_mode: service:ocs
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM golang:alpine AS build
+        RUN apk add jq binutils
+        RUN go install github.com/cgrates/cgrates/cmd/cgr-loader@master
+        RUN strip bin/*
+
+        FROM scratch
+        COPY --from=build /go/bin/cgr-loader /sbin/cgr-loader
+        ENTRYPOINT ["cgr-loader", "-verbose"]
+
+  trace:
+    profiles:
+    - debug
+    network_mode: service:ocs
+    command: -d any port 2012 or port 2014
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine
+        RUN apk add ngrep
+        ENTRYPOINT ["ngrep"]
+
+  ocs-redis:
+    image: valkey/valkey:8.1-alpine
+    expose:
+    - 6379/tcp
+
 
 configs:
   cgrates.json:
     content: |
       {
           "general": {
-              "logger": "*stdout",
               "log_level": 7,
           },
           "data_db": {
-              "db_type": "*internal",
+              "db_host": "ocs-redis",
           },
           "stor_db": {
               "db_type": "*internal",
           },
+          "listen": {
+              "rpc_json": ":2012",
+              "rpc_gob": "",    // turn off 2013
+              "http": ":2080",
+          },
           "rals": {
               "enabled": true,
+              "thresholds_conns": ["*localhost"],
+              "sessions_conns": ["*localhost"],
           },
           "schedulers": {
-              "enabled": true,
-          },
-          "cdrs": {
-              "enabled": true,
-          },
-          "attributes": {
               "enabled": true,
           },
           "chargers": {
@@ -39,10 +88,13 @@ configs:
           },
           "sessions": {
               "enabled": true,
-              "attributes_conns": ["*localhost"],
+              //"listen_bijson": "",    // turn off 2014
               "chargers_conns": ["*localhost"],
               "rals_conns": ["*localhost"],
-              "cdrs_conns": ["*localhost"],
+          },
+          "thresholds": {
+              "enabled": true,
+              "store_interval": "-1"
           },
           "apiers": {
               "enabled": true,
@@ -50,7 +102,8 @@ configs:
           },
           "diameter_agent": {
               "enabled": true,
-              "listen": "0.0.0.0:3868",
+              "sessions_conns": ["*localhost"],
+              "listen": ":3868",
               "listen_net": "tcp",
               "origin_host": "ocs.${REALM}",
               "origin_realm": "${REALM}",
@@ -59,12 +112,12 @@ configs:
                       "id": "VoiceInit",
                       "filters": [
                           "*string:~*vars.*cmd:CCR",
+                          "*string:~*req.CC-Request-Type:1",
                       ],
                       "flags": [
                           "*initiate",
                           "*accounts",
-                          "*attributes",
-                          "*continue"
+                          //"*continue"
                       ],
                       "request_fields": [
                           {
@@ -92,12 +145,12 @@ configs:
                               "type": "*constant",
                               "value": "call"
                           },
-                          {
-                              "tag": "Account",
-                              "path": "*cgreq.Account",
-                              "type": "*constant",
-                              "value": "~*req.Subscription-Id.Subscription-Id-Data",
-                          },
+                          //{
+                          //    "tag": "Account",
+                          //    "path": "*cgreq.Account",
+                          //    "type": "*constant",
+                          //    "value": "~*req.Service-Information.Subscription-Id.Subscription-Id-Data",
+                          //},
                           {
                               "tag": "Destination",
                               "path": "*cgreq.Destination",
@@ -136,30 +189,44 @@ configs:
                               "value": "30",
                               "mandatory": true
                           },
-                          {
-                              "tag": "FinalUnitAction",
-                              "path": "*rep.Multiple-Services-Credit-Control.Final-Unit-Indication.Final-Unit-Action",
-                              "type": "*constant",
-                              "value": "1", // REDIRECT
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "FinalUnitAction",
-                              "path": "*rep.Multiple-Services-Credit-Control.Final-Unit-Indication.Redirect-Server.Redirect-Address-Type",
-                              "type": "*constant",
-                              "value": "3", // SIP URI
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "FinalUnitAction",
-                              "path": "*rep.Multiple-Services-Credit-Control.Final-Unit-Indication.Redirect-Server.Redirect-Server-Address",
-                              "type": "*constant",
-                              "value": "sip://ocs",
-                              "mandatory": true
-                          },
                       ]
                   },
               ]
           }
       }
+
+  AccountActions.csv:
+    content: |
+      #Tenant,Account,ActionPlanId,ActionTriggersId,AllowNegative,Disabled
+      cgrates.org,1001,,,,
+
+  Chargers.csv:
+    content: |
+      #Tenant,ID,FilterIDs,ActivationInterval,RunID,AttributeIDs,Weight
+      cgrates.org,DEFAULT,,,*default,*none,0
+
+  DestinationRates.csv:
+    content: |
+      #Id,DestinationId,RatesTag,RoundingMethod,RoundingDecimals,MaxCost,MaxCostStrategy
+      DR_AUS_Mobile,DST_359,RT_22c_PM,*up,4,0.12,*disconnect
+
+  Destinations.csv:
+    content: |
+      #Id,Prefix
+      DST_359,359
+
+  Rates.csv:
+    content: |
+      #Id,ConnectFee,Rate,RateUnit,RateIncrement,GroupIntervalStart
+      RT_22c_PM,0,22,60s,1s,0s
+
+  RatingPlans.csv:
+    content: |
+      #Id,DestinationRatesId,TimingTag,Weight
+      RP_AUS,DR_AUS_Mobile,*any,10
+
+  RatingProfiles.csv:
+    content: |
+      #Tenant,Category,Subject,ActivationTime,RatingPlanId,RatesFallbackSubject
+      cgrates.org,call,*any,2014-01-14T00:00:00Z,RP_AUS,
 
