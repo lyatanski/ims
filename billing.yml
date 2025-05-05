@@ -1,37 +1,27 @@
 services:
   ocs:
-    #entrypoint: sleep inf
+    image: ghcr.io/lyatanski/cgrates
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
     expose:
     - 3868/tcp
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM golang:alpine AS build
-        RUN apk add jq binutils
-        RUN mkdir -p /usr/share/cgrates/diameter/dict/
-        RUN go install github.com/cgrates/cgrates/cmd/cgr-engine@latest
-        #RUN go install github.com/go-delve/delve/cmd/dlv@latest
-        RUN strip bin/*
-
-        FROM scratch
-        RUN --mount=type=bind,from=build,source=/lib/,target=/lib \
-            --mount=type=bind,from=build,source=/bin/,target=/bin \
-            --mount=type=bind,from=build,source=/go/bin/,target=/opt/bin \
-            mkdir -p /sbin /usr/share/cgrates/diameter/dict/ && cp /opt/bin/cgr-engine /sbin/
-        ENTRYPOINT ["cgr-engine"]
-
 
   preload:
+    command: -config_path /etc/cgrates/ -path /var/cgrates/ -flush_stordb
     configs:
+    - source: cgrates.json
+      target: /etc/cgrates/cgrates.json
+    - source: AccountActions.csv
+      target: /var/cgrates/AccountActions.csv
+    - source: Chargers.csv
+      target: /var/cgrates/Chargers
+    - source: DestinationRates.csv
+      target: /var/cgrates/DestinationRates.csv
     - source: Destinations.csv
       target: /var/cgrates/Destinations.csv
     - source: Rates.csv
       target: /var/cgrates/Rates.csv
-    - source: DestinationRates.csv
-      target: /var/cgrates/DestinationRates.csv
     - source: RatingPlans.csv
       target: /var/cgrates/RatingPlans.csv
     - source: RatingProfiles.csv
@@ -42,12 +32,29 @@ services:
       dockerfile_inline: |
         FROM golang:alpine AS build
         RUN apk add jq binutils
-        RUN go install github.com/cgrates/cgrates/cmd/cgr-loader@latest
+        RUN go install github.com/cgrates/cgrates/cmd/cgr-loader@master
         RUN strip bin/*
 
         FROM scratch
         COPY --from=build /go/bin/cgr-loader /sbin/cgr-loader
-        ENTRYPOINT ["cgr-loader", "-verbose", "-datadb_type", "*internal", "-path", "/var/cgrates/"]
+        ENTRYPOINT ["cgr-loader", "-verbose"]
+
+  trace:
+    profiles:
+    - debug
+    network_mode: service:ocs
+    command: -d any port 2012 or port 2014
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine
+        RUN apk add ngrep
+        ENTRYPOINT ["ngrep"]
+
+  ocs-redis:
+    image: valkey/valkey:8.1-alpine
+    expose:
+    - 6379/tcp
 
 
 configs:
@@ -55,25 +62,25 @@ configs:
     content: |
       {
           "general": {
-              "logger": "*stdout",
               "log_level": 7,
           },
           "data_db": {
-              "db_type": "*internal",
+              "db_host": "ocs-redis",
           },
           "stor_db": {
               "db_type": "*internal",
           },
+          "listen": {
+              "rpc_json": ":2012",
+              "rpc_gob": "",    // turn off 2013
+              "http": ":2080",
+          },
           "rals": {
               "enabled": true,
+              "thresholds_conns": ["*localhost"],
+              "sessions_conns": ["*localhost"],
           },
           "schedulers": {
-              "enabled": true,
-          },
-          "cdrs": {
-              "enabled": true,
-          },
-          "attributes": {
               "enabled": true,
           },
           "chargers": {
@@ -81,10 +88,13 @@ configs:
           },
           "sessions": {
               "enabled": true,
-              "attributes_conns": ["*localhost"],
+              //"listen_bijson": "",    // turn off 2014
               "chargers_conns": ["*localhost"],
               "rals_conns": ["*localhost"],
-              "cdrs_conns": ["*localhost"],
+          },
+          "thresholds": {
+              "enabled": true,
+              "store_interval": "-1"
           },
           "apiers": {
               "enabled": true,
@@ -92,7 +102,8 @@ configs:
           },
           "diameter_agent": {
               "enabled": true,
-              "listen": "0.0.0.0:3868",
+              "sessions_conns": ["*localhost"],
+              "listen": ":3868",
               "listen_net": "tcp",
               "origin_host": "ocs.${REALM}",
               "origin_realm": "${REALM}",
@@ -101,12 +112,12 @@ configs:
                       "id": "VoiceInit",
                       "filters": [
                           "*string:~*vars.*cmd:CCR",
+                          "*string:~*req.CC-Request-Type:1",
                       ],
                       "flags": [
                           "*initiate",
                           "*accounts",
-                          "*attributes",
-                          "*continue"
+                          //"*continue"
                       ],
                       "request_fields": [
                           {
@@ -122,13 +133,6 @@ configs:
                               "value": "~*req.Session-Id",
                               "mandatory": true
                           },
-                          //{
-                          //    "tag": "OriginHost",
-                          //    "path": "*cgreq.OriginHost",
-                          //    "type": "*variable",
-                          //    "value": "~*vars.RemoteHost",
-                          //    "mandatory": true
-                          //},
                           {
                               "tag": "RequestType",
                               "path": "*cgreq.RequestType",
@@ -141,13 +145,12 @@ configs:
                               "type": "*constant",
                               "value": "call"
                           },
-                          {
-                              "tag": "Account",
-                              "path": "*cgreq.Account",
-                              "type": "*constant",
-                              //"value": "*attributes",
-                              "value": "~*req.Subscription-Id.Subscription-Id-Data",
-                          },
+                          //{
+                          //    "tag": "Account",
+                          //    "path": "*cgreq.Account",
+                          //    "type": "*constant",
+                          //    "value": "~*req.Service-Information.Subscription-Id.Subscription-Id-Data",
+                          //},
                           {
                               "tag": "Destination",
                               "path": "*cgreq.Destination",
@@ -179,285 +182,51 @@ configs:
                       ],
                       "reply_fields": [
                           { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
-                          //{
-                          //    "tag": "ResultCode",
-                          //    "filters": [
-                          //        "*notempty:~*cgrep.Error:"
-                          //    ],
-                          //    "path": "*rep.Result-Code",
-                          //    "type": "*constant",
-                          //    "value": "5030",
-                          //    "blocker": true
-                          //},
                           {
                               "tag": "GrantedUnits",
                               "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
                               "type": "*constant",
-                              //"value": "~*cgrep.MaxUsage{*duration_seconds}",
                               "value": "30",
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "FinalUnitAction",
-                              "path": "*rep.Multiple-Services-Credit-Control.Final-Unit-Indication.Final-Unit-Action",
-                              "type": "*constant",
-                              "value": "1", // REDIRECT
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "FinalUnitAction",
-                              "path": "*rep.Multiple-Services-Credit-Control.Final-Unit-Indication.Redirect-Server.Redirect-Address-Type",
-                              "type": "*constant",
-                              "value": "3", // SIP URI
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "FinalUnitAction",
-                              "path": "*rep.Multiple-Services-Credit-Control.Final-Unit-Indication.Redirect-Server.Redirect-Server-Address",
-                              "type": "*constant",
-                              "value": "sip://ocs",
                               "mandatory": true
                           },
                       ]
                   },
-                  //{
-                  //    "id": "VoiceUpdate",
-                  //    "filters": [
-                  //        "*string:~*vars.*cmd:CCR",
-                  //        "*string:~*req.CC-Request-Type:3",
-                  //    ],
-                  //    "flags": [
-                  //        "*update",
-                  //        "*accounts",
-                  //        "*attributes"
-                  //    ],
-                  //    "request_fields": [
-                  //        {
-                  //            "tag": "ToR",
-                  //            "path": "*cgreq.ToR",
-                  //            "type": "*constant",
-                  //            "value": "*voice"
-                  //        },
-                  //        {
-                  //            "tag": "OriginID",
-                  //            "path": "*cgreq.OriginID",
-                  //            "type": "*variable",
-                  //            "value": "~*req.Session-Id",
-                  //            "mandatory": true
-                  //        },
-                  //        {
-                  //            "tag": "OriginHost",
-                  //            "path": "*cgreq.OriginHost",
-                  //            "type": "*variable",
-                  //            "value": "~*vars.RemoteHost",
-                  //            "mandatory": true
-                  //        },
-                  //        {
-                  //            "tag": "RequestType",
-                  //            "path": "*cgreq.RequestType",
-                  //            "type": "*constant",
-                  //            "value": "*attributes"
-                  //        },
-                  //        {
-                  //            "tag": "Category",
-                  //            "path": "*cgreq.Category",
-                  //            "type": "*constant",
-                  //            "value": "call"
-                  //        },
-                  //        {
-                  //            "tag": "Account",
-                  //            "path": "*cgreq.Account",
-                  //            "type": "*constant",
-                  //            "value": "*attributes"
-                  //        },
-                  //        {
-                  //            "tag": "Destination",
-                  //            "path": "*cgreq.Destination",
-                  //            "type": "*variable",
-                  //            "value": "~*req.Service-Information.IN-Information.Real-Called-Number",
-                  //            "mandatory": true
-                  //        },
-                  //        {
-                  //            "tag": "AnswerTime",
-                  //            "path": "*cgreq.AnswerTime",
-                  //            "type": "*variable",
-                  //            "value": "~*req.Event-Timestamp",
-                  //            "mandatory": true
-                  //        },
-                  //        {
-                  //            "tag": "Usage",
-                  //            "path": "*cgreq.Usage",
-                  //            "type": "*variable",
-                  //            "value": "~*req.Requested-Service-Unit.CC-Time:s/(.*)/$${1}s/",
-                  //            "mandatory": true
-                  //        },
-                  //        {
-                  //            "tag": "LastUsed",
-                  //            "path": "*cgreq.LastUsed",
-                  //            "type": "*variable",
-                  //            "value": "~*req.Used-Service-Unit.CC-Time:s/(.*)/$${1}s/",
-                  //            "mandatory": true
-                  //        },
-                  //        {
-                  //            "tag": "SubscriberID",
-                  //            "path": "*cgreq.SubscriberId",
-                  //            "type": "*variable",
-                  //            "value": "~*req.Subscription-Id.Subscription-Id-Data",
-                  //            "mandatory": true
-                  //        }
-                  //    ],
-                  //    "reply_fields": [
-                  //        {
-                  //            "tag": "ResultCode",
-                  //            "filters": [
-                  //                "*notempty:~*cgrep.Error:"
-                  //            ],
-                  //            "path": "*rep.Result-Code",
-                  //            "type": "*constant",
-                  //            "value": "5030",
-                  //            "blocker": true
-                  //        },
-                  //        {
-                  //            "tag": "ResultCode",
-                  //            "path": "*rep.Result-Code",
-                  //            "type": "*constant",
-                  //            "value": "2001"
-                  //        },
-                  //        {
-                  //            "tag": "GrantedUnits",
-                  //            "path": "*rep.Granted-Service-Unit.CC-Time",
-                  //            "type": "*variable",
-                  //            "value": "~*cgrep.MaxUsage{*duration_seconds}",
-                  //            "mandatory": true
-                  //        }
-                  //    ]
-                  //},
-                  //{
-                  //    "id": "VoiceTerminate",
-                  //    "filters": [
-                  //        "*string:~*vars.*cmd:CCR",
-                  //        "*string:~*req.CC-Request-Type:4",
-                  //    ],
-                  //    "flags": [
-                  //        "*terminate",
-                  //        "*accounts",
-                  //        "*attributes",
-                  //        "*cdrs"
-                  //    ],
-                  //    "request_fields": [
-                  //        {
-                  //            "tag": "ToR",
-                  //            "path": "*cgreq.ToR",
-                  //            "type": "*constant",
-                  //            "value": "*voice"
-                  //        },
-                  //        {
-                  //            "tag": "OriginID",
-                  //            "path": "*cgreq.OriginID",
-                  //            "type": "*variable",
-                  //            "value": "~*req.Session-Id",
-                  //            "mandatory": true
-                  //        },
-                  //        //{
-                  //        //    "tag": "OriginHost",
-                  //        //    "path": "*cgreq.OriginHost",
-                  //        //    "type": "*variable",
-                  //        //    "value": "~*vars.RemoteHost",
-                  //        //    "mandatory": true
-                  //        //},
-                  //        {
-                  //            "tag": "RequestType",
-                  //            "path": "*cgreq.RequestType",
-                  //            "type": "*constant",
-                  //            "value": "*attributes"
-                  //        },
-                  //        {
-                  //            "tag": "Account",
-                  //            "path": "*cgreq.Account",
-                  //            "type": "*constant",
-                  //            "value": "*attributes"
-                  //        },
-                  //        //{
-                  //        //    "tag": "Destination",
-                  //        //    "path": "*cgreq.Destination",
-                  //        //    "type": "*variable",
-                  //        //    "value": "~*req.Service-Information.IN-Information.Real-Called-Number",
-                  //        //    "mandatory": true
-                  //        //},
-                  //        {
-                  //            "tag": "AnswerTime",
-                  //            "path": "*cgreq.AnswerTime",
-                  //            "type": "*variable",
-                  //            "value": "~*req.Event-Timestamp",
-                  //            "mandatory": true
-                  //        },
-                  //        {
-                  //            "tag": "Usage",
-                  //            "path": "*cgreq.Usage",
-                  //            "type": "*cc_usage",
-                  //            "mandatory": true,
-                  //            "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time",
-                  //        },
-                  //        //{
-                  //        //    "tag": "LastUsed",
-                  //        //    "path": "*cgreq.LastUsed",
-                  //        //    "type": "*variable",
-                  //        //    "value": "~*req.Used-Service-Unit.CC-Time:s/(.*)/$${1}s/",
-                  //        //    "mandatory": true
-                  //        //},
-                  //        {
-                  //            "tag": "SubscriberID",
-                  //            "path": "*cgreq.SubscriberId",
-                  //            "type": "*variable",
-                  //            "value": "~*req.Subscription-Id.Subscription-Id-Data",
-                  //            "mandatory": true
-                  //        }
-                  //    ],
-                  //    "reply_fields": [
-                  //        {
-                  //            "tag": "ResultCode",
-                  //            "filters": [
-                  //                "*notempty:~*cgrep.Error:"
-                  //            ],
-                  //            "path": "*rep.Result-Code",
-                  //            "type": "*constant",
-                  //            "value": "5030",
-                  //            "blocker": true
-                  //        },
-                  //        {
-                  //            "tag": "ResultCode",
-                  //            "path": "*rep.Result-Code",
-                  //            "type": "*constant",
-                  //            "value": "2001"
-                  //        }
-                  //    ]
-                  //}
               ]
           }
       }
 
-  Destinations.csv:
+  AccountActions.csv:
     content: |
-      #Id,Prefix
-      DST_BG,$DIAL
+      #Tenant,Account,ActionPlanId,ActionTriggersId,AllowNegative,Disabled
+      cgrates.org,1001,,,,
 
-  Rates.csv:
+  Chargers.csv:
     content: |
-      #Id,ConnectFee,Rate,RateUnit,RateIncrement,GroupIntervalStart
-      RT_FREE,0,0,60s,60s,0s
+      #Tenant,ID,FilterIDs,ActivationInterval,RunID,AttributeIDs,Weight
+      cgrates.org,DEFAULT,,,*default,*none,0
 
   DestinationRates.csv:
     content: |
       #Id,DestinationId,RatesTag,RoundingMethod,RoundingDecimals,MaxCost,MaxCostStrategy
-      DR_MAIN,DST_BG,RT_FREE,*up,4,1,*disconnect
+      DR_AUS_Mobile,DST_359,RT_22c_PM,*up,4,0.12,*disconnect
+
+  Destinations.csv:
+    content: |
+      #Id,Prefix
+      DST_359,359
+
+  Rates.csv:
+    content: |
+      #Id,ConnectFee,Rate,RateUnit,RateIncrement,GroupIntervalStart
+      RT_22c_PM,0,22,60s,1s,0s
 
   RatingPlans.csv:
     content: |
       #Id,DestinationRatesId,TimingTag,Weight
-      RP_MAIN,DR_MAIN,*any,10
+      RP_AUS,DR_AUS_Mobile,*any,10
 
   RatingProfiles.csv:
     content: |
       #Tenant,Category,Subject,ActivationTime,RatingPlanId,RatesFallbackSubject
-      cgrates.org,call,*any,2025-01-01T00:00:00Z,RP_MAIN,
+      cgrates.org,call,*any,2014-01-14T00:00:00Z,RP_AUS,
 
