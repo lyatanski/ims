@@ -6,26 +6,29 @@ services:
       target: /etc/cgrates/cgrates.json
     expose:
     - 3868/tcp
+    depends_on:
+      ocs-redis:
+        condition: service_started
 
   preload:
     command: -config_path /etc/cgrates/ -path /var/cgrates/ -flush_stordb
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
-    - source: AccountActions.csv
-      target: /var/cgrates/AccountActions.csv
     - source: Chargers.csv
       target: /var/cgrates/Chargers
+    - source: Filters.csv
+      target: /var/cgrates/Filters.csv
+    - source: RatingProfiles.csv
+      target: /var/cgrates/RatingProfiles.csv
+    - source: RatingPlans.csv
+      target: /var/cgrates/RatingPlans.csv
     - source: DestinationRates.csv
       target: /var/cgrates/DestinationRates.csv
     - source: Destinations.csv
       target: /var/cgrates/Destinations.csv
     - source: Rates.csv
       target: /var/cgrates/Rates.csv
-    - source: RatingPlans.csv
-      target: /var/cgrates/RatingPlans.csv
-    - source: RatingProfiles.csv
-      target: /var/cgrates/RatingProfiles.csv
     network_mode: service:ocs
     build:
       context: .
@@ -85,6 +88,10 @@ configs:
           },
           "chargers": {
               "enabled": true,
+          },
+          "filters": {
+              "stats_conns": [],
+              "resources_conns": [],
           },
           "sessions": {
               "enabled": true,
@@ -205,10 +212,25 @@ configs:
       #Tenant,ID,FilterIDs,ActivationInterval,RunID,AttributeIDs,Weight
       cgrates.org,DEFAULT,,,*default,*none,0
 
+  Filters.csv:
+    content: |
+      #Tenant[0],ID[1],Type[2],Element[3],Values[4],ActivationInterval[5]
+      cgrates.org,FLTR_RES,*string,~*req.Session-Id,*voice,2014-07-29T15:00:00Z
+
+  RatingProfiles.csv:
+    content: |
+      #Tenant,Category,Subject,ActivationTime,RatingPlanId,RatesFallbackSubject
+      cgrates.org,call,*any,2014-01-14T00:00:00Z,RP_BG,
+
+  RatingPlans.csv:
+    content: |
+      #Id,DestinationRatesId,TimingTag,Weight
+      RP_BG,DR_BG,*any,10
+
   DestinationRates.csv:
     content: |
       #Id,DestinationId,RatesTag,RoundingMethod,RoundingDecimals,MaxCost,MaxCostStrategy
-      DR_AUS_Mobile,DST_359,RT_22c_PM,*up,4,0.12,*disconnect
+      DR_BG,DST_359,RT_PM,*up,4,0.12,*disconnect
 
   Destinations.csv:
     content: |
@@ -218,15 +240,5 @@ configs:
   Rates.csv:
     content: |
       #Id,ConnectFee,Rate,RateUnit,RateIncrement,GroupIntervalStart
-      RT_22c_PM,0,22,60s,1s,0s
-
-  RatingPlans.csv:
-    content: |
-      #Id,DestinationRatesId,TimingTag,Weight
-      RP_AUS,DR_AUS_Mobile,*any,10
-
-  RatingProfiles.csv:
-    content: |
-      #Tenant,Category,Subject,ActivationTime,RatingPlanId,RatesFallbackSubject
-      cgrates.org,call,*any,2014-01-14T00:00:00Z,RP_AUS,
+      RT_PM,0,13,60s,1s,0s
 
