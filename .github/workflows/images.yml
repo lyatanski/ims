@@ -1,7 +1,7 @@
 name: images
 on:
   schedule:
-  - cron: '0 1 * * *'
+  - cron: '0 1 * * SUN'
   push:
 permissions: write-all
 
@@ -17,7 +17,12 @@ jobs:
         - context: freediameter
         - context: openssl
         - context: open5gs
-        - context: cgrates
+        - context: cgr-console
+        - context: cgr-engine
+        - context: cgr-loader
+        - context: cgr-ui
+        #- context: cgr-migrator
+        #- context: cgr-tester
 
     steps:
     - uses: actions/checkout@v4
