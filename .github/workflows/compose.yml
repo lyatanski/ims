@@ -17,7 +17,7 @@ jobs:
       #run: docker compose --profile test up --exit-code-from test
 
     - name: Wait
-      run: docker compose wait test
+      run: docker compose --profile test wait test
 
     - name: Check
       run: docker compose --profile test ps --all
