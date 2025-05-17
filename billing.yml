@@ -6,41 +6,17 @@ services:
       target: /etc/cgrates/cgrates.json
     expose:
     - 3868/tcp
-    depends_on:
-      ocs-redis:
-        condition: service_started
+    - 2012/tcp
 
   preload:
-    command: -config_path /etc/cgrates/ -path /var/cgrates/ -flush_stordb
+    image: python:alpine
+    command: python /opt/preload.py
     configs:
-    - source: cgrates.json
-      target: /etc/cgrates/cgrates.json
-    - source: Chargers.csv
-      target: /var/cgrates/Chargers
-    - source: Filters.csv
-      target: /var/cgrates/Filters.csv
-    - source: RatingProfiles.csv
-      target: /var/cgrates/RatingProfiles.csv
-    - source: RatingPlans.csv
-      target: /var/cgrates/RatingPlans.csv
-    - source: DestinationRates.csv
-      target: /var/cgrates/DestinationRates.csv
-    - source: Destinations.csv
-      target: /var/cgrates/Destinations.csv
-    - source: Rates.csv
-      target: /var/cgrates/Rates.csv
-    network_mode: service:ocs
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM golang:alpine AS build
-        RUN apk add jq binutils
-        RUN go install github.com/cgrates/cgrates/cmd/cgr-loader@master
-        RUN strip bin/*
-
-        FROM scratch
-        COPY --from=build /go/bin/cgr-loader /sbin/cgr-loader
-        ENTRYPOINT ["cgr-loader", "-verbose"]
+    - source: preload.py
+      target: /opt/preload.py
+    depends_on:
+      ocs:
+        condition: service_started
 
   trace:
     profiles:
@@ -54,11 +30,6 @@ services:
         RUN apk add ngrep
         ENTRYPOINT ["ngrep"]
 
-  ocs-redis:
-    image: valkey/valkey:8.1-alpine
-    expose:
-    - 6379/tcp
-
 
 configs:
   cgrates.json:
@@ -68,19 +39,29 @@ configs:
               "log_level": 7,
           },
           "data_db": {
-              "db_host": "ocs-redis",
+              "db_type": "*internal",
           },
           "stor_db": {
               "db_type": "*internal",
           },
           "listen": {
               "rpc_json": ":2012",
-              "rpc_gob": "",    // turn off 2013
-              "http": ":2080",
+              //"rpc_gob": "",    // turn off 2013
+          },
+          "apiers": {
+              "enabled": true,
+              "caches_conns":["*localhost"],
+          },
+          "sessions": {
+              "enabled": true,
+              //"listen_bijson": "",    // turn off 2014
+              "chargers_conns": ["*localhost"],
+              "rals_conns": ["*localhost"],
+              "thresholds_conns": [],
           },
           "rals": {
               "enabled": true,
-              "thresholds_conns": ["*localhost"],
+              "thresholds_conns": [],
               "sessions_conns": ["*localhost"],
           },
           "schedulers": {
@@ -88,24 +69,54 @@ configs:
           },
           "chargers": {
               "enabled": true,
-          },
-          "filters": {
-              "stats_conns": [],
-              "resources_conns": [],
-          },
-          "sessions": {
-              "enabled": true,
-              //"listen_bijson": "",    // turn off 2014
-              "chargers_conns": ["*localhost"],
-              "rals_conns": ["*localhost"],
+              "indexed_selects": false,
           },
           "thresholds": {
-              "enabled": true,
-              "store_interval": "-1"
+              "enabled": false,
+              "store_interval": "-1",
+              "sessions_conns": ["*localhost"],
           },
-          "apiers": {
-              "enabled": true,
-              "caches_conns":["*localhost"],
+          "templates": {
+              "*ccr": [
+                  {
+                      "tag": "ToR", "path": "*cgreq.ToR",
+                      "type": "*constant", "value": "*voice",
+                  },
+                  {
+                      "tag": "Category", "path": "*cgreq.Category",
+                      "type": "*constant", "value": "call"
+                  },
+                  {
+                      "tag": "RequestType", "path": "*cgreq.RequestType",
+                      "type": "*constant", "value": "*prepaid",
+                  },
+                  {
+                      "tag": "OriginID", "path": "*cgreq.OriginID",
+                      "type": "*variable", "mandatory": true,
+                      "value": "~*req.Session-Id",
+                  },
+                  {
+                      "tag": "Destination", "path": "*cgreq.Destination",
+                      "type": "*variable", "mandatory": true,
+                      "value": "~*req.Service-Information.IMS-Information.Called-Party-Address",
+                  },
+                  {
+                      "tag": "Account", "path": "*cgreq.Account",
+                      //"type": "*variable",
+                      //"value": "~*req.Service-Information.Subscription-Id.Subscription-Id-Data",
+                      "type": "*constant", "value": "Test",
+                  },
+                  {
+                      "tag": "Usage", "path": "*cgreq.Usage",
+                      "type": "*variable", //"mandatory": true,
+                      "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time:s/(.*)/$${1}s/",
+                  },
+                  {
+                      "tag": "SubscriberID", "path": "*cgreq.SubscriberId",
+                      "type": "*variable", "mandatory": true,
+                      "value": "~*req.Subscription-Id.Subscription-Id-Data",
+                  },
+              ],
           },
           "diameter_agent": {
               "enabled": true,
@@ -117,75 +128,10 @@ configs:
               "request_processors": [
                   {
                       "id": "VoiceInit",
-                      "filters": [
-                          "*string:~*vars.*cmd:CCR",
-                          "*string:~*req.CC-Request-Type:1",
-                      ],
-                      "flags": [
-                          "*initiate",
-                          "*accounts",
-                          //"*continue"
-                      ],
+                      "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:1" ],
+                      "flags": [ "*initiate", "*accounts" ],
                       "request_fields": [
-                          {
-                              "tag": "ToR",
-                              "path": "*cgreq.ToR",
-                              "type": "*constant",
-                              "value": "*voice"
-                          },
-                          {
-                              "tag": "OriginID",
-                              "path": "*cgreq.OriginID",
-                              "type": "*variable",
-                              "value": "~*req.Session-Id",
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "RequestType",
-                              "path": "*cgreq.RequestType",
-                              "type": "*constant",
-                              "value": "*prepaid"
-                          },
-                          {
-                              "tag": "Category",
-                              "path": "*cgreq.Category",
-                              "type": "*constant",
-                              "value": "call"
-                          },
-                          //{
-                          //    "tag": "Account",
-                          //    "path": "*cgreq.Account",
-                          //    "type": "*constant",
-                          //    "value": "~*req.Service-Information.Subscription-Id.Subscription-Id-Data",
-                          //},
-                          {
-                              "tag": "Destination",
-                              "path": "*cgreq.Destination",
-                              "type": "*variable",
-                              "value": "~*req.Service-Information.IMS-Information.Called-Party-Address",
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "AnswerTime",
-                              "path": "*cgreq.AnswerTime",
-                              "type": "*variable",
-                              "value": "~*req.Event-Timestamp",
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "Usage",
-                              "path": "*cgreq.Usage",
-                              "type": "*variable",
-                              "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time",
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "SubscriberID",
-                              "path": "*cgreq.SubscriberId",
-                              "type": "*variable",
-                              "value": "~*req.Subscription-Id.Subscription-Id-Data",
-                              "mandatory": true
-                          }
+                          { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
                       ],
                       "reply_fields": [
                           { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
@@ -194,51 +140,172 @@ configs:
                               "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
                               "type": "*constant",
                               "value": "30",
-                              "mandatory": true
+                              "mandatory": true,
                           },
+                      ]
+                  },
+                  {
+                      "id": "VoiceUpdate",
+                      "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:2" ],
+                      "flags": [ "*update", "*accounts" ],
+                      "request_fields": [
+                          { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
+                      ],
+                      "reply_fields": [
+                          { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
+                          {
+                              "tag": "GrantedUnits",
+                              "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
+                              "type": "*constant",
+                              "value": "30",
+                              "mandatory": true,
+                          },
+                      ]
+                  },
+                  {
+                      "id": "VoiceTerm",
+                      "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:3" ],
+                      "flags": [ "*terminate", "*accounts" ],
+                      "request_fields": [
+                          { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
+                          {
+                              "tag": "Usage", "path": "*cgreq.Usage",
+                              "type": "*variable", //"mandatory": true,
+                              "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time:s/(.*)/$${1}s/",
+                          },
+                      ],
+                      "reply_fields": [
+                          { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
                       ]
                   },
               ]
           }
       }
 
-  AccountActions.csv:
+  preload.py:
     content: |
-      #Tenant,Account,ActionPlanId,ActionTriggersId,AllowNegative,Disabled
-      cgrates.org,1001,,,,
+      import json, socket, itertools
 
-  Chargers.csv:
-    content: |
-      #Tenant,ID,FilterIDs,ActivationInterval,RunID,AttributeIDs,Weight
-      cgrates.org,DEFAULT,,,*default,*none,0
+      class JSONClient(object):
 
-  Filters.csv:
-    content: |
-      #Tenant[0],ID[1],Type[2],Element[3],Values[4],ActivationInterval[5]
-      cgrates.org,FLTR_RES,*string,~*req.Session-Id,*voice,2014-07-29T15:00:00Z
+          def __init__(self, addr):
+              self._socket = socket.create_connection(addr)
+              self._id_iter = -1
 
-  RatingProfiles.csv:
-    content: |
-      #Tenant,Category,Subject,ActivationTime,RatingPlanId,RatesFallbackSubject
-      cgrates.org,call,*any,2014-01-14T00:00:00Z,RP_BG,
+          def _message(self, name, *params):
+              self._id_iter += 1
+              return dict(id=self._id_iter,
+                          params=list(params),
+                          method=name)
 
-  RatingPlans.csv:
-    content: |
-      #Id,DestinationRatesId,TimingTag,Weight
-      RP_BG,DR_BG,*any,10
+          def call(self, name, *params):
+              request = self._message(name, *params)
+              msg = json.dumps(request)
+              self._socket.sendall(msg.encode())
 
-  DestinationRates.csv:
-    content: |
-      #Id,DestinationId,RatesTag,RoundingMethod,RoundingDecimals,MaxCost,MaxCostStrategy
-      DR_BG,DST_359,RT_PM,*up,4,0.12,*disconnect
+              response = self._socket.recv(4096)
+              response = json.loads(response.decode())
 
-  Destinations.csv:
-    content: |
-      #Id,Prefix
-      DST_359,359
+              if response['id'] != request['id']:
+                  raise Exception(f"id expected:{request['id']}, received:{response['id']}")
 
-  Rates.csv:
-    content: |
-      #Id,ConnectFee,Rate,RateUnit,RateIncrement,GroupIntervalStart
-      RT_PM,0,13,60s,1s,0s
+              if response.get('error') is not None:
+                  raise Exception(response.get('error'))
+
+              print(name, response.get('result'))
+              return response.get('result')
+
+          def close(self):
+              self._socket.close()
+
+
+      rpc =JSONClient(("ocs", 2012))
+
+      #rpc.call("ApierV2.Ping", {'Tenant':'cgrates.org'})
+      rpc.call("ApierV2.SetTPDestination", {
+          "TPid": "cgrates.org",
+          "ID": "DST_TEST",
+          "Prefixes": ["614"]
+      })
+      rpc.call("ApierV2.SetTPRate", {
+          "TPid":"cgrates.org",
+          "ID":"RT_TEST",
+          "RateSlots":[
+              {"ConnectFee":0,"Rate":22,"RateUnit":"60s","RateIncrement":"60s","GroupIntervalStart":"0s"}
+          ]
+      })
+      rpc.call("ApierV2.SetTPDestinationRate", {
+          "TPid": "cgrates.org",
+          "ID": "DR_TEST",
+          "DestinationRates": [
+              {
+                  "DestinationId": "DST_TEST",
+                  "RateId": "RT_TEST",
+                  "Rate": None,
+                  "RoundingMethod": "*up",
+                  "RoundingDecimals": 4,
+                  "MaxCost": 0,
+                  "MaxCostStrategy": ""
+              }
+          ]
+      })
+      rpc.call("ApierV2.SetTPRatingPlan", {
+          "TPid": "cgrates.org",
+          "ID": "RatingPlan_VoiceCalls",
+          "RatingPlanBindings": [
+              {
+                  "DestinationRatesId": "DR_TEST",
+                  "TimingId": "*any",
+                  "Weight": 10
+              }
+          ]
+      })
+      rpc.call("ApierV2.LoadTariffPlanFromStorDb", {
+          "TPid": "cgrates.org",
+          "DryRun": False,
+          "Validate": True,
+          "APIOpts": None,
+          "Caching": None
+      })
+      rpc.call("ApierV2.SetRatingProfile", {
+          "TPid": "RP_TEST",
+          "Overwrite": True,
+          "LoadId" : "APItest",
+          "Tenant": "cgrates.org",
+          "Category": "call",
+          "Subject": "*any",
+          "RatingPlanActivations": [
+              {
+                  "ActivationTime": "2014-01-14T00:00:00Z",
+                  "RatingPlanId": "RatingPlan_VoiceCalls",
+                  "FallbackSubjects": ""
+              }
+          ]
+      })
+      rpc.call("ApierV2.SetChargerProfile", {
+          "Tenant": "cgrates.org",
+          "ID": "DEFAULT",
+          'FilterIDs': [],
+          'AttributeIDs' : ['*none'],
+          'Weight': 0,
+      })
+      rpc.call("ApierV2.SetAccount", {
+          "Tenant": "cgrates.org",
+          "Account": "Test"
+      })
+      rpc.call("ApierV2.SetBalance", {
+          "Tenant": "cgrates.org",
+          "Account": "Test",
+          "BalanceType": "*voice",
+          "Categories": "*any",
+          "Balance": {
+              "ID": "5minute",
+              "Value": "5m",
+              "Weight": 25
+          }
+      })
+      rpc.call("ApierV2.GetAccount",{
+          'Tenant': 'cgrates.org',
+          'Account': 'Test'
+      })
 
