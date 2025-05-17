@@ -47,7 +47,6 @@ configs:
           "listen": {
               "rpc_json": ":2012",
               //"rpc_gob": "",    // turn off 2013
-              "http": ":2080",
           },
           "apiers": {
               "enabled": true,
@@ -77,6 +76,48 @@ configs:
               "store_interval": "-1",
               "sessions_conns": ["*localhost"],
           },
+          "templates": {
+              "*ccr": [
+                  {
+                      "tag": "ToR", "path": "*cgreq.ToR",
+                      "type": "*constant", "value": "*voice",
+                  },
+                  {
+                      "tag": "Category", "path": "*cgreq.Category",
+                      "type": "*constant", "value": "call"
+                  },
+                  {
+                      "tag": "RequestType", "path": "*cgreq.RequestType",
+                      "type": "*constant", "value": "*prepaid",
+                  },
+                  {
+                      "tag": "OriginID", "path": "*cgreq.OriginID",
+                      "type": "*variable", "mandatory": true,
+                      "value": "~*req.Session-Id",
+                  },
+                  {
+                      "tag": "Destination", "path": "*cgreq.Destination",
+                      "type": "*variable", "mandatory": true,
+                      "value": "~*req.Service-Information.IMS-Information.Called-Party-Address",
+                  },
+                  {
+                      "tag": "Account", "path": "*cgreq.Account",
+                      //"type": "*variable",
+                      //"value": "~*req.Service-Information.Subscription-Id.Subscription-Id-Data",
+                      "type": "*constant", "value": "Test",
+                  },
+                  {
+                      "tag": "Usage", "path": "*cgreq.Usage",
+                      "type": "*variable", //"mandatory": true,
+                      "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time",
+                  },
+                  {
+                      "tag": "SubscriberID", "path": "*cgreq.SubscriberId",
+                      "type": "*variable", "mandatory": true,
+                      "value": "~*req.Subscription-Id.Subscription-Id-Data",
+                  },
+              ],
+          },
           "diameter_agent": {
               "enabled": true,
               "sessions_conns": ["*localhost"],
@@ -87,77 +128,10 @@ configs:
               "request_processors": [
                   {
                       "id": "VoiceInit",
-                      "filters": [
-                          "*string:~*vars.*cmd:CCR",
-                          "*string:~*req.CC-Request-Type:1",
-                      ],
-                      "flags": [
-                          "*initiate",
-                          "*accounts",
-                          //"*continue"
-                      ],
+                      "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:1" ],
+                      "flags": [ "*initiate", "*accounts" ],
                       "request_fields": [
-                          {
-                              "tag": "ToR",
-                              "path": "*cgreq.ToR",
-                              "type": "*constant",
-                              "value": "*voice"
-                          },
-                          {
-                              "tag": "OriginID",
-                              "path": "*cgreq.OriginID",
-                              "type": "*variable",
-                              "value": "~*req.Session-Id",
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "RequestType",
-                              "path": "*cgreq.RequestType",
-                              "type": "*constant",
-                              "value": "*prepaid"
-                          },
-                          {
-                              "tag": "Category",
-                              "path": "*cgreq.Category",
-                              "type": "*constant",
-                              "value": "call"
-                          },
-                          {
-                              "tag": "Account",
-                              "path": "*cgreq.Account",
-                              //"type": "*variable",
-                              //"value": "~*req.Service-Information.Subscription-Id.Subscription-Id-Data",
-                              "type": "*constant",
-                              "value": "Test",
-                          },
-                          {
-                              "tag": "Destination",
-                              "path": "*cgreq.Destination",
-                              "type": "*variable",
-                              "value": "~*req.Service-Information.IMS-Information.Called-Party-Address",
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "AnswerTime",
-                              "path": "*cgreq.AnswerTime",
-                              "type": "*variable",
-                              "value": "~*req.Event-Timestamp",
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "Usage",
-                              "path": "*cgreq.Usage",
-                              "type": "*variable",
-                              "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time",
-                              "mandatory": true
-                          },
-                          {
-                              "tag": "SubscriberID",
-                              "path": "*cgreq.SubscriberId",
-                              "type": "*variable",
-                              "value": "~*req.Subscription-Id.Subscription-Id-Data",
-                              "mandatory": true
-                          }
+                          { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
                       ],
                       "reply_fields": [
                           { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
@@ -166,8 +140,42 @@ configs:
                               "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
                               "type": "*constant",
                               "value": "30",
-                              "mandatory": true
+                              "mandatory": true,
                           },
+                      ]
+                  },
+                  {
+                      "id": "VoiceUpdate",
+                      "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:2" ],
+                      "flags": [ "*update", "*accounts" ],
+                      "request_fields": [
+                          { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
+                      ],
+                      "reply_fields": [
+                          { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
+                          {
+                              "tag": "GrantedUnits",
+                              "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
+                              "type": "*constant",
+                              "value": "30",
+                              "mandatory": true,
+                          },
+                      ]
+                  },
+                  {
+                      "id": "VoiceTerm",
+                      "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:3" ],
+                      "flags": [ "*terminate", "*accounts" ],
+                      "request_fields": [
+                          { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
+                          {
+                              "tag": "Usage", "path": "*cgreq.Usage",
+                              "type": "*variable", //"mandatory": true,
+                              "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time",
+                          },
+                      ],
+                      "reply_fields": [
+                          { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
                       ]
                   },
               ]
@@ -182,10 +190,11 @@ configs:
 
           def __init__(self, addr):
               self._socket = socket.create_connection(addr)
-              self._id_iter = itertools.count()
+              self._id_iter = -1
 
           def _message(self, name, *params):
-              return dict(id=next(self._id_iter),
+              self._id_iter += 1
+              return dict(id=self._id_iter,
                           params=list(params),
                           method=name)
 
@@ -198,7 +207,7 @@ configs:
               response = json.loads(response.decode())
 
               if response['id'] != request['id']:
-                  raise Exception(f"id expected {request['id']}, received {response['id']}")
+                  raise Exception(f"id expected:{request['id']}, received:{response['id']}")
 
               if response.get('error') is not None:
                   raise Exception(response.get('error'))
@@ -294,5 +303,9 @@ configs:
               "Value": "5m",
               "Weight": 25
           }
+      })
+      rpc.call("ApierV2.GetAccount",{
+          'Tenant': 'cgrates.org',
+          'Account': 'Test'
       })
 
