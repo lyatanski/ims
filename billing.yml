@@ -109,7 +109,7 @@ configs:
                   {
                       "tag": "Usage", "path": "*cgreq.Usage",
                       "type": "*variable", //"mandatory": true,
-                      "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time",
+                      "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time:s/(.*)/$${1}s/",
                   },
                   {
                       "tag": "SubscriberID", "path": "*cgreq.SubscriberId",
@@ -171,7 +171,7 @@ configs:
                           {
                               "tag": "Usage", "path": "*cgreq.Usage",
                               "type": "*variable", //"mandatory": true,
-                              "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time",
+                              "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time:s/(.*)/$${1}s/",
                           },
                       ],
                       "reply_fields": [
