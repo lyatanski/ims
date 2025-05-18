@@ -13,6 +13,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Install
+      run: apt install -y linux-modules-extra
+
     - name: Prep
       run: sudo modprobe gtp
 
