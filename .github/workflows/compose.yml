@@ -19,7 +19,7 @@ jobs:
         sudo apt install -y linux-modules-extra-6.11.0-1014-azure
 
     - name: Set Up
-      run: docker compose --profile test up --detach
+      run: docker compose --profile test up --detach --quiet-pull
 
     - name: Wait
       run: docker compose --profile test wait test
