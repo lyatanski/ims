@@ -19,6 +19,9 @@ jobs:
     - name: pre check
       run: docker compose --profile test ps --all
 
+    - name: logs
+      run: docker compose --profile test logs test
+
     - name: Wait
       run: docker compose --profile test wait test
 
