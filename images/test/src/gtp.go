@@ -14,7 +14,6 @@ import (
 	"github.com/wmnsk/go-gtp/gtpv2/message"
 	"github.com/wmnsk/go-gtp/gtpv2/ie"
 	"github.com/vishvananda/netlink"
-	"golang.org/x/sys/unix"
 )
 
 var (
@@ -212,17 +211,7 @@ func ResolveLocalAddr(port string) string {
 }
 
 func setupGTPU(ip string) {
-	eth, err := netlink.LinkByName("eth0")
-	if err != nil {
-		log.Fatal("00 ", err)
-	}
-	addr, err := netlink.AddrList(eth, unix.AF_INET)
-	if err != nil {
-		log.Fatal("01 ", err)
-	}
-	log.Printf("xx %v %v %v compared to %v\n", eth, addr, addr[0].IPNet.IP.String(), ip)
-
-	usr0, err := net.ListenPacket("udp", addr[0].IPNet.IP.String()+":3386")
+	usr0, err := net.ListenPacket("udp", ip+":3386")
 	if err != nil {
 		log.Fatal("1 ", err)
 	}
@@ -233,7 +222,7 @@ func setupGTPU(ip string) {
 		log.Fatal("3 ", err)
 	}
 
-	usr1, err := net.ListenPacket("udp", addr[0].IPNet.IP.String()+gtpv2.GTPUPort)
+	usr1, err := net.ListenPacket("udp", ip+gtpv2.GTPUPort)
 	if err != nil {
 		log.Fatal("2 ", err)
 	}
