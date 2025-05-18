@@ -1,10 +1,11 @@
 name: compose
 on:
-  workflow_run:
-    workflows:
-    - images
-    types:
-    - completed
+  push:
+  #workflow_run:
+  #  workflows:
+  #  - images
+  #  types:
+  #  - completed
 
 jobs:
   test:
@@ -14,7 +15,9 @@ jobs:
 
     - name: Set Up
       run: docker compose --profile test up --detach
-      #run: docker compose --profile test up --exit-code-from test
+
+    - name: pre check
+      run: docker compose --profile test ps --all
 
     - name: Wait
       run: docker compose --profile test wait test
