@@ -213,9 +213,9 @@ func setupGTPU() {
 	if err != nil {
 		log.Fatal("01 ", err)
 	}
-	log.Printf("xx %v %v %v\n", eth, addr, addr[0].IPNet.String())
+	log.Printf("xx %v %v %v\n", eth, addr, addr[0].IPNet.IP.String())
 
-	usr0, err := net.ListenPacket("udp", addr[0].IPNet.String()+":3386")
+	usr0, err := net.ListenPacket("udp", addr[0].IPNet.IP.String()+":3386")
 	if err != nil {
 		log.Fatal("1 ", err)
 	}
@@ -226,7 +226,7 @@ func setupGTPU() {
 		log.Fatal("3 ", err)
 	}
 
-	usr1, err := net.ListenPacket("udp", addr[0].IPNet.String()+gtpv2.GTPUPort)
+	usr1, err := net.ListenPacket("udp", addr[0].IPNet.IP.String()+gtpv2.GTPUPort)
 	if err != nil {
 		log.Fatal("2 ", err)
 	}
