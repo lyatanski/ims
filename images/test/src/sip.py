@@ -7,6 +7,7 @@ import logging
 import threading
 import tinyWRAP as s
 
+ct = None
 def talk(call):
     call.accept()
     time.sleep(40)
@@ -37,6 +38,7 @@ class SipCallback(s.SipCallback):
 
     def OnInviteEvent(self, event):
         self.log.info(f"invite {event.getStack()} type {event.getType()}")
+        print(f"===================== invite {event.getStack()} type {event.getType()}")
         msg = event.getSipMessage()
         if not msg: return 0
         if not msg.isResponse():
@@ -45,7 +47,8 @@ class SipCallback(s.SipCallback):
                 call = event.takeCallSessionOwnership()
                 call.setSessionTimer(3600, "none")
                 call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
-                threading.Timer(1, talk, (call,)).start()
+                ct = threading.Timer(1, talk, (call,))
+                ct.start()
         return 0
 
     def OnMessagingEvent(self, event):
@@ -150,10 +153,10 @@ if __name__ == "__main__":
         #time.sleep(10)
         #call.resume()
 
-        time.sleep(181)
+        time.sleep(60)
         call.hangup()
     else:
-        time.sleep(180)
+        ct.join()
 
     time.sleep(30)
 
