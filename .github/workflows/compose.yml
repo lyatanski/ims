@@ -14,10 +14,12 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install
-      run: sudo apt update && sudo apt install -y linux-modules-extra-6.11.0-1014-azure
+      run: >
+        sudo apt update
+        sudo apt install -y linux-modules-extra-6.11.0-1014-azure
 
-    - name: Prep
-      run: sudo modprobe gtp
+    #- name: Prep
+    #  run: sudo modprobe gtp
 
     - name: Set Up
       run: docker compose --profile test up --detach
