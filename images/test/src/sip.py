@@ -156,6 +156,7 @@ if __name__ == "__main__":
         time.sleep(60)
         call.hangup()
     else:
+        time.sleep(6)
         ct.join()
 
     time.sleep(30)
