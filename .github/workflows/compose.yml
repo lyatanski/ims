@@ -13,9 +13,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install Search
-      run: sudo apt update && sudo apt install -y apt-file && sudo apt-file update && apt-file search gtp.ko
-
     - name: Install
       run: sudo apt update && sudo apt install -y linux-modules-extra-6.11.0-1014-azure
 

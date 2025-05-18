@@ -262,6 +262,8 @@ func setupGTPU() {
 
 func main() {
 	flag.Parse()
+	time.Sleep(60 * time.Second)
+	os.Exit(3)
 
 	ctx := context.Background()
 	pgw, err := net.ResolveUDPAddr("udp", *pgwc+gtpv2.GTPCPort)
