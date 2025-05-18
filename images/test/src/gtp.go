@@ -203,37 +203,25 @@ func ResolveLocalAddr(port string) string {
 	return con.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
-func main() {
-	flag.Parse()
-	ctx := context.Background()
-	pgw, err := net.ResolveUDPAddr("udp", *pgwc+gtpv2.GTPCPort)
-	if err != nil {
-		log.Fatal(err)
-	}
-	foo = ResolveLocalAddr(gtpv2.GTPCPort)
-	bind, err := net.ResolveUDPAddr("udp", "0.0.0.0"+gtpv2.GTPCPort)
-	con, err := gtpv2.Dial(ctx, bind, pgw, gtpv2.IFTypeS5S8SGWGTPC, 0)
-	if err != nil {
-		log.Fatal("0 ", err)
-	}
-	defer con.Close()
+func setupGTPU() {
+	//eth, _ := netlink.LinkByName("lo")
 
-	usr0, err := net.ListenPacket("udp", "0.0.0.0:3386")
+	usr0, err := net.ListenPacket("udp", "[::]:3386")
 	if err != nil {
 		log.Fatal("1 ", err)
 	}
-	defer usr0.Close()
+	//defer usr0.Close()
 
 	f0, err := usr0.(*net.UDPConn).File()
 	if err != nil {
 		log.Fatal("3 ", err)
 	}
 
-	usr1, err := net.ListenPacket("udp", "0.0.0.0"+gtpv2.GTPUPort)
+	usr1, err := net.ListenPacket("udp", "[::]"+gtpv2.GTPUPort)
 	if err != nil {
 		log.Fatal("2 ", err)
 	}
-	defer usr1.Close()
+	//defer usr1.Close()
 
 	f1, err := usr1.(*net.UDPConn).File()
 	if err != nil {
@@ -261,6 +249,25 @@ func main() {
 	if err := netlink.LinkSetMTU(gtpu, 1500); err != nil {
 		log.Fatal("7 ", err)
 	}
+}
+
+func main() {
+	flag.Parse()
+
+	ctx := context.Background()
+	pgw, err := net.ResolveUDPAddr("udp", *pgwc+gtpv2.GTPCPort)
+	if err != nil {
+		log.Fatal(err)
+	}
+	foo = ResolveLocalAddr(gtpv2.GTPCPort)
+	bind, err := net.ResolveUDPAddr("udp", "0.0.0.0"+gtpv2.GTPCPort)
+	con, err := gtpv2.Dial(ctx, bind, pgw, gtpv2.IFTypeS5S8SGWGTPC, 0)
+	if err != nil {
+		log.Fatal("0 ", err)
+	}
+	defer con.Close()
+
+	setupGTPU();
 
 	con.AddHandlers(map[uint8]gtpv2.HandlerFunc{
 		message.MsgTypeCreateSessionResponse: CreateSessionResponse,
