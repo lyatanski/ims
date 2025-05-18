@@ -14,7 +14,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install
-      run: sudo apt install -y linux-modules
+      run: sudo apt search linux-modules
 
     - name: Prep
       run: sudo modprobe gtp
