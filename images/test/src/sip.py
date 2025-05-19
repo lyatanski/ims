@@ -3,10 +3,10 @@
 import os
 import sys
 import time
-import logging
 import threading
 import tinyWRAP as s
 
+ct = None
 def talk(call):
     call.accept()
     time.sleep(40)
@@ -15,18 +15,17 @@ def talk(call):
 class SipCallback(s.SipCallback):
     def __init__(self, imsi, msisdn, domain):
         super().__init__()
-        self.log = logging.getLogger(f"----------{imsi}----------")
         self.imsi = imsi
         self.msisdn = msisdn
         self.domain = domain
         self.__disown__()
 
     def OnDialogEvent(self, event):
-        self.log.info(f"dialog")
+        print(f"dialog")
         return 0
 
     def OnStackEvent(self, event):
-        self.log.info(f"stack {event.getStack()} {event.getPhrase()}")
+        print(f"stack {event.getStack()} {event.getPhrase()}")
         if event.getPhrase() == "Stack stopped":
             pass
         if event.getPhrase() == "Stack started":
@@ -36,40 +35,41 @@ class SipCallback(s.SipCallback):
         return 0
 
     def OnInviteEvent(self, event):
-        self.log.info(f"invite {event.getStack()} type {event.getType()}")
+        print(f"invite {event.getStack()} type {event.getType()}")
         msg = event.getSipMessage()
         if not msg: return 0
         if not msg.isResponse():
-            self.log.info(f"should accept invite on session {event.getSession()}")
+            print(f"should accept invite on session {event.getSession()}")
             if not event.getSession():
                 call = event.takeCallSessionOwnership()
                 call.setSessionTimer(3600, "none")
                 call.setQoS(s.tmedia_qos_stype_none, s.tmedia_qos_strength_none)
-                threading.Timer(1, talk, (call,)).start()
+                ct = threading.Timer(1, talk, (call,))
+                ct.start()
         return 0
 
     def OnMessagingEvent(self, event):
-        self.log.info(f"message")
+        print(f"message")
         return 0
 
     def OnInfoEvent(self, event):
-        self.log.info(f"info")
+        print(f"info")
         return 0
 
     def OnOptionsEvent(self, event):
-        self.log.info(f"options")
+        print(f"options")
         return 0
 
     def OnPublicationEvent(self, event):
-        self.log.info(f"publication")
+        print(f"publication")
         return 0
 
     def OnRegistrationEvent(self, event):
-        self.log.info(f"registration {event.getStack()} type {event.getType()}")
+        print(f"registration {event.getStack()} type {event.getType()}")
         msg = event.getSipMessage()
         if not msg: return 0
         if msg.isResponse() and msg.getResponseCode() == 200:
-            self.log.info(f"sending subscribe")
+            print(f"sending subscribe")
             sip = event.getStack()
             sip.setIMPU(f"sip:{self.msisdn}@{self.domain}")
             #sip.setRealm(f"sip:{self.msisdn}@{self.domain}")
@@ -82,7 +82,7 @@ class SipCallback(s.SipCallback):
         return 0
 
     def OnSubscriptionEvent(self, event):
-        self.log.info(f"subscription {event.getStack()} type {event.getType()}")
+        print(f"subscription {event.getStack()} type {event.getType()}")
         return 0
 
 
@@ -150,10 +150,12 @@ if __name__ == "__main__":
         #time.sleep(10)
         #call.resume()
 
-        time.sleep(181)
+        time.sleep(60)
         call.hangup()
     else:
-        time.sleep(180)
+        time.sleep(6)
+        if ct: ct.join(60)
+        else: time.sleep(60)
 
     time.sleep(30)
 

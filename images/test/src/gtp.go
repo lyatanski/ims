@@ -6,7 +6,7 @@ import (
 	"log"
 	"net"
 	"flag"
-	"time"
+	"sync"
 	"os/exec"
 	"context"
 	"strconv"
@@ -22,13 +22,86 @@ var (
 	mnc = flag.String("mnc", "01", "MNC")
 	foo string
 	gtpu *netlink.GTP
+	wg sync.WaitGroup
 )
+
+func runSIP(teid uint32, imsi, msIP, pcscfIP string) {
+	call := []string{"/opt/sip.py", "--imsi", imsi, "--msisdn", fmt.Sprintf("%s%0.9d", os.Getenv("DIAL"), teid), "--bind", msIP}
+	if teid % 2 == 0 {
+		call = append(call, "--call", fmt.Sprintf("%s%0.9d", os.Getenv("DIAL"), teid-1))
+	}
+	call = append(call, pcscfIP)
+	cmd := exec.Command("python3", call...)
+	out, err := cmd.CombinedOutput()
+	log.Printf("CMD: %s, OUT:\n%s\n", cmd, out)
+	if err != nil {
+		log.Fatal("13 ", err)
+	}
+	log.Println("process finished")
+}
+
+func addIP(msIP, upfIP net.IP, oteid, iteid uint32) {
+	var addr netlink.Addr
+
+	pdp := &netlink.PDP{
+		Version:     1,
+		PeerAddress: upfIP,
+		MSAddress:   msIP,
+		OTEI:        oteid,
+		ITEI:        iteid,
+	}
+
+	if err := netlink.GTPPDPAdd(gtpu, pdp); err != nil {
+		log.Fatal("8 ", err)
+	}
+
+	link, err := netlink.LinkByName("eth0")
+	if err != nil {
+		log.Fatal("x ", err)
+	}
+
+	addr.IPNet = &net.IPNet{IP: msIP, Mask: net.CIDRMask(24, 32)}
+	if err := netlink.AddrAdd(link, &addr); err != nil {
+		log.Fatal("9 ", err)
+	}
+
+	route := &netlink.Route{
+		Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)}, // default
+		LinkIndex: gtpu.Attrs().Index,
+		Scope:     netlink.SCOPE_LINK,
+		Protocol:  4,
+		Priority:  1,
+		Table:     1001,
+	}
+	if err := netlink.RouteReplace(route); err != nil {
+		log.Fatal("10 ", err)
+	}
+
+	rules, err := netlink.RuleList(0)
+	if err != nil {
+		log.Fatal("11 ", err)
+	}
+
+	mask32 := &net.IPNet{IP: msIP, Mask: net.CIDRMask(32, 32)}
+	for _, r := range rules {
+		if r.Src == mask32 && r.Table == 1001 {
+			return // Rule already exists, no need to add
+		}
+	}
+
+	rule := netlink.NewRule()
+	//rule.IifName = "gtp0"
+	rule.Src = mask32
+	rule.Table = 1001
+
+	if err := netlink.RuleAdd(rule); err != nil {
+		log.Fatal("12 ", err)
+	}
+}
 
 func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) error {
 	var msIP, upfIP, pcscfIP string
 	var oteiU uint32
-	var addr netlink.Addr
-	var call []string
 
 	log.Println("searching session for TEID", msg.TEID())
 	ses, err := con.GetSessionByTEID(msg.TEID(), pgw)
@@ -85,76 +158,10 @@ func CreateSessionResponse(con *gtpv2.Conn, pgw net.Addr, msg message.Message) e
 	}
 
 	log.Println("MS IP", msIP)
-	pdp := &netlink.PDP{
-		Version:     1,
-		PeerAddress: net.ParseIP(upfIP),
-		MSAddress:   net.ParseIP(msIP),
-		OTEI:        oteiU,
-		ITEI:        msg.TEID(),
-	}
+	addIP(net.ParseIP(msIP), net.ParseIP(upfIP), oteiU, msg.TEID())
+	runSIP(msg.TEID(), ses.IMSI, msIP, pcscfIP)
 
-	if err := netlink.GTPPDPAdd(gtpu, pdp); err != nil {
-		log.Fatal("8 ", ses.IMSI, err)
-	}
-
-	link, err := netlink.LinkByName("eth0")
-	if err != nil {
-		log.Fatal("x ", err)
-	}
-
-	addr.IPNet = &net.IPNet{IP: net.ParseIP(msIP), Mask: net.CIDRMask(24, 32)}
-	if err := netlink.AddrAdd(link, &addr); err != nil {
-		log.Fatal("9 ", err)
-	}
-
-	route := &netlink.Route{
-		Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)}, // default
-		LinkIndex: gtpu.Attrs().Index,
-		Scope:     netlink.SCOPE_LINK,
-		Protocol:  4,
-		Priority:  1,
-		Table:     1001,
-	}
-	if err := netlink.RouteReplace(route); err != nil {
-		log.Fatal("10 ", err)
-	}
-
-	rules, err := netlink.RuleList(0)
-	if err != nil {
-		log.Fatal("11 ", err)
-	}
-
-	mask32 := &net.IPNet{IP: net.ParseIP(msIP), Mask: net.CIDRMask(32, 32)}
-	for _, r := range rules {
-		if r.Src == mask32 && r.Table == 1001 {
-			return nil // Rule already exists, no need to add
-		}
-	}
-
-	rule := netlink.NewRule()
-	//rule.IifName = "gtp0"
-	rule.Src = mask32
-	rule.Table = 1001
-
-	if err := netlink.RuleAdd(rule); err != nil {
-		log.Fatal("12 ", err)
-	}
-
-	log.Println("before starting process", ses.IMSI)
-	call = append(call, "/opt/sip.py", "--imsi", ses.IMSI, "--msisdn", fmt.Sprintf("%s%0.9d", os.Getenv("DIAL"), msg.TEID()), "--bind", msIP)
-	if msg.TEID() % 2 == 0 {
-		call = append(call, "--call", fmt.Sprintf("%s%0.9d", os.Getenv("DIAL"), msg.TEID()-1))
-	}
-	call = append(call, pcscfIP)
-	cmd := exec.Command("python3", call...)
-	//log.Println(cmd)
-	out, err := cmd.CombinedOutput()
-	log.Printf("CMD: %s, OUT:\n%s\n", cmd, out)
-	if err != nil {
-		log.Fatal("13 ", err)
-	}
-	log.Println("process finished")
-
+	wg.Done()
 	return nil
 }
 
@@ -203,37 +210,23 @@ func ResolveLocalAddr(port string) string {
 	return con.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
-func main() {
-	flag.Parse()
-	ctx := context.Background()
-	pgw, err := net.ResolveUDPAddr("udp", *pgwc+gtpv2.GTPCPort)
-	if err != nil {
-		log.Fatal(err)
-	}
-	foo = ResolveLocalAddr(gtpv2.GTPCPort)
-	bind, err := net.ResolveUDPAddr("udp", "0.0.0.0"+gtpv2.GTPCPort)
-	con, err := gtpv2.Dial(ctx, bind, pgw, gtpv2.IFTypeS5S8SGWGTPC, 0)
-	if err != nil {
-		log.Fatal("0 ", err)
-	}
-	defer con.Close()
-
-	usr0, err := net.ListenPacket("udp", "0.0.0.0:3386")
+func setupGTPU(ip string) {
+	usr0, err := net.ListenPacket("udp", ip+":3386")
 	if err != nil {
 		log.Fatal("1 ", err)
 	}
-	defer usr0.Close()
+	//defer usr0.Close()
 
 	f0, err := usr0.(*net.UDPConn).File()
 	if err != nil {
 		log.Fatal("3 ", err)
 	}
 
-	usr1, err := net.ListenPacket("udp", "0.0.0.0"+gtpv2.GTPUPort)
+	usr1, err := net.ListenPacket("udp", ip+gtpv2.GTPUPort)
 	if err != nil {
 		log.Fatal("2 ", err)
 	}
-	defer usr1.Close()
+	//defer usr1.Close()
 
 	f1, err := usr1.(*net.UDPConn).File()
 	if err != nil {
@@ -261,6 +254,25 @@ func main() {
 	if err := netlink.LinkSetMTU(gtpu, 1500); err != nil {
 		log.Fatal("7 ", err)
 	}
+}
+
+func main() {
+	flag.Parse()
+
+	ctx := context.Background()
+	pgw, err := net.ResolveUDPAddr("udp", *pgwc+gtpv2.GTPCPort)
+	if err != nil {
+		log.Fatal(err)
+	}
+	foo = ResolveLocalAddr(gtpv2.GTPCPort)
+	bind, err := net.ResolveUDPAddr("udp", "0.0.0.0"+gtpv2.GTPCPort)
+	con, err := gtpv2.Dial(ctx, bind, pgw, gtpv2.IFTypeS5S8SGWGTPC, 0)
+	if err != nil {
+		log.Fatal("0 ", err)
+	}
+	defer con.Close()
+
+	setupGTPU(foo);
 
 	con.AddHandlers(map[uint8]gtpv2.HandlerFunc{
 		message.MsgTypeCreateSessionResponse: CreateSessionResponse,
@@ -274,6 +286,7 @@ func main() {
 		log.Fatal(err)
 	}
 	for i := 1; i <= ues; i++ {
+		wg.Add(1)
 		ses, _, err := con.CreateSession(
 			pgw,
 			ie.NewIMSI(fmt.Sprintf("%s%s%0.10d", *mcc, *mnc, i)),
@@ -307,8 +320,6 @@ func main() {
 		log.Println(ses)
 	}
 
-	//time.Sleep(8 * time.Second)
-
 	//teid, err := ses.GetTEID(gtpv2.IFTypeS5S8PGWGTPC)
 	//if err != nil {
 	//	log.Fatal(err)
@@ -318,5 +329,6 @@ func main() {
 	//	ses,
 	//	ie.NewEPSBearerID(ses.GetDefaultBearer().EBI),
 	//)
-	time.Sleep(300 * time.Second)
+	//time.Sleep(300 * time.Second)
+	wg.Wait()
 }
