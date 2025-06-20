@@ -1,6 +1,6 @@
 services:
   ocs:
-    image: ghcr.io/lyatanski/cgrates
+    image: ghcr.io/lyatanski/cgr-engine
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
