@@ -23,6 +23,7 @@ jobs:
 
     - name: Check
       run: docker compose --profile test ps --all
+      if: always()
 
     - name: Logs
       run: docker compose --profile test logs
