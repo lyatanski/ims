@@ -27,6 +27,7 @@ jobs:
 
     - name: Logs
       run: docker compose --profile test logs
+      if: always()
 
     - name: Wait
       run: docker compose --profile test wait test
