@@ -13,7 +13,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install
+    - name: Install Kmod
       run: |
         sudo apt update
         sudo apt install -qqy linux-modules-extra-$(uname -r)
@@ -21,22 +21,17 @@ jobs:
     - name: Set Up
       run: docker compose --profile test up --detach --quiet-pull
 
-    - name: Check
-      run: docker compose --profile test ps --all
-      if: always()
-
-    - name: Logs
-      run: docker compose --profile test logs
-      if: always()
-
     - name: Wait
       run: docker compose --profile test wait test
 
     - name: Check
       run: docker compose --profile test ps --all
+      if: always()
 
     - name: Logs
       run: docker compose --profile test logs
+      if: always()
 
     - name: Tear Down
       run: docker compose --profile test down --volumes
+      if: always()
