@@ -159,5 +159,7 @@ if __name__ == "__main__":
 
     time.sleep(30)
 
-    #del s0
+    del s0
+    # wait for OK on REGISTER Expires: 0
+    time.sleep(3)
 
