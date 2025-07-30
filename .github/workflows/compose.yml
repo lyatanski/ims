@@ -21,6 +21,12 @@ jobs:
     - name: Set Up
       run: docker compose --profile test up --detach --quiet-pull
 
+    - name: Check
+      run: docker compose --profile test ps --all
+
+    - name: Logs
+      run: docker compose --profile test logs
+
     - name: Wait
       run: docker compose --profile test wait test
 
