@@ -13,14 +13,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Investigate
-      run: |
-        uname -a
-
     - name: Install
       run: |
         sudo apt update
-        sudo apt install -qqy linux-modules-extra-6.11.0-1014-azure
+        sudo apt install -qqy linux-modules-extra-$(uname -r)
 
     - name: Set Up
       run: docker compose --profile test up --detach --quiet-pull
