@@ -26,7 +26,7 @@ RUN apk --no-cache upgrade \
     && adduser -D build && addgroup build abuild \
     && echo "%abuild ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abuild
 RUN git clone --depth=1 https://github.com/kamailio/kamailio.git
-RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Debug \
+RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
         -D MODULE_GROUP_NAME="" \
         -D INCLUDE_MODULES="xlog debugger \
             kex siputils textops \
