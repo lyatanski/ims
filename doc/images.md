@@ -22,11 +22,11 @@ already pretty minimal and good choice.
 ## IMS DB
 For IMS to function DB is required. There are multiple options:
 ### [MariaDB](https://mariadb.org)
-Safe choice, but kind of heavy and its performance leaves things to be desired
+Safe choice, but kind of heavy and its performance leaves things to be desired. If  ims_usrloc_scscf DB storage is used, it might be a necessity as there are hardcoded SQL statements in the module implementation.
 
 ### [Valkey](https://valkey.io)
 This [Redis](https://redis.io) drop-in replacement will be the choice for this
-setup die to its small image, small memory footprint, fast performance. The only
+setup due to its small image, small memory footprint, fast performance. The only
 drawback is required additional handling in Kamailio for providing "schema".
 There is no need for custom image build and the default Alpine based image,
 hosted on [dockerhub](https://hub.docker.com/r/valkey/valkey/tags?name=alpine),

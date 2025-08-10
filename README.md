@@ -3,6 +3,7 @@ IP Multimedia Subsystem
 
 Why another setup:
 - use modern compose features (like interpolation) for simplicity
+- create helm charts for Kubernetes installation
 - go into a bit more depth of the Kamailio configuration for better understanding
 - provide entirely software based playground for testing
 
