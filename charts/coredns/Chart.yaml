@@ -1,0 +1,14 @@
+apiVersion: v2
+name: coredns
+version: 1.43.2
+appVersion: 1.12.3
+home: https://coredns.io
+icon: https://coredns.io/images/CoreDNS_Colour_Horizontal.png
+description: CoreDNS is a DNS server that chains plugins and provides Kubernetes DNS Services
+keywords:
+- coredns
+- dns
+- kubedns
+sources:
+- https://github.com/coredns/coredns
+type: application

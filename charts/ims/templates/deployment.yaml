@@ -27,6 +27,13 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- $dns := (lookup "v1" "Service" .Release.Namespace "db") -}}
+      {{- if $dns }}
+      dnsPolicy: "None"
+      dnsConfig:
+        nameservers:
+        - {{ $dns.spec.clusterIP }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
