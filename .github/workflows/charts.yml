@@ -17,7 +17,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Package
-      run: helm package charts/${{ matrix.package }}
+      run: helm package --dependency-update charts/${{ matrix.package }}
 
     - name: Log in
       run: helm registry login --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} oci://ghcr.io/
