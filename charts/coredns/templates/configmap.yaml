@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "coredns.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "coredns.labels" . | nindent 4 }}
+data:
+  Corefile: |-
+    . {
+        errors
+        log
+        health {
+           lameduck 5s
+        }
+        ready
+        template IN SRV {
+            match (?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
+            answer {{`{{ .Name }} 1D SRV 0 0 5060 {{ or .Group.name \"icscf\" }}.`}}
+            fallthrough
+        }
+        template IN ANY {
+            match (^|[.])(?P<name>[^.]*).*\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
+            answer {{`{{ .Name }} 1D IN CNAME {{ .Group.name }}.`}}
+            fallthrough
+        }
+        forward . /etc/resolv.conf
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
