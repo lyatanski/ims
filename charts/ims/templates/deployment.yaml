@@ -76,7 +76,7 @@ spec:
       volumes:
       - name: diameter
         configMap:
-          name: {{ .Release.Name }}
+          name: {{ .Release.Name }}-cscf
           items:
           - key: {{ $cscf }}.xml
             path: diameter.xml

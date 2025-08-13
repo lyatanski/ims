@@ -44,14 +44,14 @@ spec:
         - name: control
           containerPort: 9910
           protocol: TCP
-        {{- with .Values.livenessProbe }}
         livenessProbe:
-          {{- toYaml . | nindent 12 }}
-        {{- end }}
-        {{- with .Values.readinessProbe }}
+          httpGet:
+            path: /ping
+            port: 9090
         readinessProbe:
-          {{- toYaml . | nindent 12 }}
-        {{- end }}
+          httpGet:
+            path: /ping
+            port: 9090
         {{- with .Values.resources }}
         resources:
           {{- toYaml . | nindent 12 }}
@@ -62,7 +62,7 @@ spec:
       volumes:
       - name: conf
         configMap:
-          name: {{ .Release.Name }}
+          name: {{ .Release.Name }}-rtp
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
