@@ -10,7 +10,7 @@ data:
     log-level = 7
     table = -1
     listen-http = 0.0.0.0:9090
-    listen-ng = 0.0.0.0:9910
+    listen-ng = 0.0.0.0:{{ .Values.service.port }}
     interface = any
     timeout = 60
     silent-timeout = 3600
