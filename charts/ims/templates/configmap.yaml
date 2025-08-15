@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ .Release.Name }}-cscf
   labels:
     {{- include "ims.labels" . | nindent 4 }}
 data:

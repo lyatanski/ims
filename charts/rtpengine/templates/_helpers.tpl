@@ -50,13 +50,3 @@ app.kubernetes.io/name: {{ include "rtpengine.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{/*
-Create the name of the service account to use
-*/}}
-{{- define "rtpengine.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "rtpengine.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
-{{- end }}
-{{- end }}

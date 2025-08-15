@@ -19,39 +19,27 @@ spec:
       {{- end }}
       labels:
         {{- include "rtpengine.labels" . | nindent 8 }}
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "rtpengine.serviceAccountName" . }}
-      {{- with .Values.podSecurityContext }}
-      securityContext:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
       containers:
       - name: {{ .Chart.Name }}
-        {{- with .Values.securityContext }}
-        securityContext:
-          {{- toYaml . | nindent 12 }}
-        {{- end }}
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
         - name: control
-          containerPort: 9910
-          protocol: TCP
-        {{- with .Values.livenessProbe }}
+          containerPort: {{ .Values.service.port }}
+          protocol: UDP
         livenessProbe:
-          {{- toYaml . | nindent 12 }}
-        {{- end }}
-        {{- with .Values.readinessProbe }}
+          httpGet:
+            path: /ping
+            port: 9090
         readinessProbe:
-          {{- toYaml . | nindent 12 }}
-        {{- end }}
+          httpGet:
+            path: /ping
+            port: 9090
         {{- with .Values.resources }}
         resources:
           {{- toYaml . | nindent 12 }}
@@ -62,7 +50,7 @@ spec:
       volumes:
       - name: conf
         configMap:
-          name: {{ .Release.Name }}
+          name: {{ .Release.Name }}-rtp
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
