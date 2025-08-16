@@ -39,6 +39,7 @@ RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
             ims_icscf \
             ims_registrar_scscf ims_usrloc_scscf ims_auth ims_isc ims_charging \
             presence \
+            dispatcher \
             rtpengine \
             userblocklist acc \
             http_client nghttp2" \
