@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dra.name" . }}
+  labels:
+    {{- include "dra.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+  - name: control
+    port: {{ .Values.service.port }}
+    targetPort: {{ .Values.service.port }}
+    protocol: TCP
+  selector:
+    {{- include "dra.selectorLabels" . | nindent 4 }}

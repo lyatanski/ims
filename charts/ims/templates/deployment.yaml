@@ -27,7 +27,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      {{- $dns := (lookup "v1" "Service" .Release.Namespace "db") -}}
+      {{- $dns := (lookup "v1" "Service" .Release.Namespace "dns-coredns") -}}
       {{- if $dns }}
       dnsPolicy: "None"
       dnsConfig:
@@ -53,7 +53,7 @@ spec:
           protocol: TCP
         - name: udp
           containerPort: {{ .Values.service.port }}
-          protocol: TCP
+          protocol: UDP
         - name: mon
           containerPort: 9090
           protocol: TCP

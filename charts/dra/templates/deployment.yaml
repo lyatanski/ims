@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dra.name" . }}
+  labels:
+    {{- include "dra.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "dra.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "dra.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+      - name: openssl
+        image: ghcr.io/lyatanski/openssl
+        args:
+        - req
+        - -new
+        - -batch
+        - -x509
+        - -days
+        - "3650"
+        - -nodes
+        - -newkey
+        - rsa:1024
+        - -out
+        - crt.pem
+        - -keyout
+        - key.pem
+        - -subj
+        - /CN=dra.epc
+        workingDir: /var/dra
+        volumeMounts:
+        - name: cert
+          mountPath: /var/dra
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: control
+          containerPort: {{ .Values.service.port }}
+          protocol: TCP
+        {{- with .Values.resources }}
+        resources:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        volumeMounts:
+        - name: conf
+          mountPath: /etc
+        - name: cert
+          mountPath: /var/dra
+      volumes:
+      - name: conf
+        configMap:
+          name: {{ include "dra.name" . }}
+      - name: cert
+        emptyDir:
+          sizeLimit: 10Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

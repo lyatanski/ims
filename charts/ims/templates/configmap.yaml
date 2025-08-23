@@ -11,7 +11,7 @@ data:
         FQDN="pcscf.ims.{{ tpl .Values.domain . }}"
         Realm="ims.{{ tpl .Values.domain . }}"
         Vendor_Id="10415"
-        Product_Name="CDiameterPeer"
+        Product_Name="PCSCF"
         Workers="1"
     >
             <Peer FQDN="pcrf.epc.{{ tpl .Values.domain . }}" Realm="epc.{{ tpl .Values.domain . }}" port="3868"/>
@@ -26,7 +26,7 @@ data:
         FQDN="icscf.ims.{{ tpl .Values.domain . }}"
         Realm="ims.{{ tpl .Values.domain . }}"
         Vendor_Id="10415"
-        Product_Name="CDiameterPeer"
+        Product_Name="ICSCF"
         Workers="1"
     >
             <Peer FQDN="hss.epc.{{ tpl .Values.domain . }}" Realm="epc.{{ tpl .Values.domain . }}" port="3868"/>
@@ -41,7 +41,7 @@ data:
         FQDN="scscf.ims.{{ tpl .Values.domain . }}"
         Realm="ims.{{ tpl .Values.domain . }}"
         Vendor_Id="10415"
-        Product_Name="CDiameterPeer"
+        Product_Name="SCSCF"
         Workers="1"
     >
             <Peer FQDN="hss.epc.{{ tpl .Values.domain . }}" Realm="epc.{{ tpl .Values.domain . }}" port="3868"/>
