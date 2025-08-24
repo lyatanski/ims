@@ -1,11 +1,15 @@
+{{- $outer := . -}}
+{{- range tuple "p" "i" "s" }}
+{{- $cscf := . -}}
+{{- with $outer -}}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "ims.fullname" . }}
+  name: {{ include "ims.fullname" . }}-{{ $cscf }}cscf
   labels:
     {{- include "ims.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type }}
+  type: ClusterIP
   ports:
   - port: {{ .Values.service.port }}
     targetPort: {{ .Values.service.port }}
@@ -17,3 +21,6 @@ spec:
     name: udp
   selector:
     {{- include "ims.selectorLabels" . | nindent 4 }}
+---
+{{- end }}
+{{- end }}
