@@ -33,6 +33,8 @@ spec:
       dnsConfig:
         nameservers:
         - {{ $dns.spec.clusterIP }}
+        searches:
+        - {{ .Release.Namespace }}.svc.cluster.local
       {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

@@ -12,3 +12,8 @@ data:
     TLS_CA = "/var/dra/crt.pem";
 
     LoadExtension = "dbg_msg_dumps.fdx" : "0x8888";
+    LoadExtension = "rt_redirect.fdx"   : "0x0080";
+
+    ConnectPeer = "pcscf.ims" { No_TLS; };
+    ConnectPeer = "icscf.ims" { No_TLS; };
+    ConnectPeer = "scscf.ims" { No_TLS; };
