@@ -61,7 +61,7 @@ spec:
         {{- end }}
         volumeMounts:
         - name: conf
-          mountPath: /etc
+          mountPath: /etc/freeDiameter
         - name: cert
           mountPath: /var/dra
       volumes:

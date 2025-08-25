@@ -9,4 +9,4 @@ FROM alpine
 RUN apk add lksctp-tools libidn2 gnutls libgcrypt
 COPY --from=build /usr/local/lib/* /usr/local/lib/
 COPY --from=build /usr/local/bin/* /usr/local/bin/
-ENTRYPOINT ["freeDiameterd", "-c", "/etc/dra.conf"]
+ENTRYPOINT ["freeDiameterd", "-c", "/etc/freeDiameter/dra.conf"]
