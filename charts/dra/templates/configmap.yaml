@@ -13,7 +13,10 @@ data:
 
     LoadExtension = "dbg_msg_dumps.fdx" : "0x8888";
     LoadExtension = "rt_redirect.fdx"   : "0x0080";
+    LoadExtension = "acl_wl.fdx"        : "acl_wl.conf";
 
-    ConnectPeer = "pcscf.ims" { No_TLS; };
-    ConnectPeer = "icscf.ims" { No_TLS; };
-    ConnectPeer = "scscf.ims" { No_TLS; };
+    #ConnectPeer = "pcscf.ims" { No_TLS; };
+    #ConnectPeer = "icscf.ims" { No_TLS; };
+    #ConnectPeer = "scscf.ims" { No_TLS; };
+  acl_wl.conf: |
+    *
