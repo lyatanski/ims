@@ -14,10 +14,10 @@ data:
         Product_Name="PCSCF"
         Workers="1"
     >
-            <Peer FQDN="dra" Realm="epc" port="3868"/>
+            <Peer FQDN="ims-dra" Realm="ims" port="3868"/>
             <Auth id="16777236" vendor="10415"/> <!-- Rx 3GPP -->
             <SupportedVendor vendor="10415" />
-            <DefaultRoute FQDN="dra" metric="1"/>
+            <DefaultRoute FQDN="ims-dra" metric="1"/>
     </DiameterPeer>
 
   interrogating.xml: |
@@ -29,10 +29,10 @@ data:
         Product_Name="ICSCF"
         Workers="1"
     >
-            <Peer FQDN="dra" Realm="epc" port="3868"/>
+            <Peer FQDN="ims-dra" Realm="ims" port="3868"/>
             <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
             <SupportedVendor vendor="10415" />
-            <DefaultRoute FQDN="dra" metric="1"/>
+            <DefaultRoute FQDN="ims-dra" metric="1"/>
     </DiameterPeer>
 
   serving.xml: |
@@ -44,9 +44,9 @@ data:
         Product_Name="SCSCF"
         Workers="1"
     >
-            <Peer FQDN="dra" Realm="epc" port="3868"/>
+            <Peer FQDN="ims-dra" Realm="ims" port="3868"/>
             <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
             <Auth id="4"        vendor="10415"/> <!-- Ro 3GPP -->
             <SupportedVendor vendor="10415" />
-            <DefaultRoute FQDN="dra" metric="1"/>
+            <DefaultRoute FQDN="ims-dra" metric="1"/>
     </DiameterPeer>

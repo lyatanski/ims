@@ -6,7 +6,7 @@ metadata:
     {{- include "dra.labels" . | nindent 4 }}
 data:
   dra.conf: |
-    Identity = "dra.epc";
+    Identity = "dra.ims";
     No_SCTP;
     TLS_Cred = "/var/dra/crt.pem", "/var/dra/key.pem";
     TLS_CA = "/var/dra/crt.pem";
