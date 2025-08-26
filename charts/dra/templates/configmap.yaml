@@ -6,17 +6,14 @@ metadata:
     {{- include "dra.labels" . | nindent 4 }}
 data:
   dra.conf: |
-    Identity = "dra.epc";
+    Identity = "dra.ims";
     No_SCTP;
     TLS_Cred = "/var/dra/crt.pem", "/var/dra/key.pem";
     TLS_CA = "/var/dra/crt.pem";
 
     LoadExtension = "dbg_msg_dumps.fdx" : "0x8888";
     LoadExtension = "rt_redirect.fdx"   : "0x0080";
-    LoadExtension = "acl_wl.fdx"        : "acl_wl.conf";
 
-    #ConnectPeer = "pcscf.ims" { No_TLS; };
-    #ConnectPeer = "icscf.ims" { No_TLS; };
-    #ConnectPeer = "scscf.ims" { No_TLS; };
-  acl_wl.conf: |
-    *
+    ConnectPeer = "pcscf.ims" { No_TLS; };
+    ConnectPeer = "icscf.ims" { No_TLS; };
+    ConnectPeer = "scscf.ims" { No_TLS; };

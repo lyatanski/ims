@@ -8,3 +8,6 @@ dependencies:
 - name: rtpengine
   version: "*"
   repository: file://../rtpengine
+- name: dra
+  version: "*"
+  repository: file://../dra

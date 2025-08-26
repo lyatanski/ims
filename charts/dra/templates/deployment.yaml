@@ -42,7 +42,7 @@ spec:
         - -keyout
         - key.pem
         - -subj
-        - /CN=dra.epc
+        - /CN=dra.ims
         workingDir: /var/dra
         volumeMounts:
         - name: cert
@@ -50,7 +50,6 @@ spec:
       containers:
       - name: {{ .Chart.Name }}
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
         - name: control
           containerPort: {{ .Values.service.port }}
