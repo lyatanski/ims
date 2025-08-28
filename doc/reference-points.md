@@ -11,11 +11,11 @@ SIP between CSCFs
 
 ## Cx
 Diameter between I-CSCF/S-CSCF and HSS
-- 300 User-Authorization-Request/Answer (from I-CSCF)
-- 303 Multimedia-Auth-Request/Answer (from S-CSCF)
-- 301 Server-Assignment-Request/Answer (from S-CSCF)
-- 302 Location-Info-Request/Answer (from I-CSCF)
-- 304 Registration-Termination-Request/Answer (from S-CSCF)
+- 300 User-Authorization-Request/Answer (from I-CSCF to HSS)
+- 303 Multimedia-Auth-Request/Answer (from S-CSCF to HSS)
+- 301 Server-Assignment-Request/Answer (from S-CSCF to HSS)
+- 302 Location-Info-Request/Answer (from I-CSCF to HSS)
+- 304 Registration-Termination-Request/Answer (from HSS to S-CSCF)
 - 305 Push-Profile-Request/Answer (from HSS to S-CSCF)
 
 ### Serving CSCF
