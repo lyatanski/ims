@@ -11,12 +11,12 @@ SIP between CSCFs
 
 ## Cx
 Diameter between I-CSCF/S-CSCF and HSS
-- User-Authorization-Request/Answer (from I-CSCF)
-- Multimedia-Auth-Request/Answer (from S-CSCF)
-- Server-Assignment-Request/Answer (from S-CSCF)
-- Location-Info-Request/Answer (from I-CSCF)
-- Registration-Termination-Request/Answer (from S-CSCF)
-- Push-Profile-Request/Answer (from HSS to S-CSCF)
+- 300 User-Authorization-Request/Answer (from I-CSCF)
+- 303 Multimedia-Auth-Request/Answer (from S-CSCF)
+- 301 Server-Assignment-Request/Answer (from S-CSCF)
+- 302 Location-Info-Request/Answer (from I-CSCF)
+- 304 Registration-Termination-Request/Answer (from S-CSCF)
+- 305 Push-Profile-Request/Answer (from HSS to S-CSCF)
 
 ### Serving CSCF
 Serving CSCF can verify received data on Cx interface. This is done by the forwarding module for ISC interface.
@@ -33,8 +33,8 @@ The Cx message could be sent to the DRA and the DRA will route it to the correct
 
 ## Rx
 Diameter between P-CSCF and PCRF
-- AA-Request/Answer
-- Session-Termination-Request/Answer
+- 265 AA-Request/Answer
+- 275 Session-Termination-Request/Answer
 
 
 ## ISC (IMS Service Control)
@@ -43,3 +43,4 @@ SIP between S-CSCF and AS (Application Server). Example AS SMSC
 
 ## Ro/Rf
 Diameter between S-CSCF and OCS
+- 272 Credit-Control-Request/Answer
