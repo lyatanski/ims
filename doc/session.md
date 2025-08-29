@@ -1,6 +1,6 @@
 ```mermaid
 ---
-title: Invite
+title: Session Control
 ---
 sequenceDiagram
     UE1->>P-CSCF: SIP - INVITE

@@ -54,9 +54,14 @@ The image should contain basic freeDiameter daemon build.
 
 
 ## [CGRateS](https://github.com/cgrates/cgrates) (billing)
-It seem there are not any prebuild options so build from source will be the
-approach to be taken. This will allow creation of distroless image with only
-the necessary binary in it. For detailed build instructions, please check
-the Dockerfile for its creation.
+There are some prebuilt images described in the official [documentation](https://cgrates.readthedocs.io/en/latest/installation.html#pull-docker-images)
+```
+dkr.cgrates.org/master/cgr-engine
+dkr.cgrates.org/master/cgr-loader
+dkr.cgrates.org/master/cgr-migrator
+dkr.cgrates.org/master/cgr-console
+dkr.cgrates.org/master/cgr-tester
+```
+For detailed build instructions, the Dockerfile in this repo could be used.
 
 
