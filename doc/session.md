@@ -7,7 +7,7 @@ sequenceDiagram
     P-CSCF->>S-CSCF: SIP - INVITE
     S-CSCF->>OCS: initial CCR
     OCS->>S-CSCF: initial CCA
-    Note over S-CSCF: TS 23.228 5.5.2\n The Serving-CSCF handling session origination performs an analysis of the destination address\n and forwards the request to the Interrogating-CSCF for the terminating user.\n It could be local I-CSCF, if a subscriber of the same operator, or\n an inter-operator message to the I-CSCF entry point.
+    Note over S-CSCF: TS 23.228 5.5.2<br>The Serving-CSCF handling session origination performs an analysis of the destination address<br>and forwards the request to the Interrogating-CSCF for the terminating user.<br>It could be local I-CSCF, if a subscriber of the same operator, or<br>I-CSCF entry point of other operator.
     S-CSCF->>I-CSCF: SIP - INVITE
     I-CSCF->>HSS: LIR
     HSS->>I-CSCF: LIA
