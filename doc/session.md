@@ -5,13 +5,15 @@ title: Session Control
 sequenceDiagram
     UE1->>P-CSCF: SIP - INVITE
     P-CSCF->>S-CSCF: SIP - INVITE
-    S-CSCF->>OCS: initial CCR
-    OCS->>S-CSCF: initial CCA
+    S-CSCF->>OCS: initial orig CCR
+    OCS->>S-CSCF: initial orig CCA
     Note over S-CSCF: TS 23.228 5.5.2<br>The Serving-CSCF handling session origination performs an analysis of the destination address<br>and forwards the request to the Interrogating-CSCF for the terminating user.<br>It could be local I-CSCF, if a subscriber of the same operator, or<br>I-CSCF entry point of other operator.
     S-CSCF->>I-CSCF: SIP - INVITE
     I-CSCF->>HSS: LIR
     HSS->>I-CSCF: LIA
     I-CSCF->>S-CSCF: SIP - INVITE
+    S-CSCF->>OCS: initial term CCR
+    OCS->>S-CSCF: initial term CCA
     S-CSCF->>P-CSCF: SIP - INVITE
     P-CSCF->>UE2: SIP - INVITE
     alt
