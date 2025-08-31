@@ -7,7 +7,11 @@ sequenceDiagram
     P-CSCF->>S-CSCF: SIP - INVITE
     S-CSCF->>OCS: initial CCR
     OCS->>S-CSCF: initial CCA
-    Note over S-CSCF: rewrite request URI to registered address
+    Note over S-CSCF: TS 23.228 5.5.2 The Serving-CSCF handling session origination performs an analysis of the destination address and if it determines that it belongs to a subscriber of the same operator, the request is therefore forwarded to a local I-CSCF. Otherwise the request is forwarded to to the I-CSCF entry point for the terminating user.
+    S-CSCF->>I-CSCF: SIP - INVITE
+    I-CSCF->>HSS: LIR
+    HSS->>I-CSCF: LIA
+    I-CSCF->>S-CSCF: SIP - INVITE
     S-CSCF->>P-CSCF: SIP - INVITE
     P-CSCF->>UE2: SIP - INVITE
     alt

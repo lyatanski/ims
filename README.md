@@ -39,8 +39,9 @@ To observe the packets
 
 
 ## Transactions
-- [registration](doc/registration.md)
-- [invite](doc/invite.md)
+- [Registration](doc/registration.md)
+- [Session Control](doc/session.md)
+- [Transaction](doc/transaction.md)
 
 
 ## Components
