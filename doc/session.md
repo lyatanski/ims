@@ -24,26 +24,28 @@ sequenceDiagram
         S-CSCF->>P-CSCF: SIP - CANCEL
         P-CSCF->>UE2: SIP - CANCEL
     else
-        UE2->>P-CSCF: SIP 183 - Session Progress
-        P-CSCF->>S-CSCF: SIP 183 - Session Progress
-        S-CSCF->>I-CSCF: SIP 183 - Session Progress
-        I-CSCF->>S-CSCF: SIP 183 - Session Progress
-        S-CSCF->>P-CSCF: SIP 183 - Session Progress
-        P-CSCF->>UE1: SIP 183 - Session Progress
-        P-CSCF->>PCRF: AAR
-        PCRF->>P-CSCF: AAA
-        UE1->>P-CSCF: SIP - PRACK
-        P-CSCF->>S-CSCF: SIP - PRACK
-        S-CSCF->>I-CSCF: SIP - PRACK
-        I-CSCF->>S-CSCF: SIP - PRACK
-        S-CSCF->>P-CSCF: SIP - PRACK
-        P-CSCF->>UE2: SIP - PRACK
-        UE2->>P-CSCF: SIP 200 - OK (PRACK)
-        P-CSCF->>S-CSCF: SIP 200 - OK (PRACK)
-        S-CSCF->>I-CSCF: SIP 200 - OK (PRACK)
-        I-CSCF->>S-CSCF: SIP 200 - OK (PRACK)
-        S-CSCF->>P-CSCF: SIP 200 - OK (PRACK)
-        P-CSCF->>UE1: SIP 200 - OK (PRACK)
+        opt Early Media
+            UE2->>P-CSCF: SIP 183 - Session Progress
+            P-CSCF->>S-CSCF: SIP 183 - Session Progress
+            S-CSCF->>I-CSCF: SIP 183 - Session Progress
+            I-CSCF->>S-CSCF: SIP 183 - Session Progress
+            S-CSCF->>P-CSCF: SIP 183 - Session Progress
+            P-CSCF->>UE1: SIP 183 - Session Progress
+            P-CSCF->>PCRF: Diameter - AA-Request (AAR)
+            PCRF->>P-CSCF: Diameter - AA-Answer (AAA)
+            UE1->>P-CSCF: SIP - PRACK
+            P-CSCF->>S-CSCF: SIP - PRACK
+            S-CSCF->>I-CSCF: SIP - PRACK
+            I-CSCF->>S-CSCF: SIP - PRACK
+            S-CSCF->>P-CSCF: SIP - PRACK
+            P-CSCF->>UE2: SIP - PRACK
+            UE2->>P-CSCF: SIP 200 - OK (PRACK)
+            P-CSCF->>S-CSCF: SIP 200 - OK (PRACK)
+            S-CSCF->>I-CSCF: SIP 200 - OK (PRACK)
+            I-CSCF->>S-CSCF: SIP 200 - OK (PRACK)
+            S-CSCF->>P-CSCF: SIP 200 - OK (PRACK)
+            P-CSCF->>UE1: SIP 200 - OK (PRACK)
+        end
 
         UE2->>P-CSCF: SIP 180 - Ringing
         P-CSCF->>S-CSCF: SIP 180 - Ringing
@@ -91,39 +93,39 @@ sequenceDiagram
 
         alt
             S-CSCF->>P-CSCF: BYE
-            P-CSCF->>PCRF: STR
-            PCRF->>P-CSCF: STA
+            P-CSCF->>PCRF: Diameter - Session-Termination-Request (STR)
+            PCRF->>P-CSCF: Diameter - Session-Termination-Answer (STA)
             P-CSCF->>UE1: BYE
             UE1->>P-CSCF: OK (BYE)
             P-CSCF->>S-CSCF: OK (BYE)
             S-CSCF->>P-CSCF: BYE
-            P-CSCF->>PCRF: STR
-            PCRF->>P-CSCF: STA
+            P-CSCF->>PCRF: Diameter - Session-Termination-Request (STR)
+            PCRF->>P-CSCF: Diameter - Session-Termination-Answer (STA)
             P-CSCF->>UE2: BYE
             UE2->>P-CSCF: OK (BYE)
             P-CSCF->>S-CSCF: OK (BYE)
         else
             UE1->>P-CSCF: BYE
-            P-CSCF->>PCRF: STR
-            PCRF->>P-CSCF: STA
+            P-CSCF->>PCRF: Diameter - Session-Termination-Request (STR)
+            PCRF->>P-CSCF: Diameter - Session-Termination-Answer (STA)
             P-CSCF->>S-CSCF: BYE
             S-CSCF->>P-CSCF: BYE
             P-CSCF->>UE2: BYE
             UE2->>P-CSCF: OK (BYE)
-            P-CSCF->>PCRF: STR
-            PCRF->>P-CSCF: STA
+            P-CSCF->>PCRF: Diameter - Session-Termination-Request (STR)
+            PCRF->>P-CSCF: Diameter - Session-Termination-Answer (STA)
             P-CSCF->>S-CSCF: OK (BYE)
             S-CSCF->>P-CSCF: OK (BYE)
             P-CSCF->>UE1: OK (BYE)
         else
             UE2->>P-CSCF: BYE
-            P-CSCF->>PCRF: STR
-            PCRF->>P-CSCF: STA
+            P-CSCF->>PCRF: Diameter - Session-Termination-Request (STR)
+            PCRF->>P-CSCF: Diameter - Session-Termination-Answer (STA)
             P-CSCF->>S-CSCF: BYE
             S-CSCF->>P-CSCF: BYE
             P-CSCF->>UE1: BYE
-            P-CSCF->>PCRF: STR
-            PCRF->>P-CSCF: STA
+            P-CSCF->>PCRF: Diameter - Session-Termination-Request (STR)
+            PCRF->>P-CSCF: Diameter - Session-Termination-Answer (STA)
             UE1->>P-CSCF: OK (BYE)
             P-CSCF->>S-CSCF: OK (BYE)
             S-CSCF->>P-CSCF: OK (BYE)
@@ -133,3 +135,8 @@ sequenceDiagram
         OCS->>S-CSCF: final CCA
     end
 ```
+
+
+Questions:
+- What analysis does the S-CSCF perform to determine and discover the correct I-CSCF
+  when forwarding requests?
