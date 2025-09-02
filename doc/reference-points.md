@@ -30,6 +30,15 @@ will reply with Diameter Redirect and the request should be sent over Cx to the
 particular HSS. This mechanism could be replaced by DRA (Diameter Routing Agent).
 The Cx message could be sent to the DRA and the DRA will route it to the correct HSS.
 
+TS 23.228 5.8.1 User identity to HSS resolution
+This clause describes the resolution mechanism, which enables the I-CSCF, the S-CSCF and the AS to find the address
+of the HSS, that holds the subscriber data for a given user identity when multiple and separately addressable HSSs have
+been deployed by the network operator. This resolution mechanism is implemented using a Subscription Locator
+Function (SLF) or a Diameter Proxy Agent that proxies the request to the HSS. This resolution mechanism is not
+required in networks that utilise a single HSS e.g. optionally, it could be switched off on the I-CSCF and on the S-CSCF
+and/or on the AS using O&M mechanisms. An example for a single HSS solution is a server farm architecture. By
+default, the resolution mechanism shall be supported.
+
 
 ## Rx
 Diameter between P-CSCF and PCRF
