@@ -19,6 +19,8 @@ sequenceDiagram
     alt
         UE1->>P-CSCF: SIP - CANCEL
         P-CSCF->>S-CSCF: SIP - CANCEL
+        S-CSCF->>I-CSCF: SIP - CANCEL
+        I-CSCF->>S-CSCF: SIP - CANCEL
         S-CSCF->>P-CSCF: SIP - CANCEL
         P-CSCF->>UE2: SIP - CANCEL
     else
