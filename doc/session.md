@@ -5,15 +5,15 @@ title: Session Control
 sequenceDiagram
     UE1->>P-CSCF: SIP - INVITE
     P-CSCF->>S-CSCF: SIP - INVITE
-    S-CSCF->>OCS: initial orig CCR
-    OCS->>S-CSCF: initial orig CCA
+    S-CSCF->>OCS: Diameter - initial orig Credit-Control-Request (CCR)
+    OCS->>S-CSCF: Diameter - initial orig Credit-Control-Answer (CCA)
     Note over S-CSCF: TS 23.228 5.5.2<br>The Serving-CSCF handling session origination performs an analysis of the destination address<br>and forwards the request to the Interrogating-CSCF for the terminating user.<br>It could be local I-CSCF, if a subscriber of the same operator, or<br>I-CSCF entry point of other operator.
     S-CSCF->>I-CSCF: SIP - INVITE
     I-CSCF->>HSS: Diameter - Location-Info-Request (LIR)
     HSS->>I-CSCF: Diameter - Location-Info-Answer (LIA)
     I-CSCF->>S-CSCF: SIP - INVITE
-    S-CSCF->>OCS: initial term CCR
-    OCS->>S-CSCF: initial term CCA
+    S-CSCF->>OCS: Diameter - initial term Credit-Control-Request (CCR)
+    OCS->>S-CSCF: Diameter - initial term Credit-Control-Answer (CCA)
     S-CSCF->>P-CSCF: SIP - INVITE
     P-CSCF->>UE2: SIP - INVITE
     alt
@@ -87,8 +87,8 @@ sequenceDiagram
         P-CSCF->>UE1: SIP 200 - OK (ACK)
 
         loop Every 30s
-            S-CSCF->>OCS: CCR
-            OCS->>S-CSCF: CCA
+            S-CSCF->>OCS: Diameter - Credit-Control-Request (CCR)
+            OCS->>S-CSCF: Diameter - Credit-Control-Answer (CCA)
         end
 
         alt
@@ -131,8 +131,8 @@ sequenceDiagram
             S-CSCF->>P-CSCF: OK (BYE)
             P-CSCF->>UE2: OK (BYE)
         end
-        S-CSCF->>OCS: final CCR
-        OCS->>S-CSCF: final CCA
+        S-CSCF->>OCS: Diameter - final Credit-Control-Request (CCR)
+        OCS->>S-CSCF: Diameter - final Credit-Control-Answer (CCA)
     end
 ```
 
@@ -140,3 +140,4 @@ sequenceDiagram
 Questions:
 - What analysis does the S-CSCF perform to determine and discover the correct I-CSCF
   when forwarding requests?
+- How the OCS distinguishes originating from terminating Credit-Control-Request (CCR)?
