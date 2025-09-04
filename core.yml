@@ -3,7 +3,7 @@ services:
     image: ghcr.io/lyatanski/freediameter
     configs:
     - source: dra.conf
-      target: /etc/dra.conf
+      target: /etc/freeDiameter/dra.conf
     volumes:
     - cert-dra:/var/dra
     expose:
