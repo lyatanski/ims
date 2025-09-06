@@ -1,6 +1,42 @@
 # IMS
 IP Multimedia Subsystem
 
+```mermaid
+---
+title: Architecture
+---
+architecture-beta
+
+    service test(server)[test]
+    service smf(server)[SMF]
+    service upf(server)[UPF]
+    service hss(server)[HSS]
+    service pcrf(server)[PCRF]
+    service pcscf(server)[PCSCF]
+    service icscf(server)[ICSCF]
+    service scscf(server)[SCSCF]
+    service rtp(server)[rtpengine]
+    service ocs(server)[OCS]
+    junction Mw
+    junction Cx
+
+    test:R -- L:smf
+    test:R -- L:upf
+    smf:B -- T:upf
+    smf:R -- L:pcrf
+    pcrf:B -- T:pcscf
+    upf:R -- L:pcscf
+    upf:B -- L:rtp
+    icscf:R -- B:Cx
+    scscf:T -- B:Cx
+    hss:B -- T:Cx
+    scscf:R -- L:ocs
+    pcscf:R -- L:Mw
+    icscf:B -- T:Mw
+    scscf:L -- R:Mw
+    scscf:B -- R:rtp
+```
+
 Why another setup:
 - use modern compose features (like interpolation) for simplicity
 - create helm charts for Kubernetes installation
