@@ -15,8 +15,8 @@ spec:
     {{- end }}
     app.kubernetes.io/name: {{ template "coredns.name" . }}
     {{- end }}
-  {{- if .Values.service.clusterIP }}
-  clusterIP: {{ .Values.service.clusterIP }}
+  {{- if .Values.service.spec.clusterIP }}
+  clusterIP: {{ .Values.service.spec.clusterIP }}
   {{- end }}
   {{- if .Values.service.clusterIPs }}
   clusterIPs:

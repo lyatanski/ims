@@ -16,12 +16,12 @@ data:
         prometheus :9153
         template IN SRV {
             match "(?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
-            answer "{{`{{ .Name }} 1D SRV 0 0 5060 ims-{{ or .Group.name \"icscf\" }}`}}.{{ Release.Namespace }}.svc.cluster.local"
+            answer "{{`{{ .Name }} 1D SRV 0 0 5060 ims-{{ or .Group.name \"icscf\" }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
             fallthrough
         }
         template IN ANY {
             match "(^|[.])(?P<name>[^.]*).*\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
-            answer "{{`{{ .Name }} 1D IN CNAME ims-{{ .Group.name }}`}}.{{ Release.Namespace }}.svc.cluster.local"
+            answer "{{`{{ .Name }} 1D IN CNAME ims-{{ .Group.name }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
             fallthrough
         }
         forward . /etc/resolv.conf
