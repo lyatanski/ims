@@ -142,8 +142,8 @@ sequenceDiagram
     end
 ```
 
-### Precondition
-[RFC 3312](https://www.rfc-editor.org/rfc/rfc3312.html)
+### precondition [RFC 3312](https://www.rfc-editor.org/rfc/rfc3312.html)
+SIP:
 ```
 Require: precondition
 ```
@@ -153,10 +153,10 @@ Supported: precondition
 ```
 SDP:
 ```
-a=curr:qos local none
-a=curr:qos remote none
 a=des:qos mandatory local sendrecv
-a=des:qos mandatory remote sendrecv
+a=curr:qos local none
+a=des:qos optional remote sendrecv
+a=curr:qos remote none
 ```
 
 
