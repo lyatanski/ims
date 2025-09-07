@@ -142,14 +142,15 @@ sequenceDiagram
     end
 ```
 
-### precondition [RFC 3312](https://www.rfc-editor.org/rfc/rfc3312.html)
+### precondition [RFC 3312](https://www.rfc-editor.org/rfc/rfc3312.html) 100rel [RFC 3262](https://www.rfc-editor.org/rfc/rfc3262.html)
 SIP:
+TS 24.229
+Upon generating an initial INVITE request using the precondition mechanism, the UE shall:
+- indicate the support for reliable provisional responses and specify it using the Supported header field; and
+- indicate the support for the preconditions mechanism and specify it using the *Supported* header field,
+The UE shall not indicate the requirement for the precondition mechanism by using the Require header field.
 ```
-Require: precondition
-```
-or
-```
-Supported: precondition
+Supported: 100rel,precondition
 ```
 SDP:
 ```
