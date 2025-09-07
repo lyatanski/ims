@@ -19,7 +19,7 @@ architecture-beta
     service ocs(server)[OCS]
     junction Mw
 
-    test:R -- L:smf
+    test:T -- L:smf
     test:R -- L:upf
     smf:B -- T:upf
     smf:R -- L:pcrf
