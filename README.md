@@ -18,7 +18,6 @@ architecture-beta
     service rtp(server)[rtpengine]
     service ocs(server)[OCS]
     junction Mw
-    junction Cx
 
     test:R -- L:smf
     test:R -- L:upf
@@ -27,9 +26,8 @@ architecture-beta
     pcrf:B -- T:pcscf
     upf:R -- L:pcscf
     upf:B -- L:rtp
-    icscf:R -- B:Cx
-    scscf:T -- B:Cx
-    hss:B -- T:Cx
+    icscf:R -- L:hss
+    scscf:T -- B:hss
     scscf:R -- L:ocs
     pcscf:R -- L:Mw
     icscf:B -- T:Mw
