@@ -4,6 +4,8 @@ title: Session Control
 ---
 sequenceDiagram
     UE1->>P-CSCF: SIP - INVITE
+    P-CSCF->>PCRF: Diameter - AA-Request (AAR)
+    PCRF->>P-CSCF: Diameter - AA-Answer (AAA)
     P-CSCF->>S-CSCF: SIP - INVITE
     S-CSCF->>OCS: Diameter - initial orig Credit-Control-Request (CCR)
     OCS->>S-CSCF: Diameter - initial orig Credit-Control-Answer (CCA)
@@ -24,15 +26,36 @@ sequenceDiagram
         S-CSCF->>P-CSCF: SIP - CANCEL
         P-CSCF->>UE2: SIP - CANCEL
     else
-        opt Early Media
+        opt precondition
             UE2->>P-CSCF: SIP 183 - Session Progress
             P-CSCF->>S-CSCF: SIP 183 - Session Progress
             S-CSCF->>I-CSCF: SIP 183 - Session Progress
             I-CSCF->>S-CSCF: SIP 183 - Session Progress
             S-CSCF->>P-CSCF: SIP 183 - Session Progress
             P-CSCF->>UE1: SIP 183 - Session Progress
-            P-CSCF->>PCRF: Diameter - AA-Request (AAR)
-            PCRF->>P-CSCF: Diameter - AA-Answer (AAA)
+            opt 100rel
+                UE1->>P-CSCF: SIP - PRACK
+                P-CSCF->>S-CSCF: SIP - PRACK
+                S-CSCF->>I-CSCF: SIP - PRACK
+                I-CSCF->>S-CSCF: SIP - PRACK
+                S-CSCF->>P-CSCF: SIP - PRACK
+                P-CSCF->>UE2: SIP - PRACK
+                UE2->>P-CSCF: SIP 200 - OK (PRACK)
+                P-CSCF->>S-CSCF: SIP 200 - OK (PRACK)
+                S-CSCF->>I-CSCF: SIP 200 - OK (PRACK)
+                I-CSCF->>S-CSCF: SIP 200 - OK (PRACK)
+                S-CSCF->>P-CSCF: SIP 200 - OK (PRACK)
+                P-CSCF->>UE1: SIP 200 - OK (PRACK)
+            end
+        end
+
+        UE2->>P-CSCF: SIP 180 - Ringing
+        P-CSCF->>S-CSCF: SIP 180 - Ringing
+        S-CSCF->>I-CSCF: SIP 180 - Ringing
+        I-CSCF->>S-CSCF: SIP 180 - Ringing
+        S-CSCF->>P-CSCF: SIP 180 - Ringing
+        P-CSCF->>UE1: SIP 180 - Ringing
+        opt 100rel
             UE1->>P-CSCF: SIP - PRACK
             P-CSCF->>S-CSCF: SIP - PRACK
             S-CSCF->>I-CSCF: SIP - PRACK
@@ -47,26 +70,9 @@ sequenceDiagram
             P-CSCF->>UE1: SIP 200 - OK (PRACK)
         end
 
-        UE2->>P-CSCF: SIP 180 - Ringing
-        P-CSCF->>S-CSCF: SIP 180 - Ringing
-        S-CSCF->>I-CSCF: SIP 180 - Ringing
-        I-CSCF->>S-CSCF: SIP 180 - Ringing
-        S-CSCF->>P-CSCF: SIP 180 - Ringing
-        P-CSCF->>UE1: SIP 180 - Ringing
-        UE1->>P-CSCF: SIP - PRACK
-        P-CSCF->>S-CSCF: SIP - PRACK
-        S-CSCF->>I-CSCF: SIP - PRACK
-        I-CSCF->>S-CSCF: SIP - PRACK
-        S-CSCF->>P-CSCF: SIP - PRACK
-        P-CSCF->>UE2: SIP - PRACK
-        UE2->>P-CSCF: SIP 200 - OK (PRACK)
-        P-CSCF->>S-CSCF: SIP 200 - OK (PRACK)
-        S-CSCF->>I-CSCF: SIP 200 - OK (PRACK)
-        I-CSCF->>S-CSCF: SIP 200 - OK (PRACK)
-        S-CSCF->>P-CSCF: SIP 200 - OK (PRACK)
-        P-CSCF->>UE1: SIP 200 - OK (PRACK)
-
         UE2->>P-CSCF: SIP 200 - OK (INVITE)
+        P-CSCF->>PCRF: Diameter - AA-Request (AAR)
+        PCRF->>P-CSCF: Diameter - AA-Answer (AAA)
         P-CSCF->>S-CSCF: SIP 200 - OK (INVITE)
         S-CSCF->>I-CSCF: SIP 200 - OK (INVITE)
         I-CSCF->>S-CSCF: SIP 200 - OK (INVITE)
@@ -136,8 +142,26 @@ sequenceDiagram
     end
 ```
 
+### precondition [RFC 3312](https://www.rfc-editor.org/rfc/rfc3312.html) 100rel [RFC 3262](https://www.rfc-editor.org/rfc/rfc3262.html)
+SIP:
+TS 24.229
+Upon generating an initial INVITE request using the precondition mechanism, the UE shall:
+- indicate the support for reliable provisional responses and specify it using the Supported header field; and
+- indicate the support for the preconditions mechanism and specify it using the *Supported* header field,
+The UE shall not indicate the requirement for the precondition mechanism by using the Require header field.
+```
+Supported: 100rel,precondition
+```
+SDP:
+```
+a=des:qos mandatory local sendrecv
+a=curr:qos local none
+a=des:qos optional remote sendrecv
+a=curr:qos remote none
+```
 
-Questions:
+
+### Questions:
 - What analysis does the S-CSCF perform to determine and discover the correct I-CSCF
   when forwarding requests?
 - How the OCS distinguishes originating from terminating Credit-Control-Request (CCR)?
