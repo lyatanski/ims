@@ -66,3 +66,55 @@ sequenceDiagram
     P-CSCF->>S-CSCF: SIP 200 - OK
 ```
 
+
+```mermaid
+---
+title: Un-Subscribe
+config:
+  mirrorActors: false
+---
+sequenceDiagram
+    UE->>P-CSCF: SIP - SUBSCRIBE (Expires: 0) 
+    P-CSCF->>S-CSCF: SIP - SUBSCRIBE (Expires: 0) 
+    S-CSCF->>P-CSCF: SIP 200 - OK
+    P-CSCF->>UE: SIP 200 - OK
+```
+
+
+```mermaid
+---
+title: De-Registration
+config:
+  mirrorActors: false
+---
+sequenceDiagram
+    UE->>P-CSCF: SIP - REGISTER (Expires: 0)
+    P-CSCF->>I-CSCF: SIP - REGISTER (Expires: 0)
+    I-CSCF->>S-CSCF: REGISTER (Expires: 0)
+    S-CSCF->>HSS: Diameter - Server-Assignment-Request
+    HSS->>S-CSCF: Diameter - Server-Assignment-Answer
+    S-CSCF->>I-CSCF: SIP 200 - OK
+    I-CSCF->>P-CSCF: SIP 200 - OK
+    P-CSCF->>UE: SIP 200 - OK
+    opt reg subscription
+        S-CSCF->>P-CSCF: SIP - NOTIFY (unregistered)
+        P-CSCF->>UE: SIP - NOTIFY (unregistered)
+        UE->>P-CSCF: SIP 200 - OK
+        P-CSCF->>S-CSCF: SIP 200 - OK
+    end
+```
+
+
+```mermaid
+---
+title: Network-initiated De-Registration
+config:
+  mirrorActors: false
+---
+sequenceDiagram
+    S-CSCF->>P-CSCF: SIP - NOTIFY (deactivated)
+    P-CSCF->>UE: SIP - NOTIFY (deactivated)
+    UE->>P-CSCF: SIP 200 - OK
+    P-CSCF->>S-CSCF: SIP 200 - OK
+```
+
