@@ -4,19 +4,24 @@ title: Session Control
 ---
 sequenceDiagram
     UE1->>P-CSCF: SIP - INVITE
+    P-CSCF->>UE1: SIP 100 - Trying
     P-CSCF->>PCRF: Diameter - AA-Request (AAR)
     PCRF->>P-CSCF: Diameter - AA-Answer (AAA)
     P-CSCF->>S-CSCF: SIP - INVITE
+    S-CSCF->>P-CSCF: SIP 100 - Trying
     S-CSCF->>OCS: Diameter - initial orig Credit-Control-Request (CCR)
     OCS->>S-CSCF: Diameter - initial orig Credit-Control-Answer (CCA)
     Note over S-CSCF: TS 23.228 5.5.2<br>The Serving-CSCF handling session origination performs an analysis of the destination address<br>and forwards the request to the Interrogating-CSCF for the terminating user.<br>It could be local I-CSCF, if a subscriber of the same operator, or<br>I-CSCF entry point of other operator.
     S-CSCF->>I-CSCF: SIP - INVITE
+    I-CSCF->>S-CSCF: SIP 100 - Trying
     I-CSCF->>HSS: Diameter - Location-Info-Request (LIR)
     HSS->>I-CSCF: Diameter - Location-Info-Answer (LIA)
     I-CSCF->>S-CSCF: SIP - INVITE
+    S-CSCF->>I-CSCF: SIP 100 - Trying
     S-CSCF->>OCS: Diameter - initial term Credit-Control-Request (CCR)
     OCS->>S-CSCF: Diameter - initial term Credit-Control-Answer (CCA)
     S-CSCF->>P-CSCF: SIP - INVITE
+    P-CSCF->>S-CSCF: SIP 100 - Trying
     P-CSCF->>UE2: SIP - INVITE
     alt
         UE1->>P-CSCF: SIP - CANCEL
@@ -85,12 +90,6 @@ sequenceDiagram
         I-CSCF->>S-CSCF: SIP - ACK
         S-CSCF->>P-CSCF: SIP - ACK
         P-CSCF->>UE2: SIP - ACK
-        UE2->>P-CSCF: SIP 200 - OK (ACK)
-        P-CSCF->>S-CSCF: SIP 200 - OK (ACK)
-        S-CSCF->>I-CSCF: SIP 200 - OK (ACK)
-        I-CSCF->>S-CSCF: SIP 200 - OK (ACK)
-        S-CSCF->>P-CSCF: SIP 200 - OK (ACK)
-        P-CSCF->>UE1: SIP 200 - OK (ACK)
 
         loop Every 30s
             S-CSCF->>OCS: Diameter - Credit-Control-Request (CCR)
