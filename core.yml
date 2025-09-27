@@ -160,6 +160,7 @@ services:
     network_mode: service:upf
     cap_add:
     - NET_ADMIN
+    restart: on-failure
 
   mongo:
     image: mongo:8.0
