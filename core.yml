@@ -146,6 +146,7 @@ services:
     - /dev/net/tun
     cap_add:
     - NET_ADMIN
+    restart: unless-stopped
 
   upftun:
     image: alpine
