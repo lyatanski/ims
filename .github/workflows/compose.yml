@@ -32,6 +32,13 @@ jobs:
       run: docker compose --profile test logs
       if: always()
 
+    - name: Trace
+      uses: actions/upload-artifact@v4
+      with:
+        name: trace
+        path: README.md
+      if: always()
+
     - name: Tear Down
       run: docker compose --profile test down --volumes
       if: always()
