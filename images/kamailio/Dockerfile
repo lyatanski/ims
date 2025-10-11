@@ -46,7 +46,7 @@ RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
     && cmake --build /out --target install
 
 FROM alpine:latest
-RUN apk add libxml2 hiredis libmnl libcurl libevent
+RUN apk add libxml2 hiredis libmnl libcurl libevent openssl
 # nghttp2-libs
 COPY --from=build /usr/local/sbin/kamailio /sbin/
 COPY --from=build \
