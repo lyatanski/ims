@@ -143,6 +143,19 @@ services:
       scscf:
         condition: service_healthy
 
+  pcap:
+    profiles:
+    - debug
+    network_mode: host
+    command: tcpdump -i any -w /pcap/trace.pcap
+    volumes:
+    - ./pcap:/pcap
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine
+        RUN apk add tcpdump
+
 
 configs:
   pcscf.xml:

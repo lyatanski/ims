@@ -19,26 +19,26 @@ jobs:
         sudo apt install -qqy linux-modules-extra-$(uname -r)
 
     - name: Set Up
-      run: docker compose --profile test up --detach --quiet-pull
+      run: docker compose --profile test --profile debug up --detach --quiet-pull
 
     - name: Wait
-      run: docker compose --profile test wait test
+      run: docker compose --profile test --profile debug wait test
 
     - name: Check
-      run: docker compose --profile test ps --all
+      run: docker compose --profile test --profile debug ps --all
       if: always()
 
     - name: Logs
-      run: docker compose --profile test logs
+      run: docker compose --profile test --profile debug logs
       if: always()
 
     - name: Trace
       uses: actions/upload-artifact@v4
       with:
         name: trace
-        path: README.md
+        path: pcap/trace.pcap
       if: always()
 
     - name: Tear Down
-      run: docker compose --profile test down --volumes
+      run: docker compose --profile test --profile debug down --volumes
       if: always()
