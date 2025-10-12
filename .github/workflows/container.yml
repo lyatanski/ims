@@ -3,7 +3,7 @@ permissions: write-all
 on:
   push:
   schedule:
-  - cron: '0 1 * * SUN'
+  - cron: '0 1 * * WED,SUN'
 
 jobs:
   images:
@@ -64,12 +64,12 @@ jobs:
     - name: Logs
       run: docker compose --profile test --profile debug logs
       if: always()
-    - name: Trace
-      uses: actions/upload-artifact@v4
-      with:
-        name: trace
-        path: pcap/trace.pcap
-      if: always()
+#    - name: Trace
+#      uses: actions/upload-artifact@v4
+#      with:
+#        name: trace
+#        path: pcap/trace.pcap
+#      if: always()
     - name: Tear Down
       run: docker compose --profile test --profile debug down --volumes
       if: always()
