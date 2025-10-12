@@ -1,4 +1,5 @@
 name: container
+permissions: write-all
 on:
   push:
   schedule:
