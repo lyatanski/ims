@@ -1,0 +1,75 @@
+name: container
+permissions: write-all
+on:
+  push:
+  schedule:
+  - cron: '0 1 * * WED,SUN'
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        context:
+        - test
+        - kamailio
+        - rtpengine
+        - freediameter
+        - openssl
+        - open5gs
+        - cgr-console
+        - cgr-engine
+        - cgr-loader
+        - cgr-ui
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: >
+        docker build -t ghcr.io/${{ github.actor }}/${{ matrix.context }}
+        images/${{ matrix.context }}
+#    - name: Version
+#      id: get
+#      run: >
+#        docker run --rm ghcr.io/${{ github.actor }}/${{ matrix.context }} --version
+#        | sed -n "s/\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/version=\1/p"
+#        >> "$GITHUB_OUTPUT"
+#    - name: Tag
+#      run: >
+#        docker tag ghcr.io/${{ github.actor }}/${{ matrix.context }}
+#        ghcr.io/${{ github.actor }}/${{ matrix.context }}:${{ steps.get.outputs.version }}
+    - name: Login
+      run: >
+        echo "${{ secrets.GITHUB_TOKEN }}"
+        | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+    - name: Publish
+      run: docker push ghcr.io/${{ github.actor }}/${{ matrix.context }}
+
+  test:
+    needs:
+    - images
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Kmod
+      run: |
+        sudo apt update
+        sudo apt install -qy --no-install-recommends linux-modules-extra-$(uname -r)
+    - name: Set Up
+      run: docker compose --profile test --profile debug up --detach --quiet-pull
+    - name: Wait
+      run: docker compose --profile test --profile debug wait test
+    - name: Check
+      run: docker compose --profile test --profile debug ps --all
+      if: always()
+    - name: Logs
+      run: docker compose --profile test --profile debug logs
+      if: always()
+#    - name: Trace
+#      uses: actions/upload-artifact@v4
+#      with:
+#        name: trace
+#        path: pcap/trace.pcap
+#      if: always()
+    - name: Tear Down
+      run: docker compose --profile test --profile debug down --volumes
+      if: always()
