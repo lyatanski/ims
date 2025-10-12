@@ -10,17 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-        - context: test
-        - context: kamailio
-        - context: rtpengine
-        - context: freediameter
-        - context: openssl
-        - context: open5gs
-        - context: cgr-console
-        - context: cgr-engine
-        - context: cgr-loader
-        - context: cgr-ui
+        context:
+        - test
+        - kamailio
+        - rtpengine
+        - freediameter
+        - openssl
+        - open5gs
+        - cgr-console
+        - cgr-engine
+        - cgr-loader
+        - cgr-ui
     steps:
     - uses: actions/checkout@v4
     - name: Log In
