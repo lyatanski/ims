@@ -23,10 +23,6 @@ jobs:
         - cgr-ui
     steps:
     - uses: actions/checkout@v4
-    - name: Log In
-      run: >
-        echo "${{ secrets.GITHUB_TOKEN }}"
-        | docker login ghcr.io -u ${{ github.actor }} --password-stdin
     - name: Build
       run: >
         docker build -t ghcr.io/${{ github.actor }}/${{ matrix.context }}
@@ -41,6 +37,10 @@ jobs:
 #      run: >
 #        docker tag ghcr.io/${{ github.actor }}/${{ matrix.context }}
 #        ghcr.io/${{ github.actor }}/${{ matrix.context }}:${{ steps.get.outputs.version }}
+    - name: Login
+      run: >
+        echo "${{ secrets.GITHUB_TOKEN }}"
+        | docker login ghcr.io -u ${{ github.actor }} --password-stdin
     - name: Publish
       run: docker push ghcr.io/${{ github.actor }}/${{ matrix.context }}
 
