@@ -1,52 +1,52 @@
-name: images
-on:
-  schedule:
-  - cron: '0 1 * * SUN'
-  push:
-permissions: write-all
-
-jobs:
-  images:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-        - context: test
-        - context: kamailio
-        - context: rtpengine
-        - context: freediameter
-        - context: openssl
-        - context: open5gs
-        - context: cgr-console
-        - context: cgr-engine
-        - context: cgr-loader
-        - context: cgr-ui
-        #- context: cgr-migrator
-        #- context: cgr-tester
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Log In
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-    - name: Build
-      run: docker build -t ghcr.io/${{ github.actor }}/${{ matrix.context }} images/${{ matrix.context }}
-
-#    - name: Get Version
-#      id: get
-#      run: >
-#        docker run --rm ghcr.io/${{ github.actor }}/${{ matrix.context }} --version
-
-#        sed -n "s/\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/version=\1/p" >>
-#        "$GITHUB_OUTPUT"
-
-#    - name: Tag
-#      run: echo ${{ steps.get.outputs.version }}
-#      run: docker tag ghcr.io/${{ github.actor }}/cscf ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
-#        docker push ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
-
-    - name: Publish
-      run: |
-        docker push ghcr.io/${{ github.actor }}/${{ matrix.context }}
+#name: images
+#on:
+#  schedule:
+#  - cron: '0 1 * * SUN'
+#  push:
+#permissions: write-all
+#
+#jobs:
+#  images:
+#    runs-on: ubuntu-latest
+#    strategy:
+#      matrix:
+#        include:
+#        - context: test
+#        - context: kamailio
+#        - context: rtpengine
+#        - context: freediameter
+#        - context: openssl
+#        - context: open5gs
+#        - context: cgr-console
+#        - context: cgr-engine
+#        - context: cgr-loader
+#        - context: cgr-ui
+#        #- context: cgr-migrator
+#        #- context: cgr-tester
+#
+#    steps:
+#    - uses: actions/checkout@v4
+#
+#    - name: Log In
+#      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+#
+#    - name: Build
+#      run: docker build -t ghcr.io/${{ github.actor }}/${{ matrix.context }} images/${{ matrix.context }}
+#
+##    - name: Get Version
+##      id: get
+##      run: >
+##        docker run --rm ghcr.io/${{ github.actor }}/${{ matrix.context }} --version
+#
+##        sed -n "s/\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/version=\1/p" >>
+##        "$GITHUB_OUTPUT"
+#
+##    - name: Tag
+##      run: echo ${{ steps.get.outputs.version }}
+##      run: docker tag ghcr.io/${{ github.actor }}/cscf ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
+##        docker push ghcr.io/${{ github.actor }}/cscf:${{ steps.get.outputs.version }}
+#
+#    - name: Publish
+#      run: |
+#        docker push ghcr.io/${{ github.actor }}/${{ matrix.context }}
 
