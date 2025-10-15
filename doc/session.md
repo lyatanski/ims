@@ -159,6 +159,8 @@ a=des:qos optional remote sendrecv
 a=curr:qos remote none
 ```
 
+### Kamailio
+Both P-CSCF and S-CSCF must be able to distinguish between MO & MT.
 
 ### Questions:
 - What analysis does the S-CSCF perform to determine and discover the correct I-CSCF
