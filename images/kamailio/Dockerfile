@@ -12,7 +12,7 @@ RUN apk --no-cache upgrade \
         gawk \
         flex \
         openssl-dev \
-        hiredis-dev \
+        hiredis-dev hiredis-ssl \
         libevent-dev \
         libmnl-dev \
         libunistring-dev \
@@ -25,12 +25,13 @@ RUN apk --no-cache upgrade \
     && ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/ \
     && adduser -D build && addgroup build abuild \
     && echo "%abuild ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abuild
-RUN git clone --depth=1 --branch db_redis_ssl_fix https://github.com/lyatanski/kamailio.git
+RUN git clone --depth=1 https://github.com/kamailio/kamailio.git
 RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
         -D MODULE_GROUP_NAME="" \
         -D INCLUDE_MODULES="xlog debugger \
             kex siputils textops \
             pv rr sl tm \
+            sanity \
             xhttp xhttp_prom \
             db_redis db_mysql \
             cdp cdp_avp \
@@ -46,7 +47,7 @@ RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
     && cmake --build /out --target install
 
 FROM alpine:latest
-RUN apk add libxml2 hiredis libmnl libcurl libevent openssl
+RUN apk add libxml2 hiredis hiredis-ssl libmnl libcurl libevent openssl
 # nghttp2-libs
 COPY --from=build /usr/local/sbin/kamailio /sbin/
 COPY --from=build \
