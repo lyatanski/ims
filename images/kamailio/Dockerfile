@@ -31,6 +31,7 @@ RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
         -D INCLUDE_MODULES="xlog debugger \
             kex siputils textops \
             pv rr sl tm \
+            sanity \
             xhttp xhttp_prom \
             db_redis db_mysql \
             cdp cdp_avp \
