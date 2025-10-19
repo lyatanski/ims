@@ -41,6 +41,9 @@ The Kamailio `siptrace` module enables SIP message tracing and supports exportin
 - Typically requires an additional container per monitored container
 
 
+## custom eBPF powered HEP Agent?
+
+
 ## Summary Comparison
 
 | Tool | Scope | HEP-Compatible | Protocols | Deployment Overhead | Notes |
