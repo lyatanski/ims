@@ -1,12 +1,50 @@
 # Tracing
 
-There are multiple approaches for tracing the IMS flows:
+Tracing IMS (IP Multimedia Subsystem) traffic can be achieved using several approaches, each with distinct advantages and limitations.
 
 ## [tcpdump](https://www.tcpdump.org/)
-Probably the best capturing approach as it captures everything on the network. The drawback is that there need to be one tcpdump per container we need to trace. The alternative for single tcpdump is only available to compose setup and the capture size could be prohibitively large. This brings complexity and overhead to compose setup. In Kubernetes it could be slightly simpler with sidecar container. Bigger problem could pose when there is need to combine all the captures to trace single call flow.A also there is no trivial way to observe it directly in the setup live.
+**Overview:**  
+`tcpdump` provides the most complete view of network activity by capturing all packets on an interface.
 
-## [siptrace](https://kamailio.org/docs/modules/devel/modules/siptrace.html) Kamailio module
-Can it trace diameter? Also DNS and tcp 3-way handshake could be useful in troubleshooting some problems.  the benefit lie# in storage alternatives and HEP capable servers integration ([Homer](https://github.com/sipcapture/homer) for example)
+**Pros:**
+- Captures all traffic types (SIP, Diameter, DNS, TCP handshakes, etc.).  
+- Independent of application logic or protocol implementation.
+
+**Cons:**
+- Requires one capture per container, adding complexity in multi-container environments.  
+- In Docker Compose setups, a single `tcpdump` for the entire network is possible but may produce prohibitively large capture files.  
+- Combining multiple container captures into a single call flow trace can be cumbersome.  
+- Real-time observation is not straightforward.
+
+
+## [siptrace](https://kamailio.org/docs/modules/devel/modules/siptrace.html) (Kamailio module)
+**Overview:**  
+The Kamailio `siptrace` module enables SIP message tracing and supports exporting data to HEP-compatible collectors such as [Homer](https://github.com/sipcapture/homer).
+
+**Pros:**
+- Integrates easily with HEP-based monitoring tools.  
+- Offers flexible storage and retrieval options for SIP traces.
+
+**Cons:**
+- Primarily supports SIP
 
 ## [captagent](https://github.com/sipcapture/captagent)
-Again HEP compatible and respective could be integrated with Homer. Kind of middle ground. Still requires one additional container per observed container. Seems to have at least sip and diameter capabilities.
+**Overview:**  
+`captagent` acts as a HEP-compatible packet capture agent that can forward captured SIP and Diameter messages to tools like Homer.
+
+**Pros:**
+- HEP-compatible and integrates seamlessly with Homer.  
+- Supports multiple protocols (SIP, Diameter, etc.).  
+- Serves as a middle ground between full network capture (`tcpdump`) and application-level tracing (`siptrace`).
+
+**Cons:**
+- Typically requires an additional container per monitored container
+
+
+## Summary Comparison
+
+| Tool | Scope | HEP-Compatible | Protocols | Deployment Overhead | Notes |
+|------|--------|----------------|------------|----------------------|--------|
+| **tcpdump** | All network traffic | No | All | High | Comprehensive but large and complex captures |
+| **siptrace** | SIP-level | Yes | SIP | Low–Medium | Tight Kamailio integration |
+| **captagent** | Selected protocols | Yes | SIP, Diameter | Medium | Balanced approach, integrates with Homer |
