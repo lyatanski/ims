@@ -40,10 +40,14 @@ and/or on the AS using O&M mechanisms. An example for a single HSS solution is a
 default, the resolution mechanism shall be supported.
 
 
-## Rx
-Diameter between P-CSCF and PCRF
-- 265 AA-Request/Answer
-- 275 Session-Termination-Request/Answer
+## Rx/N5
+Diameter/HTTP2 between P-CSCF and PCRF/PCR
+| Rx (Diameter)                              | N5 (Npcf PolicyAuthorization) | Initiator |
+|--------------------------------------------|-------------------------------|-----------|
+| **265** AA-Request/Answer                  | **POST**   Create             | P-CSCF    |
+| **275** Session-Termination-Request/Answer | **DELETE** Delete             | P-CSCF    |
+| **285** Re-Auth-RequestAnswer              | **POST**   Notify             | PCRF/PCF  |
+| **274** Abort-Session-Request/Answer       | **POST**   Notify             | PCRF/PCF  |
 
 
 ## ISC (IMS Service Control)
