@@ -45,6 +45,7 @@ Diameter/HTTP2 between P-CSCF and PCRF/PCR
 | Rx (Diameter)                              | N5 (Npcf PolicyAuthorization)                                 | Initiator |
 |--------------------------------------------|---------------------------------------------------------------|-----------|
 | **265** AA-Request/Answer                  | **POST**   /app-sessions                                      | P-CSCF    |
+| **265** AA-Request/Answer                  | **PATCH**  /app-sessions/_{appSessionId}_                     | P-CSCF    |
 |                                            | **PUT**    /app-sessions/_{appSessionId}_/events-subscription | P-CSCF    |
 |                                            | **DELETE** /app-sessions/_{appSessionId}_/events-subscription | P-CSCF    |
 | **275** Session-Termination-Request/Answer | **POST**   /app-sessions/_{appSessionId}_/delete              | P-CSCF    |
