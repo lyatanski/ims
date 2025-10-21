@@ -9,14 +9,16 @@ SIP between PGW/UPF (technically UE) and P-CSCF
 SIP between CSCFs
 
 
-## Cx
+## Cx/N70
 Diameter between I-CSCF/S-CSCF and HSS
-- 300 User-Authorization-Request/Answer (from I-CSCF to HSS)
-- 303 Multimedia-Auth-Request/Answer (from S-CSCF to HSS)
-- 301 Server-Assignment-Request/Answer (from S-CSCF to HSS)
-- 302 Location-Info-Request/Answer (from I-CSCF to HSS)
-- 304 Registration-Termination-Request/Answer (from HSS to S-CSCF)
-- 305 Push-Profile-Request/Answer (from HSS to S-CSCF)
+| Cx (Diameter)                                   | N70 (Nhss)                                   | Initiator     |
+|-------------------------------------------------|----------------------------------------------|---------------|
+| **300** User-Authorization-Request/Answer       |                                              | I-CSCF to HSS |
+| **303** Multimedia-Auth-Request/Answer          |                                              | S-CSCF to HSS |
+| **301** Server-Assignment-Request/Answer        |                                              | S-CSCF to HSS |
+| **302** Location-Info-Request/Answer            |                                              | I-CSCF to HSS |
+| **304** Registration-Termination-Request/Answer |                                              | HSS to S-CSCF |
+| **305** Push-Profile-Request/Answer             |                                              | HSS to S-CSCF |
 
 ### Serving CSCF
 Serving CSCF can verify received data on Cx interface. This is done by the forwarding module for ISC interface.
@@ -48,7 +50,7 @@ Diameter/HTTP2 between P-CSCF and PCRF/PCR
 |                                            | **PUT**    /app-sessions/_{appSessionId}_/events-subscription         | P-CSCF    |
 |                                            | **DELETE** /app-sessions/_{appSessionId}_/events-subscription         | P-CSCF    |
 | **275** Session-Termination-Request/Answer | **POST**   /app-sessions/_{appSessionId}_/delete                      | P-CSCF    |
-| **285** Re-Auth-RequestAnswer              | **POST**   /_{notifUri}_/notify                                       | PCRF/PCF  |
+| **285** Re-Auth-Request/Answer             | **POST**   /_{notifUri}_/notify                                       | PCRF/PCF  |
 | **274** Abort-Session-Request/Answer       | **POST**   /_{notifUri}_/terminate                                    | PCRF/PCF  |
 
 
@@ -58,4 +60,6 @@ SIP between S-CSCF and AS (Application Server). Example AS SMSC
 
 ## Ro/Rf
 Diameter between S-CSCF and OCS
-- 272 Credit-Control-Request/Answer
+| Ro (Diameter)                                   | (Nchf)                                       | Initiator |
+|-------------------------------------------------|----------------------------------------------|-----------|
+| **272** Credit-Control-Request/Answer           |                                              | S-CSCF    |
