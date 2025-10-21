@@ -42,12 +42,14 @@ default, the resolution mechanism shall be supported.
 
 ## Rx/N5
 Diameter/HTTP2 between P-CSCF and PCRF/PCR
-| Rx (Diameter)                              | N5 (Npcf PolicyAuthorization) | Initiator |
-|--------------------------------------------|-------------------------------|-----------|
-| **265** AA-Request/Answer                  | **POST**   Create             | P-CSCF    |
-| **275** Session-Termination-Request/Answer | **DELETE** Delete             | P-CSCF    |
-| **285** Re-Auth-RequestAnswer              | **POST**   Notify             | PCRF/PCF  |
-| **274** Abort-Session-Request/Answer       | **POST**   Notify             | PCRF/PCF  |
+| Rx (Diameter)                              | N5 (Npcf PolicyAuthorization)                                 | Initiator |
+|--------------------------------------------|---------------------------------------------------------------|-----------|
+| **265** AA-Request/Answer                  | **POST**   /app-sessions                                      | P-CSCF    |
+|                                            | **PUT**    /app-sessions/_{appSessionId}_/events-subscription | P-CSCF    |
+|                                            | **DELETE** /app-sessions/_{appSessionId}_/events-subscription | P-CSCF    |
+| **275** Session-Termination-Request/Answer | **POST**   /app-sessions/_{appSessionId}_/delete              | P-CSCF    |
+| **285** Re-Auth-RequestAnswer              | **POST**   /_{notifUri}_/notify                               | PCRF/PCF  |
+| **274** Abort-Session-Request/Answer       | **POST**   /_{notifUri}_/terminate                            | PCRF/PCF  |
 
 
 ## ISC (IMS Service Control)
