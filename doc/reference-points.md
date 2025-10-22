@@ -11,14 +11,14 @@ SIP between CSCFs
 
 ## Cx/N70
 Diameter between I-CSCF/S-CSCF and HSS
-| Cx (Diameter)                                   | N70 (Nhss)                                   | Initiator     |
-|-------------------------------------------------|----------------------------------------------|---------------|
-| **300** User-Authorization-Request/Answer       |                                              | I-CSCF to HSS |
-| **303** Multimedia-Auth-Request/Answer          |                                              | S-CSCF to HSS |
-| **301** Server-Assignment-Request/Answer        |                                              | S-CSCF to HSS |
-| **302** Location-Info-Request/Answer            |                                              | I-CSCF to HSS |
-| **304** Registration-Termination-Request/Answer |                                              | HSS to S-CSCF |
-| **305** Push-Profile-Request/Answer             |                                              | HSS to S-CSCF |
+| Cx (Diameter)                                   | N70 (Nhss)                                                               | Initiator     |
+|-------------------------------------------------|--------------------------------------------------------------------------|---------------|
+| **300** User-Authorization-Request/Answer       | **POST** /_{impu}_/authorize (imsUECM)                                   | I-CSCF to HSS |
+| **303** Multimedia-Auth-Request/Answer          | **POST** /_{impi}_/security-information/generate-sip-auth-data (imsUEAU) | S-CSCF to HSS |
+| **301** Server-Assignment-Request/Answer        | **PUT**  /_{imsUeId}_/scscf-registration (imsUECM)                       | S-CSCF to HSS |
+| **302** Location-Info-Request/Answer            |                                                                          | I-CSCF to HSS |
+| **304** Registration-Termination-Request/Answer |                                                                          | HSS to S-CSCF |
+| **305** Push-Profile-Request/Answer             |                                                                          | HSS to S-CSCF |
 
 ### Serving CSCF
 Serving CSCF can verify received data on Cx interface. This is done by the forwarding module for ISC interface.
