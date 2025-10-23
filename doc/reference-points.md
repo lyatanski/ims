@@ -60,6 +60,6 @@ SIP between S-CSCF and AS (Application Server). Example AS SMSC
 
 ## Ro/Rf
 Diameter between S-CSCF and OCS
-| Ro (Diameter)                                   | (Nchf TS 32.291)                             | Initiator |
+| Ro (Diameter)                                   | N45 (Nchf TS 32.291)                         | Initiator |
 |-------------------------------------------------|----------------------------------------------|-----------|
 | **272** Credit-Control-Request/Answer           |                                              | S-CSCF    |
