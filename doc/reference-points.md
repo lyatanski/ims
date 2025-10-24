@@ -9,14 +9,16 @@ SIP between PGW/UPF (technically UE) and P-CSCF
 SIP between CSCFs
 
 
-## Cx
+## Cx/N70
 Diameter between I-CSCF/S-CSCF and HSS
-- 300 User-Authorization-Request/Answer (from I-CSCF to HSS)
-- 303 Multimedia-Auth-Request/Answer (from S-CSCF to HSS)
-- 301 Server-Assignment-Request/Answer (from S-CSCF to HSS)
-- 302 Location-Info-Request/Answer (from I-CSCF to HSS)
-- 304 Registration-Termination-Request/Answer (from HSS to S-CSCF)
-- 305 Push-Profile-Request/Answer (from HSS to S-CSCF)
+| Cx (Diameter)                                   | N70 (Nhss)                                                               | Initiator     |
+|-------------------------------------------------|--------------------------------------------------------------------------|---------------|
+| **300** User-Authorization-Request/Answer       | **POST** /_{impu}_/authorize (imsUECM)                                   | I-CSCF to HSS |
+| **303** Multimedia-Auth-Request/Answer          | **POST** /_{impi}_/security-information/generate-sip-auth-data (imsUEAU) | S-CSCF to HSS |
+| **301** Server-Assignment-Request/Answer        | **PUT**  /_{imsUeId}_/scscf-registration (imsUECM)                       | S-CSCF to HSS |
+| **302** Location-Info-Request/Answer            | **GET**  /{imsUeId}/ims-data/location-data/server-name (imsSDM)          | I-CSCF to HSS |
+| **304** Registration-Termination-Request/Answer |                                                                          | HSS to S-CSCF |
+| **305** Push-Profile-Request/Answer             |                                                                          | HSS to S-CSCF |
 
 ### Serving CSCF
 Serving CSCF can verify received data on Cx interface. This is done by the forwarding module for ISC interface.
@@ -40,10 +42,16 @@ and/or on the AS using O&M mechanisms. An example for a single HSS solution is a
 default, the resolution mechanism shall be supported.
 
 
-## Rx
-Diameter between P-CSCF and PCRF
-- 265 AA-Request/Answer
-- 275 Session-Termination-Request/Answer
+## Rx/N5
+Diameter/HTTP2 between P-CSCF and PCRF/PCR
+| Rx (Diameter)                              | N5 (Npcf PolicyAuthorization)                                         | Initiator |
+|--------------------------------------------|-----------------------------------------------------------------------|-----------|
+| **265** AA-Request/Answer                  | **POST**   /app-sessions<br>**PATCH**  /app-sessions/_{appSessionId}_ | P-CSCF    |
+|                                            | **PUT**    /app-sessions/_{appSessionId}_/events-subscription         | P-CSCF    |
+|                                            | **DELETE** /app-sessions/_{appSessionId}_/events-subscription         | P-CSCF    |
+| **275** Session-Termination-Request/Answer | **POST**   /app-sessions/_{appSessionId}_/delete                      | P-CSCF    |
+| **285** Re-Auth-Request/Answer             | **POST**   /_{notifUri}_/notify                                       | PCRF/PCF  |
+| **274** Abort-Session-Request/Answer       | **POST**   /_{notifUri}_/terminate                                    | PCRF/PCF  |
 
 
 ## ISC (IMS Service Control)
@@ -52,4 +60,6 @@ SIP between S-CSCF and AS (Application Server). Example AS SMSC
 
 ## Ro/Rf
 Diameter between S-CSCF and OCS
-- 272 Credit-Control-Request/Answer
+| Ro (Diameter)                                   | N45 (Nchf ConvergedCharging TS 32.291)       | Initiator |
+|-------------------------------------------------|----------------------------------------------|-----------|
+| **272** Credit-Control-Request/Answer           | **POST** /chargingdata<br>**POST** /chargingdata/_{ChargingDataRef}_/update<br>**POST** /chargingdata/-{ChargingDataRef}_/release| S-CSCF    |
