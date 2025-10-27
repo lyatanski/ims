@@ -134,3 +134,8 @@ configs:
         static_configs:
         - targets:
           - scscf:9090
+      - job_name: rtpengine
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - rtpengine:9090
