@@ -19,6 +19,3 @@ Thees should be monitored by `kamailio_ims_usrloc_scscf_active_contacts`.
   - by billing?
   - blocked?
 
-
-## RTPEngine Overview
-https://grafana.com/grafana/dashboards/22110-rtpengine-overview/
