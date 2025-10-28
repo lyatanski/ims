@@ -49,6 +49,10 @@ services:
       target: /etc/dashboards/logs.json
     - source: cadvisor.json
       target: /etc/dashboards/cadvisor.json
+    - source: ims.json
+      target: /etc/dashboards/ims.json
+    - source: rtpengine.json
+      target: /etc/dashboards/rtpengine.json
     ports:
     - 3000:3000
 
@@ -109,6 +113,12 @@ configs:
 
   cadvisor.json:
     file: dash/stat.json
+
+  ims.json:
+    file: dash/ims.json
+
+  rtpengine.json:
+    file: dash/rtp.json
 
   prometheus.yml:
     content: |
