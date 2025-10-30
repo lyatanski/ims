@@ -154,7 +154,7 @@ services:
       context: .
       dockerfile_inline: |
         FROM alpine
-        RUN wget -qO- https://github.com/mozillazg/ptcpdump/releases/download/v0.36.0/ptcpdump_0.36.0_linux_amd64.tar.gz | tar -C /sbin -xzf- ptcpdump
+        RUN wget -qO- https://github.com/mozillazg/ptcpdump/releases/download/v0.36.0/ptcpdump_0.36.0_linux_amd64.tar.gz | tar -C /bin -xzf- ptcpdump
 
 
 configs:
