@@ -21,7 +21,7 @@ services:
 
   hss:
     image: ghcr.io/lyatanski/open5gs
-    command: /opt/bin/open5gs-hssd -c /etc/hss/open5gs.yaml -t
+    command: hssd -c /etc/hss/open5gs.yaml -t
     configs:
     - source: hss.yaml
       target: /etc/hss/open5gs.yaml
@@ -85,7 +85,7 @@ services:
 
   pcrf:
     image: ghcr.io/lyatanski/open5gs
-    command: /opt/bin/open5gs-pcrfd -c /etc/pcrf/open5gs.yaml -t
+    command: pcrfd -c /etc/pcrf/open5gs.yaml -t
     configs:
     - source: pcrf.yaml
       target: /etc/pcrf/open5gs.yaml
@@ -108,7 +108,7 @@ services:
 
   smf:
     image: ghcr.io/lyatanski/open5gs
-    command: /opt/bin/open5gs-smfd -c /etc/smf/open5gs.yaml -t
+    command: smfd -c /etc/smf/open5gs.yaml -t
     configs:
     - source: smf.yaml
       target: /etc/smf/open5gs.yaml
@@ -135,7 +135,7 @@ services:
 
   upf:
     image: ghcr.io/lyatanski/open5gs
-    command: /opt/bin/open5gs-upfd -c /etc/upf/open5gs.yaml -t
+    command: upfd -c /etc/upf/open5gs.yaml -t
     configs:
     - source: upf.yaml
       target: /etc/upf/open5gs.yaml
