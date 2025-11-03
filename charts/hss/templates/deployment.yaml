@@ -22,8 +22,13 @@ spec:
         - /etc/hss/open5gs.yaml
         ports:
         - name: diameter
-          containerPort: 3868
+          containerPort: {{ .Values.port }}
           protocol: SCTP
+        {{- with .Values.metrics }}
+        - name: metrics
+          containerPort: {{ . }}
+          protocol: TCP
+        {{- end }}
         volumeMounts:
         - name: conf
           mountPath:  /etc/hss/

@@ -11,10 +11,17 @@ data:
     global:
     db_uri: mongodb://{{ .Release.Name }}-mongodb/open5gs
     hss:
+      {{- with .Values.metrics }}
+      metrics:
+        server:
+        - address: 0.0.0.0
+          port: {{ . }}
+      {{- end }}
       freeDiameter:
         identity: hss.epc
         realm: epc
         listen_on: 0.0.0.0
+        port: {{ .Values.port }}
         connect:
         - identity: icscf.ims
         load_extension:
