@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}-hss
+  name: {{ .Release.Name }}-pcrf
   labels: {{- include "open5gs.labels" . | nindent 4 }}
 spec:
   selector:
@@ -12,12 +12,12 @@ spec:
       labels: {{- include "open5gs.labels" . | nindent 8 }}
     spec:
       containers:
-      - name: hss
+      - name: pcrf
         image: ghcr.io/lyatanski/open5gs
-        args:
-        - hssd
+        args: 
+        - pcrfd
         - -c
-        - /etc/hss/open5gs.yaml
+        - /etc/pcrf/open5gs.yaml
         ports:
         - name: diameter
           containerPort: {{ .Values.port }}
@@ -29,8 +29,8 @@ spec:
         {{- end }}
         volumeMounts:
         - name: conf
-          mountPath:  /etc/hss/
+          mountPath:  /etc/pcrf
       volumes:
       - name: conf
         configMap:
-          name: {{ .Release.Name }}-hss
+          name: {{ .Release.Name }}-pcrf

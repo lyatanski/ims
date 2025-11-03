@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Release.Name }}-hss-metrics
+  name: {{ .Release.Name }}-pcrf-metrics
   labels: {{- include "open5gs.labels" . | nindent 4 }}
 spec:
   ports:
