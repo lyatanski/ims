@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-smf
+  labels: {{- include "open5gs.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "open5gs.labels" . | nindent 6 }}
+  replicas: 1
+  template:
+    metadata:
+      labels: {{- include "open5gs.labels" . | nindent 8 }}
+    spec:
+      containers:
+      - name: smf
+        image: ghcr.io/lyatanski/open5gs
+        args:
+        - smfd
+        - -c
+        - /etc/smf/open5gs.yaml
+        ports:
+        {{- with .Values.sbi }}
+        - name: sbi
+          containerPort: {{ . }}
+          protocol: TCP
+        {{- end }}
+        - name: pfcp
+          containerPort: {{ .Values.pfcp }}
+          protocol: UDP
+        - name: gtpc
+          containerPort: {{ .Values.gtpc }}
+          protocol: UDP
+        {{- with .Values.Gx }}
+        - name: Gx
+          containerPort: {{ . }}
+          protocol: SCTP
+        {{- end }}
+        {{- with .Values.metrics }}
+        - name: metrics
+          containerPort: {{ . }}
+          protocol: TCP
+        {{- end }}
+        volumeMounts:
+        - name: config
+          mountPath:  /etc/smf
+      volumes:
+      - name: config
+        configMap:
+          name: {{ .Release.Name }}-smf

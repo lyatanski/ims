@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-smf
+  labels: {{- include "open5gs.labels" . | nindent 4 }}
+data:
+  open5gs.yaml: |
+    logger:
+      level: trace
+    global:
+    smf:
+      {{- with .Values.metrics }}
+      metrics:
+        server:
+        - address: 0.0.0.0
+          port: {{ . }}
+      {{- end }}
+      freeDiameter:
+        identity: smf.epc
+        realm: epc
+        listen_on: 0.0.0.0
+        port: {{ .Values.port }}
+        connect:
+        - identity: pcrf.epc
+        load_extension:
+        - module: /opt/lib/freeDiameter/dbg_msg_dumps.fdx
+          conf: 0x4444
+        - module: /opt/lib/freeDiameter/dict_rfc5777.fdx
+        - module: /opt/lib/freeDiameter/dict_mip6i.fdx
+        - module: /opt/lib/freeDiameter/dict_nasreq.fdx
+        - module: /opt/lib/freeDiameter/dict_nas_mipv6.fdx
+        - module: /opt/lib/freeDiameter/dict_dcca.fdx
+        - module: /opt/lib/freeDiameter/dict_dcca_3gpp.fdx
+      pfcp:
+        server:
+        - address: 0.0.0.0
+        client:
+          upf:
+          - address: upf
+      gtpc:
+        server:
+        - address: 0.0.0.0
+      gtpu:
+        server:
+        - address: 0.0.0.0
+          advertise: upf
+      session:
+      - subnet: 10.10.0.0/16
+        gateway: 10.10.0.1
+        dnn: ims
+      dns:
+      - 8.8.8.8
+      p-cscf:
+      - 1.2.3.4
