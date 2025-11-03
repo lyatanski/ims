@@ -23,6 +23,7 @@ data:
         port: {{ .Values.port }}
         connect:
         - identity: icscf.ims
+        - identity: scscf.ims
         load_extension:
         - module: /opt/lib/freeDiameter/dbg_msg_dumps.fdx
           conf: 0x4444
