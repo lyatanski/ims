@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-hss
+  labels:
+    {{- include "open5gs.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "open5gs.labels" . | nindent 6 }}
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        {{- include "open5gs.labels" . | nindent 8 }}
+    spec:
+      containers:
+      - name: hss
+        image: ghcr.io/lyatanski/open5gs
+        args:
+        - hssd
+        - -c
+        - /etc/hss/open5gs.yaml
+        ports:
+        - name: diameter
+          containerPort: 3868
+          protocol: SCTP
+        volumeMounts:
+        - name: conf
+          mountPath:  /etc/hss/
+      volumes:
+      - name: conf
+        configMap:
+          name: {{ .Release.Name }}-hss

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-hss
+  labels:
+    {{- include "open5gs.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: diameter
+    port: 3868
+    targetPort: diameter
+    protocol: SCTP
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "open5gs.labels" . | nindent 4 }}

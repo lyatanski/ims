@@ -1,0 +1,5 @@
+mongodb:
+  enabled: true
+  persistence:
+    enabled: false
+
