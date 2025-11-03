@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-upf
+  labels: {{- include "open5gs.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "open5gs.labels" . | nindent 6 }}
+  replicas: 1
+  template:
+    metadata:
+      labels: {{- include "open5gs.labels" . | nindent 8 }}
+    spec:
+      initContainers:
+      - name: prep
+        image: ghcr.io/lyatanski/open5gs
+        command:
+        - /prep.sh
+        securityContext:
+          privileged: true
+          runAsUser: 0
+          runAsGroup: 0
+          runAsNonRoot: false
+          capabilities:
+            add: ["NET_ADMIN"]
+        volumeMounts:
+        - name: conf
+          mountPath:  /prep.sh
+          subPath: prep.sh
+      containers:
+      - name: upf
+        image: ghcr.io/lyatanski/open5gs
+        args:
+        - upfd
+        - -c
+        - /etc/upf/open5gs.yaml
+        ports:
+        - name: pfcp
+          containerPort: {{ .Values.pfcp }}
+          protocol: UDP
+        - name: gtpu
+          containerPort: {{ .Values.gtpu }}
+          protocol: UDP
+        {{- with .Values.metrics }}
+        - name: metrics
+          containerPort: {{ . }}
+          protocol: TCP
+        {{- end }}
+        volumeMounts:
+        - name: conf
+          mountPath:  /etc/upf/open5gs.yaml
+          subPath: open5gs.yaml
+      volumes:
+      - name: conf
+        configMap:
+          name: {{ .Release.Name }}-upf

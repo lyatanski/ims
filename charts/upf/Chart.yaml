@@ -1,0 +1,8 @@
+apiVersion: v2
+name: upf
+version: 0.3.0
+appVersion: 2.7.2
+description: Open5GS User Plane Function | Packet data network GateWay User plane
+sources:
+- https://github.com/open5gs/open5gs
+icon: https://open5gs.org/assets/img/open5gs-logo.png
