@@ -28,7 +28,7 @@ spec:
           mountPath:  /prep.sh
           subPath: prep.sh
       containers:
-      - name: upf
+      - name: open5gs
         image: ghcr.io/lyatanski/open5gs
         args:
         - upfd

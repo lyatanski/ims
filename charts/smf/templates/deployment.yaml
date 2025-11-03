@@ -12,7 +12,7 @@ spec:
       labels: {{- include "open5gs.labels" . | nindent 8 }}
     spec:
       containers:
-      - name: smf
+      - name: open5gs
         image: ghcr.io/lyatanski/open5gs
         args:
         - smfd
