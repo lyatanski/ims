@@ -17,7 +17,7 @@ spec:
         args:
         - smfd
         - -c
-        - /etc/smf/open5gs.yaml
+        - /etc/open5gs.yaml
         ports:
         {{- with .Values.sbi }}
         - name: sbi
@@ -41,9 +41,10 @@ spec:
           protocol: TCP
         {{- end }}
         volumeMounts:
-        - name: config
-          mountPath: /etc/smf
+        - name: conf
+          mountPath: /etc/open5gs.yaml
+          subPath: open5gs.yaml
       volumes:
-      - name: config
+      - name: conf
         configMap:
           name: {{ .Release.Name }}-smf

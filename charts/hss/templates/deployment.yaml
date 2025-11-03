@@ -17,7 +17,7 @@ spec:
         args:
         - hssd
         - -c
-        - /etc/hss/open5gs.yaml
+        - /etc/open5gs.yaml
         ports:
         - name: diameter
           containerPort: {{ .Values.port }}
@@ -29,7 +29,8 @@ spec:
         {{- end }}
         volumeMounts:
         - name: conf
-          mountPath: /etc/hss/
+          mountPath: /etc/open5gs.yaml
+          subPath: open5gs.yaml
       volumes:
       - name: conf
         configMap:
