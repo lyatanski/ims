@@ -29,7 +29,7 @@ spec:
         {{- end }}
         volumeMounts:
         - name: conf
-          mountPath:  /etc/pcrf
+          mountPath: /etc/pcrf
       volumes:
       - name: conf
         configMap:

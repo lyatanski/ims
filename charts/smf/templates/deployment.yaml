@@ -42,7 +42,7 @@ spec:
         {{- end }}
         volumeMounts:
         - name: config
-          mountPath:  /etc/smf
+          mountPath: /etc/smf
       volumes:
       - name: config
         configMap:

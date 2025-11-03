@@ -48,7 +48,7 @@ spec:
         {{- end }}
         volumeMounts:
         - name: conf
-          mountPath:  /etc/upf/open5gs.yaml
+          mountPath: /etc/upf/open5gs.yaml
           subPath: open5gs.yaml
       volumes:
       - name: conf

@@ -29,7 +29,7 @@ spec:
         {{- end }}
         volumeMounts:
         - name: conf
-          mountPath:  /etc/hss/
+          mountPath: /etc/hss/
       volumes:
       - name: conf
         configMap:
