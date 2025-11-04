@@ -1,3 +1,4 @@
+{{- if .Values.sbi }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -11,3 +12,4 @@ spec:
     protocol: TCP
   publishNotReadyAddresses: true
   selector: {{- include "open5gs.labels" . | nindent 4 }}
+{{- end }}

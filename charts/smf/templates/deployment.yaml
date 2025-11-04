@@ -30,8 +30,8 @@ spec:
         - name: gtpc
           containerPort: {{ .Values.gtpc }}
           protocol: UDP
-        {{- with .Values.Gx }}
-        - name: Gx
+        {{- with .Values.diam }}
+        - name: diam
           containerPort: {{ . }}
           protocol: SCTP
         {{- end }}

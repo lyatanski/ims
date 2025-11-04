@@ -15,11 +15,12 @@ data:
         - address: 0.0.0.0
           port: {{ . }}
       {{- end }}
+      {{- with .Values.diam }}
       freeDiameter:
         identity: smf.epc
         realm: epc
         listen_on: 0.0.0.0
-        port: {{ .Values.port }}
+        port: {{ . }}
         connect:
         - identity: pcrf.epc
         load_extension:
@@ -31,6 +32,7 @@ data:
         - module: /opt/lib/freeDiameter/dict_nas_mipv6.fdx
         - module: /opt/lib/freeDiameter/dict_dcca.fdx
         - module: /opt/lib/freeDiameter/dict_dcca_3gpp.fdx
+      {{- end }}
       pfcp:
         server:
         - address: 0.0.0.0
