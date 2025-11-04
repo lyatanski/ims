@@ -1,0 +1,13 @@
+apiVersion: v2
+name: hss
+version: 0.3.0
+appVersion: 2.7.2
+description: Open5GS Home Subscriber Server
+sources:
+- https://github.com/open5gs/open5gs
+icon: https://open5gs.org/assets/img/open5gs-logo.png
+dependencies:
+- name: mongodb
+  version: ~18.0.5
+  repository: https://charts.bitnami.com/bitnami
+  condition: mongodb.enabled

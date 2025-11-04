@@ -1,0 +1,15 @@
+{{- if .Values.sbi }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-smf-sbi
+  labels: {{- include "open5gs.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: sbi
+    port: {{ .Values.sbi }}
+    targetPort: sbi
+    protocol: TCP
+  publishNotReadyAddresses: true
+  selector: {{- include "open5gs.labels" . | nindent 4 }}
+{{- end }}

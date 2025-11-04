@@ -1,0 +1,8 @@
+apiVersion: v2
+name: pcrf
+version: 0.3.0
+appVersion: 2.7.2
+description: Open5GS Policy and Charging Rules Function
+sources:
+- https://github.com/open5gs/open5gs
+icon: https://open5gs.org/assets/img/open5gs-logo.png

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-upf-pfcp
+  labels: {{- include "open5gs.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: pfcp
+    port: {{ .Values.pfcp }}
+    targetPort: pfcp
+    protocol: UDP
+  publishNotReadyAddresses: true
+  selector: {{- include "open5gs.labels" . | nindent 4 }}

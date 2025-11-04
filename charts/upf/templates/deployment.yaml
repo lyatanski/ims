@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-upf
+  labels: {{- include "open5gs.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "open5gs.labels" . | nindent 6 }}
+  replicas: 1
+  template:
+    metadata:
+      labels: {{- include "open5gs.labels" . | nindent 8 }}
+    spec:
+      initContainers:
+      - name: prep
+        image: ghcr.io/lyatanski/open5gs
+        command:
+        - sh
+        - -xc
+        - |
+          apk add iproute2
+          ip tuntap add name tunue mode tun
+          ip addr add 10.10.0.0/16 dev tunue
+          ip link set tunue up
+        securityContext:
+          privileged: true
+      containers:
+      - name: open5gs
+        image: ghcr.io/lyatanski/open5gs
+        args:
+        - upfd
+        - -c
+        - /etc/open5gs.yaml
+        securityContext:
+          privileged: true
+        ports:
+        - name: pfcp
+          containerPort: {{ .Values.pfcp }}
+          protocol: UDP
+        - name: gtpu
+          containerPort: {{ .Values.gtpu }}
+          protocol: UDP
+        {{- with .Values.metrics }}
+        - name: metrics
+          containerPort: {{ . }}
+          protocol: TCP
+        {{- end }}
+        volumeMounts:
+        - name: conf
+          mountPath: /etc/open5gs.yaml
+          subPath: open5gs.yaml
+      volumes:
+      - name: conf
+        configMap:
+          name: {{ .Release.Name }}-upf

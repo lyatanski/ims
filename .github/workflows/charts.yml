@@ -10,8 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-        - package: ims
+        package:
+        - ims
+        - hss
+        - smf
+        - upf
+        - pcrf
 
     steps:
     - uses: actions/checkout@v4

@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-pcrf
+  labels: {{- include "open5gs.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "open5gs.labels" . | nindent 6 }}
+  replicas: 1
+  template:
+    metadata:
+      labels: {{- include "open5gs.labels" . | nindent 8 }}
+    spec:
+      containers:
+      - name: open5gs
+        image: ghcr.io/lyatanski/open5gs
+        args: 
+        - pcrfd
+        - -c
+        - /etc/open5gs.yaml
+        ports:
+        - name: diameter
+          containerPort: {{ .Values.port }}
+          protocol: SCTP
+        {{- with .Values.metrics }}
+        - name: metrics
+          containerPort: {{ . }}
+          protocol: TCP
+        {{- end }}
+        volumeMounts:
+        - name: conf
+          mountPath: /etc/open5gs.yaml
+          subPath: open5gs.yaml
+      volumes:
+      - name: conf
+        configMap:
+          name: {{ .Release.Name }}-pcrf
