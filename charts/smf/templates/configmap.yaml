@@ -15,6 +15,15 @@ data:
         - address: 0.0.0.0
           port: {{ . }}
       {{- end }}
+      {{- with .Values.sbi }}
+      sbi:
+        server:
+        - address: 0.0.0.0
+        - port: {{ . }}
+        client:
+          nrf:
+          - uri: http://nrf:{{ . }}
+      {{- end }}
       {{- with .Values.diam }}
       freeDiameter:
         identity: smf.epc
