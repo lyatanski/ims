@@ -4,10 +4,7 @@ metadata:
   name: {{ .Release.Name }}-upf
   labels: {{- include "open5gs.labels" . | nindent 4 }}
 data:
-  prep.sh: |
-    ip addr add ${UEGW}/16 dev tunue;
-    ip link set tunue up
-  upf.yaml: |
+  open5gs.yaml: |
     logger:
       level: trace
     global:
@@ -21,13 +18,10 @@ data:
       pfcp:
         server:
         - address: 0.0.0.0
-        client:
-          smf:
-          - address: smf
       gtpu:
         server:
         - address: 0.0.0.0
-          advertise: upf
+          advertise: {{ .Release.Name }}-upf-gtpu
       session:
       - subnet: 10.10.0.0/16
         gateway: 10.10.0.1

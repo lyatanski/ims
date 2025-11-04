@@ -15,18 +15,15 @@ spec:
       - name: prep
         image: ghcr.io/lyatanski/open5gs
         command:
-        - /prep.sh
+        - sh
+        - -xc
+        - |
+          apk add iproute2
+          ip tuntap add name tunue mode tun
+          ip addr add 10.10.0.0/16 dev tunue
+          ip link set tunue up
         securityContext:
           privileged: true
-          runAsUser: 0
-          runAsGroup: 0
-          runAsNonRoot: false
-          capabilities:
-            add: ["NET_ADMIN"]
-        volumeMounts:
-        - name: conf
-          mountPath:  /prep.sh
-          subPath: prep.sh
       containers:
       - name: open5gs
         image: ghcr.io/lyatanski/open5gs
@@ -34,6 +31,8 @@ spec:
         - upfd
         - -c
         - /etc/open5gs.yaml
+        securityContext:
+          privileged: true
         ports:
         - name: pfcp
           containerPort: {{ .Values.pfcp }}
