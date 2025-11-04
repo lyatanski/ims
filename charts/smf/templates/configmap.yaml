@@ -38,14 +38,13 @@ data:
         - address: 0.0.0.0
         client:
           upf:
-          - address: upf
+          - address: core4-upf-pfcp
       gtpc:
         server:
         - address: 0.0.0.0
       gtpu:
         server:
         - address: 0.0.0.0
-          advertise: upf
       session:
       - subnet: 10.10.0.0/16
         gateway: 10.10.0.1
