@@ -5,8 +5,6 @@ title: Session Control
 sequenceDiagram
     UE1->>P-CSCF: SIP - INVITE
     P-CSCF->>UE1: SIP 100 - Trying
-    P-CSCF->>PCRF: Diameter - AA-Request (AAR)
-    PCRF->>P-CSCF: Diameter - AA-Answer (AAA)
     P-CSCF->>S-CSCF: SIP - INVITE
     S-CSCF->>P-CSCF: SIP 100 - Trying
     S-CSCF->>OCS: Diameter - initial orig Credit-Control-Request (CCR)
@@ -82,6 +80,8 @@ sequenceDiagram
         S-CSCF->>I-CSCF: SIP 200 - OK (INVITE)
         I-CSCF->>S-CSCF: SIP 200 - OK (INVITE)
         S-CSCF->>P-CSCF: SIP 200 - OK (INVITE)
+        P-CSCF->>PCRF: Diameter - AA-Request (AAR)
+        PCRF->>P-CSCF: Diameter - AA-Answer (AAA)
         P-CSCF->>UE1: SIP 200 - OK (INVITE)
 
         UE1->>P-CSCF: SIP - ACK
