@@ -79,6 +79,12 @@ spec:
         - name: diameter
           mountPath: /etc/cscf/diameter.xml
           subPath: diameter.xml
+        {{- if eq "proxy" $cscf }}
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+        {{- end }}
       volumes:
       - name: diameter
         configMap:
