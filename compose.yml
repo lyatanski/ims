@@ -113,12 +113,12 @@ services:
     - /lib/modules:/lib/modules
 
   dbprep:
-    image: valkey/valkey:8.1-alpine
+    image: valkey/valkey:9-alpine
     command: valkey-cli -u redis://redis:6379/2 HSET s_cscf:entry::1 s_cscf_uri sip:scscf.ims.${REALM}
     restart: on-failure
 
   redis:
-    image: valkey/valkey:8.1-alpine
+    image: valkey/valkey:9-alpine
     expose:
     - 6379/tcp
 
