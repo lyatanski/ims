@@ -51,12 +51,40 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Create the name of the service account to use
+IPsec init
 */}}
-{{- define "ims.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "ims.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- define "ims.ipsec" -}}
+- name: ipsec
+  image: alpine
+  command:
+  - modprobe
+  - -a
+  args:
+  - ah4
+  - ah6
+  - esp4
+  - esp6
+  - xfrm4_tunnel
+  - xfrm6_tunnel
+  - xfrm_user
+  - ip_tunnel
+  - tunnel4
+  - tunnel6
+  securityContext:
+    capabilities:
+      add:
+      - SYS_MODULE
+  volumeMounts:
+  - name: kmod
+    mountPath: /lib/modules
 {{- end }}
+
+{{/*
+kernel module mount path
+*/}}
+{{- define "ims.kmod" -}}
+- name: kmod
+  hostPath:
+    path: /lib/modules
 {{- end }}
+

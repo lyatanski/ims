@@ -40,6 +40,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if eq "proxy" $cscf }}
+      initContainers:
+      {{- include "ims.ipsec" . | nindent 6 }}
+      {{- end }}
       containers:
       - name: cscf
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -75,6 +79,12 @@ spec:
         - name: diameter
           mountPath: /etc/cscf/diameter.xml
           subPath: diameter.xml
+        {{- if eq "proxy" $cscf }}
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+        {{- end }}
       volumes:
       - name: diameter
         configMap:
@@ -82,6 +92,9 @@ spec:
           items:
           - key: {{ $cscf }}.xml
             path: diameter.xml
+      {{- if eq "proxy" $cscf }}
+      {{- include "ims.kmod" . | nindent 6 }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
