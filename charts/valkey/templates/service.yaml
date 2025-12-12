@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "valkey.name" . }}
+  labels: {{- include "valkey.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: client
+    port: {{ .Values.containerPorts.valkey }}
+    targetPort: client
+    protocol: TCP
+  - name: bus
+    port: {{ .Values.containerPorts.bus }}
+    targetPort: cluster
+    protocol: TCP
+  selector: {{- include "valkey.labels" . | nindent 4 }}

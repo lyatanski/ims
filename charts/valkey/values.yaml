@@ -1,0 +1,9 @@
+image:
+  repository: docker.io/valkey/valkey
+  tag: 9-alpine
+
+containerPorts:
+  valkey: 6379
+  bus: 16379
+
+replicaCount: 6

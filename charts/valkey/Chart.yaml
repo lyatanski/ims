@@ -1,0 +1,9 @@
+apiVersion: v2
+type: application
+name: valkey
+description: High-performance key/value datastore
+version: 0.1.0
+appVersion: 9.0.1
+sources:
+- https://github.com/valkey-io/valkey
+icon: https://valkey.io/img/valkey-horizontal.svg

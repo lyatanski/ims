@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "valkey.name" . }}
+  labels: {{- include "valkey.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "valkey.name" . }}
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "valkey.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "valkey.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: db
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        command:
+        - sh
+        - -cx
+        args:
+        - |
+          /etc/valkey/init.sh &
+          valkey-server /etc/valkey/valkey.conf
+        env:
+        - name: VALKEY_LOGLEVEL
+          value: "{{ .Values.valkeyLogLevel }}"
+        ports:
+        - name: client
+          containerPort: {{ .Values.containerPorts.valkey }}
+          protocol: TCP
+        - name: cluster
+          containerPort: {{ .Values.containerPorts.bus }}
+          protocol: TCP
+        startupProbe:
+          exec:
+            command:
+            - valkey-cli
+            - ping
+        livenessProbe:
+          exec:
+            command:
+            - valkey-cli
+            - ping
+        readinessProbe:
+          exec:
+            command:
+            - valkey-cli
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 3
+          timeoutSeconds: 6
+          failureThreshold: 10
+          successThreshold: 1
+        resources:
+          {{- toYaml .Values.resources | nindent 12 }}
+        volumeMounts:
+        - name: conf
+          mountPath: /etc/valkey
+      volumes:
+      - name: conf
+        configMap:
+          name: {{ include "valkey.name" . }}
+          defaultMode: 0755
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
