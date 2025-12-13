@@ -5,7 +5,8 @@ metadata:
   labels: {{- include "valkey.labels" . | nindent 4 }}
 spec:
   serviceName: {{ include "valkey.name" . }}
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ add 1 .Values.cluster.replicas | mul .Values.cluster.primaries }}
+  podManagementPolicy: Parallel
   selector:
     matchLabels: {{- include "valkey.labels" . | nindent 6 }}
   template:
@@ -20,9 +21,7 @@ spec:
       - name: db
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
-        command:
-        - sh
-        - -cx
+        command: ["sh", "-c"]
         args:
         - |
           /etc/valkey/init.sh &
