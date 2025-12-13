@@ -6,6 +6,7 @@ metadata:
 spec:
   serviceName: {{ include "valkey.name" . }}
   replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: Parallel
   selector:
     matchLabels: {{- include "valkey.labels" . | nindent 6 }}
   template:
