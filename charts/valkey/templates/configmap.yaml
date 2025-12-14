@@ -11,7 +11,7 @@ data:
     protected-mode yes
     {{- end }}
 
-    {{- if gt (int .Values.replicaCount) 1 }}
+    {{- if gt (int .Values.cluster.primaries) 1 }}
     cluster-enabled yes
     cluster-config-file nodes.conf
     cluster-preferred-endpoint-type ip
@@ -23,12 +23,12 @@ data:
     if [ "${ID}" = "0" ]; then
       {{- $name := include "valkey.name" . }}
       {{- $port := .Values.containerPorts.valkey }}
-      for i in $(seq 0 {{ sub .Values.replicaCount 1 }}); do
+      for i in $(seq 0 {{ add 1 .Values.cluster.replicas | mul .Values.cluster.primaries | add -1 }}); do
         NODES="${NODES} {{ $name }}-${i}.{{ $name }}:{{ $port }}"
         until valkey-cli -h {{ $name }}-${i}.{{ $name }} -p {{ $port }} ping; do
           echo waiting instance ${i}
           sleep 3
         done
       done
-      echo yes | valkey-cli --cluster create $NODES --cluster-replicas 1
+      echo yes | valkey-cli --cluster create $NODES --cluster-replicas {{ .Values.cluster.replicas }}
     fi

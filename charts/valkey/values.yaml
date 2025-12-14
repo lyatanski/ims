@@ -6,4 +6,6 @@ containerPorts:
   valkey: 6379
   bus: 16379
 
-replicaCount: 6
+cluster:
+  primaries: 3
+  replicas: 1
