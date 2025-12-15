@@ -55,7 +55,7 @@ IPsec init
 */}}
 {{- define "ims.ipsec" -}}
 - name: ipsec
-  image: alpine
+  image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
   command:
   - modprobe
   - -a
