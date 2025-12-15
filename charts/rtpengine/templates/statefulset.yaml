@@ -1,22 +1,19 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "rtpengine.name" . }}
-  labels:
-    {{- include "rtpengine.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicaCount }}
   selector:
-    matchLabels:
-      {{- include "rtpengine.selectorLabels" . | nindent 6 }}
+    matchLabels: {{- include "rtpengine.selectorLabels" . | nindent 6 }}
+  serviceName: {{ include "rtpengine.name" . }}
+  replicas: {{ .Values.replicaCount }}
   template:
     metadata:
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      labels:
-        {{- include "rtpengine.labels" . | nindent 8 }}
+      labels: {{- include "rtpengine.labels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -24,7 +21,7 @@ spec:
       {{- end }}
       containers:
       - name: {{ .Chart.Name }}
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports:
         - name: control
@@ -48,7 +45,7 @@ spec:
       volumes:
       - name: conf
         configMap:
-          name: {{ .Release.Name }}-rtp
+          name: {{ include "rtpengine.name" . }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
