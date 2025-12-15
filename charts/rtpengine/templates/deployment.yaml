@@ -1,13 +1,11 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "rtpengine.fullname" . }}
+  name: {{ include "rtpengine.name" . }}
   labels:
     {{- include "rtpengine.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
-  {{- end }}
   selector:
     matchLabels:
       {{- include "rtpengine.selectorLabels" . | nindent 6 }}
