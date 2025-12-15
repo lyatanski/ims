@@ -7,6 +7,7 @@ spec:
     matchLabels: {{- include "rtpengine.selectorLabels" . | nindent 6 }}
   serviceName: {{ include "rtpengine.name" . }}
   replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: Parallel
   template:
     metadata:
       {{- with .Values.podAnnotations }}
@@ -21,8 +22,12 @@ spec:
       {{- end }}
       containers:
       - name: {{ .Chart.Name }}
-        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        command: ["sh", "-c"]
+        args:
+        - |
+          rtpengine --foreground --log-stderr --config-section=$(hostname -s)
         ports:
         - name: control
           containerPort: {{ .Values.service.port }}
