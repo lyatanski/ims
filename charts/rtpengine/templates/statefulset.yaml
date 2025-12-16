@@ -24,10 +24,13 @@ spec:
       - name: {{ .Chart.Name }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
-        command: ["sh", "-c"]
         args:
-        - |
-          rtpengine --foreground --log-stderr --config-section=$(hostname -s)
+        - --config-section=$(HOSTNAME)
+        env:
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         ports:
         - name: control
           containerPort: {{ .Values.service.port }}

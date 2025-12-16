@@ -5,7 +5,7 @@ metadata:
   labels: {{- include "rtpengine.labels" . | nindent 4 }}
 data:
   rtpengine.conf: |
-    [ims-rtpengine-0]
+    [{{ include "rtpengine.name" . }}-0]
     log-level = 7
     table = -1
     listen-http = 0.0.0.0:9090
@@ -21,7 +21,7 @@ data:
     redis-subscribe = ims-valkey:6379/3
     no-redis-required = true
 
-    [ims-rtpengine-1]
+    [{{ include "rtpengine.name" . }}-1]
     log-level = 7
     table = -1
     listen-http = 0.0.0.0:9090
