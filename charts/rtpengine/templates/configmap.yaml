@@ -16,10 +16,10 @@ data:
     tos = 184
     port-min = 30000
     port-max = 40000
-    redis = ims-valkey:6379/1
-    redis-write = ims-valkey:6379/2
-    redis-subscribe = ims-valkey:6379/3
     no-redis-required = true
+    redis-write = ims-valkey:6379/{{ .Values.redis.criss }}
+    redis-subscribe = ims-valkey:6379/{{ .Values.redis.cross }}
+    redis-resolve-on-reconnect = true
 
     [{{ include "rtpengine.name" . }}-1]
     log-level = 7
@@ -32,8 +32,8 @@ data:
     tos = 184
     port-min = 30000
     port-max = 40000
-    redis = ims-valkey:6379/1
-    redis-write = ims-valkey:6379/2
-    redis-subscribe = ims-valkey:6379/3
     no-redis-required = true
+    redis-write = ims-valkey:6379/{{ .Values.redis.cross }}
+    redis-subscribe = ims-valkey:6379/{{ .Values.redis.criss }}
+    redis-resolve-on-reconnect = true
 
