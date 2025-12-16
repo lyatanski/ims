@@ -20,14 +20,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Extend
-      run: helm plugin install https://github.com/origranot/helm-cascade
-
-    - name: Cascade
-      run: helm cascade update charts/${{ matrix.package }}
-
     - name: Package
-      run: helm package charts/${{ matrix.package }}
+      run: helm package --dependency-update charts/${{ matrix.package }}
 
     - name: Log in
       run: helm registry login --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} oci://ghcr.io/
