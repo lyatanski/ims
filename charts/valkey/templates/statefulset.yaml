@@ -21,14 +21,9 @@ spec:
       - name: db
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
-        command: ["sh", "-c"]
-        args:
-        - |
-          /etc/valkey/init.sh &
-          valkey-server /etc/valkey/valkey.conf
-        env:
-        - name: VALKEY_LOGLEVEL
-          value: "{{ .Values.valkeyLogLevel }}"
+        command:
+        - valkey-server
+        - /etc/valkey/valkey.conf
         ports:
         - name: client
           containerPort: {{ .Values.containerPorts.valkey }}
@@ -65,7 +60,6 @@ spec:
       - name: conf
         configMap:
           name: {{ include "valkey.name" . }}
-          defaultMode: 0755
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

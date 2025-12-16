@@ -18,17 +18,3 @@ data:
     cluster-port {{ .Values.containerPorts.bus }}
     port {{ .Values.containerPorts.valkey }}
     {{- end }}
-  init.sh: |
-    ID=$(echo "$(hostname -s)" | rev | cut -d- -f1 | rev)
-    if [ "${ID}" = "0" ]; then
-      {{- $name := include "valkey.name" . }}
-      {{- $port := .Values.containerPorts.valkey }}
-      for i in $(seq 0 {{ add 1 .Values.cluster.replicas | mul .Values.cluster.primaries | add -1 }}); do
-        NODES="${NODES} {{ $name }}-${i}.{{ $name }}:{{ $port }}"
-        until valkey-cli -h {{ $name }}-${i}.{{ $name }} -p {{ $port }} ping; do
-          echo waiting instance ${i}
-          sleep 3
-        done
-      done
-      echo yes | valkey-cli --cluster create $NODES --cluster-replicas {{ .Values.cluster.replicas }}
-    fi
