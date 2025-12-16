@@ -1,12 +1,11 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}-rtp
-  labels:
-    {{- include "rtpengine.labels" . | nindent 4 }}
+  name: {{ include "rtpengine.name" . }}
+  labels: {{- include "rtpengine.labels" . | nindent 4 }}
 data:
   rtpengine.conf: |
-    [rtpengine]
+    [{{ include "rtpengine.name" . }}-0]
     log-level = 7
     table = -1
     listen-http = 0.0.0.0:9090
@@ -17,4 +16,24 @@ data:
     tos = 184
     port-min = 30000
     port-max = 40000
+    no-redis-required = true
+    redis-write = ims-valkey:6379/{{ .Values.redis.criss }}
+    redis-subscribe = ims-valkey:6379/{{ .Values.redis.cross }}
+    redis-resolve-on-reconnect = true
+
+    [{{ include "rtpengine.name" . }}-1]
+    log-level = 7
+    table = -1
+    listen-http = 0.0.0.0:9090
+    listen-ng = 0.0.0.0:{{ .Values.service.port }}
+    interface = any
+    timeout = 60
+    silent-timeout = 3600
+    tos = 184
+    port-min = 30000
+    port-max = 40000
+    no-redis-required = true
+    redis-write = ims-valkey:6379/{{ .Values.redis.cross }}
+    redis-subscribe = ims-valkey:6379/{{ .Values.redis.criss }}
+    redis-resolve-on-reconnect = true
 

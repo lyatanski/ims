@@ -1,24 +1,20 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
-  name: {{ include "rtpengine.fullname" . }}
-  labels:
-    {{- include "rtpengine.labels" . | nindent 4 }}
+  name: {{ include "rtpengine.name" . }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
-  {{- end }}
   selector:
-    matchLabels:
-      {{- include "rtpengine.selectorLabels" . | nindent 6 }}
+    matchLabels: {{- include "rtpengine.selectorLabels" . | nindent 6 }}
+  serviceName: {{ include "rtpengine.name" . }}
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: Parallel
   template:
     metadata:
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      labels:
-        {{- include "rtpengine.labels" . | nindent 8 }}
+      labels: {{- include "rtpengine.labels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -26,8 +22,15 @@ spec:
       {{- end }}
       containers:
       - name: {{ .Chart.Name }}
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        args:
+        - --config-section=$(HOSTNAME)
+        env:
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         ports:
         - name: control
           containerPort: {{ .Values.service.port }}
@@ -50,7 +53,7 @@ spec:
       volumes:
       - name: conf
         configMap:
-          name: {{ .Release.Name }}-rtp
+          name: {{ include "rtpengine.name" . }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

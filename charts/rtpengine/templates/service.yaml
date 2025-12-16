@@ -1,9 +1,8 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "rtpengine.fullname" . }}
-  labels:
-    {{- include "rtpengine.labels" . | nindent 4 }}
+  name: {{ include "rtpengine.name" . }}
+  labels: {{- include "rtpengine.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   ports:
@@ -11,5 +10,4 @@ spec:
     port: {{ .Values.service.port }}
     targetPort: {{ .Values.service.port }}
     protocol: UDP
-  selector:
-    {{- include "rtpengine.selectorLabels" . | nindent 4 }}
+  selector: {{- include "rtpengine.selectorLabels" . | nindent 4 }}

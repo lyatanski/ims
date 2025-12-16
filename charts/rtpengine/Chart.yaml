@@ -3,4 +3,8 @@ name: rtpengine
 description: rtpengine is a proxy for RTP traffic and other UDP based media traffic
 type: application
 version: 0.1.0
-appVersion: "1.16.0"
+appVersion: 13.3.1.4
+dependencies:
+- name: valkey
+  version: "*"
+  repository: file://../valkey
