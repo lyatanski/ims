@@ -11,6 +11,9 @@ dependencies:
 - name: rtpengine
   version: "*"
   repository: file://../rtpengine
+- name: valkey
+  version: "*"
+  repository: file://../valkey
 - name: dra
   version: "*"
   repository: file://../dra
