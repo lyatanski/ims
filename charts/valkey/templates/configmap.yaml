@@ -5,6 +5,10 @@ metadata:
   labels: {{- include "valkey.labels" . | nindent 4 }}
 data:
   valkey.conf: |
+    loglevel debug
+    enable-debug-command yes
+    hide-user-data-from-log no
+
     {{- if false }}
     masterauth {dynamically-substituted-dont-change-manually}
     requirepass {dynamically-substituted-dont-change-manually}
@@ -13,6 +17,7 @@ data:
 
     {{- if gt (int .Values.cluster.primaries) 1 }}
     cluster-enabled yes
+    cluster-databases 16
     cluster-config-file nodes.conf
     cluster-preferred-endpoint-type ip
     cluster-port {{ .Values.containerPorts.bus }}
