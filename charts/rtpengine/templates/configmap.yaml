@@ -8,7 +8,7 @@ data:
     [{{ include "rtpengine.name" . }}-0]
     log-level = 7
     table = -1
-    listen-http = 0.0.0.0:9090
+    listen-http = 0.0.0.0:{{ .Values.monitor.port }}
     listen-ng = 0.0.0.0:{{ .Values.service.port }}
     interface = any
     timeout = 60
@@ -24,7 +24,7 @@ data:
     [{{ include "rtpengine.name" . }}-1]
     log-level = 7
     table = -1
-    listen-http = 0.0.0.0:9090
+    listen-http = 0.0.0.0:{{ .Values.monitor.port }}
     listen-ng = 0.0.0.0:{{ .Values.service.port }}
     interface = any
     timeout = 60
