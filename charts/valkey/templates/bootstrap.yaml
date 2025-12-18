@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "valkey.name" . }}
+  annotations:
+    helm.sh/hook: post-install
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: bootstrap
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        command: ["sh", "-c"]
+        args:
+        - |
+          NAME="{{ include "valkey.name" . }}"
+          PORT="{{ .Values.containerPorts.valkey }}"
+          for i in $(seq 0 {{ add 1 .Values.cluster.replicas | mul .Values.cluster.primaries | add -1 }}); do
+            until valkey-cli -h "${NAME}-${i}.${NAME}" -p "${PORT}" ping; do
+              echo waiting instance ${i}
+              sleep 3
+            done
+            NODES="${NODES} ${NAME}-${i}.${NAME}:${PORT}"
+          done
+
+          yes yes | valkey-cli --cluster create ${NODES} --cluster-replicas {{ .Values.cluster.replicas }}
+
