@@ -1,0 +1,8 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "valkey.name" . }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {{- include "valkey.labels" . | nindent 6 }}
