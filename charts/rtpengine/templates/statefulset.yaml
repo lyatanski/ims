@@ -35,6 +35,10 @@ spec:
         - name: control
           containerPort: {{ .Values.service.port }}
           protocol: UDP
+        startupProbe:
+          httpGet:
+            path: /ping
+            port: 9090
         livenessProbe:
           httpGet:
             path: /ping
