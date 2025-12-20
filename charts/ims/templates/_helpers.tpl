@@ -51,6 +51,20 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+S-CSCF register
+*/}}
+{{- define "ims.register" -}}
+- name: register
+  image: {{ .Values.rtpengine.valkey.image.repository }}:{{ .Values.rtpengine.valkey.image.tag }}
+  command:
+  - valkey-cli
+  args:
+  - -u
+  - redis://redis:6379/2
+  - HSET s_cscf:entry::1 s_cscf_uri sip:scscf.ims.${REALM}
+{{- end }}
+
+{{/*
 IPsec init
 */}}
 {{- define "ims.ipsec" -}}
