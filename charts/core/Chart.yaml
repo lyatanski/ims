@@ -1,0 +1,19 @@
+apiVersion: v2
+name: core
+description: Core Network
+type: application
+version: 0.1.0
+appVersion: 0.0.0
+dependencies:
+- name: hss
+  version: "*"
+  repository: file://../hss
+- name: smf
+  version: "*"
+  repository: file://../smf
+- name: upf
+  version: "*"
+  repository: file://../upf
+- name: pcrf
+  version: "*"
+  repository: file://../pcrf
