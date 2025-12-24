@@ -72,12 +72,13 @@ services:
 
   rtpengine:
     image: ghcr.io/lyatanski/rtpengine
-    command: --no-log-timestamps --config-file=/etc/rtpengine.conf
+    command: --no-log-timestamps 
     configs:
     - source: rtpengine.conf
-      target: /etc/rtpengine.conf
+      target: /etc/rtpengine/rtpengine.conf
     expose:
     - 9910/udp
+    scale: 1
     healthcheck:
       test: wget -qO- 127.0.0.1:9090/ping
       retries: 60
@@ -224,6 +225,26 @@ configs:
       tos = 184
       port-min = 30000
       port-max = 40000
+      no-redis-required = true
+      #redis-write = redis:6379/4
+      #redis-subscribe = redis:6379/5
+      #redis-resolve-on-reconnect = true
+
+      [ims-rtpengine-2]
+      log-level = 7
+      table = -1
+      listen-http = 0.0.0.0:9090
+      listen-ng = 0.0.0.0:9910
+      interface = any
+      timeout = 60
+      silent-timeout = 3600
+      tos = 184
+      port-min = 30000
+      port-max = 40000
+      no-redis-required = true
+      redis-write = redis:6379/5
+      redis-subscribe = redis:6379/4
+      redis-resolve-on-reconnect = true
 
   dns:
     content: |
