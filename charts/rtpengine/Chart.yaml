@@ -4,6 +4,7 @@ description: rtpengine is a proxy for RTP traffic and other UDP based media traf
 type: application
 version: 0.1.0
 appVersion: 13.3.1.4
+icon: https://www.sipwise.com/wp-content/uploads/2024/09/RTP-Logo.png
 dependencies:
 - name: valkey
   version: "*"
