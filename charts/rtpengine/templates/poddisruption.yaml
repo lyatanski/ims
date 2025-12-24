@@ -1,0 +1,8 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "rtpengine.name" . }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {{- include "rtpengine.labels" . | nindent 6 }}

@@ -35,14 +35,21 @@ spec:
         - name: control
           containerPort: {{ .Values.service.port }}
           protocol: UDP
+        - name: monitor
+          containerPort: {{ .Values.monitor.port }}
+          protocol: TCP
+        startupProbe:
+          httpGet:
+            path: /ping
+            port: monitor
         livenessProbe:
           httpGet:
             path: /ping
-            port: 9090
+            port: monitor
         readinessProbe:
           httpGet:
             path: /ping
-            port: 9090
+            port: monitor
         {{- with .Values.resources }}
         resources:
           {{- toYaml . | nindent 12 }}
