@@ -52,7 +52,7 @@ spec:
         {{- end }}
         {{- if eq "interrogating" $cscf }}
         - name: DBURL
-          value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:6379/{{ .Values.db.interrogating }}
+          value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ .Values.db.interrogating }}
         {{- end }}
         {{- if eq "serving" $cscf }}
         - name: RTPADR

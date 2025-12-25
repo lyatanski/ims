@@ -60,7 +60,7 @@ S-CSCF register
   - valkey-cli
   args:
   - -u
-  - redis://{{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:6379/{{ .Values.db.interrogating }}
+  - redis://{{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ .Values.db.interrogating }}
   - HSET s_cscf:entry::1 s_cscf_uri sip:scscf.ims
 {{- end }}
 
