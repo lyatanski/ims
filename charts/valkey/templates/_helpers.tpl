@@ -13,7 +13,7 @@ Expand the name of the chart.
 Common labels
 */}}
 {{- define "valkey.labels" -}}
-name: valkey
+name: {{ .Chart.Name }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
