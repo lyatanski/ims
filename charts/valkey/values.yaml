@@ -2,7 +2,7 @@ image:
   repository: docker.io/valkey/valkey
   tag: 9-alpine
 
-containerPorts:
+ports:
   valkey: 6379
   bus: 16379
 

@@ -17,7 +17,7 @@ spec:
         args:
         - |
           NAME="{{ include "valkey.name" . }}"
-          PORT="{{ .Values.containerPorts.valkey }}"
+          PORT="{{ .Values.ports.valkey }}"
           for i in $(seq 0 {{ add 1 .Values.cluster.replicas | mul .Values.cluster.primaries | add -1 }}); do
             until valkey-cli -h "${NAME}-${i}.${NAME}" -p "${PORT}" ping; do
               echo waiting instance ${i}
