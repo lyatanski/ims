@@ -1,8 +1,8 @@
 replicaCount: 2
 
 redis:
-  criss: 1
-  cross: 2
+  criss: 0
+  cross: 1
 
 image:
   repository: ghcr.io/lyatanski/rtpengine

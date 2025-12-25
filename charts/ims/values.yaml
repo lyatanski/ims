@@ -11,6 +11,11 @@ mnc: "01"
 # the default shoud suffice in most cases
 domain: mnc{{ .Values.mnc }}.mcc{{ .Values.mcc }}.3gppnetwork.org
 
+db:
+  proxy: 2
+  interrogating: 3
+  serving: 4
+
 # This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
 replicaCount: 1
 
