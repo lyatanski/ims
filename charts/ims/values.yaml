@@ -6,18 +6,6 @@
 mcc: "001"
 mnc: "01"
 
-proxy:
-- name: IPSEC
-  valueFrom:
-    fieldRef:
-      fieldPath: status.podIP
-interrogating:
-- name: DBURL
-  value: redis:6379/2
-serving:
-- name: RTPADR
-  value: udp:rtpengine:9910
-
 # convinience variable for doman/realm
 # should not be necessary to be configured explicitly
 # the default shoud suffice in most cases
