@@ -20,6 +20,6 @@ data:
     cluster-databases 16
     cluster-config-file nodes.conf
     cluster-preferred-endpoint-type ip
-    cluster-port {{ .Values.containerPorts.bus }}
-    port {{ .Values.containerPorts.valkey }}
+    cluster-port {{ .Values.ports.bus }}
+    port {{ .Values.ports.valkey }}
     {{- end }}

@@ -58,10 +58,13 @@ S-CSCF register
   image: {{ .Values.rtpengine.valkey.image.repository }}:{{ .Values.rtpengine.valkey.image.tag }}
   command:
   - valkey-cli
-  args:
+  - -c
   - -u
-  - redis://redis:6379/2
-  - HSET s_cscf:entry::1 s_cscf_uri sip:scscf.ims.${REALM}
+  - redis://{{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ .Values.db.interrogating }}
+  - HSET
+  - s_cscf:entry::1
+  - s_cscf_uri
+  - sip:scscf.ims
 {{- end }}
 
 {{/*

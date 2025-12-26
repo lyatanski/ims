@@ -8,21 +8,28 @@ permissions: write-all
 jobs:
   charts:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        package:
-        - ims
-        - core
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Package
-      run: helm package --dependency-update charts/${{ matrix.package }}
+    - name: Update dependencies HSS
+      run: helm dependency update charts/hss
+
+    - name: Package Open5GS
+      run: helm package --dependency-update charts/core
+
+    - name: Update dependencies RTPengine
+      run: helm dependency update charts/rtpengine
+
+    - name: Package IMS
+      run: helm package --dependency-update charts/ims
 
     - name: Log in
       run: helm registry login --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} oci://ghcr.io/
 
-    - name: Publish
-      run: helm push ${{ matrix.package }}-*.tgz oci://ghcr.io/${{ github.actor }}
+    - name: Publish IMS
+      run: helm push ims-*.tgz oci://ghcr.io/${{ github.actor }}
+
+    - name: Publish Open5GS
+      run: helm push core-*.tgz oci://ghcr.io/${{ github.actor }}
 

@@ -1,9 +1,9 @@
 apiVersion: v2
 name: core
-description: Core Network
+description: Open5GS Core Network
 type: application
 version: 0.1.0
-appVersion: 0.0.0
+icon: https://open5gs.org/assets/img/open5gs-logo.png
 dependencies:
 - name: hss
   version: "*"

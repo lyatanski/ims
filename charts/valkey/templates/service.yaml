@@ -8,11 +8,11 @@ spec:
   clusterIP: None
   ports:
   - name: client
-    port: {{ .Values.containerPorts.valkey }}
+    port: {{ .Values.ports.valkey }}
     targetPort: client
     protocol: TCP
   - name: bus
-    port: {{ .Values.containerPorts.bus }}
+    port: {{ .Values.ports.bus }}
     targetPort: cluster
     protocol: TCP
   selector: {{- include "valkey.labels" . | nindent 4 }}

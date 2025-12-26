@@ -25,10 +25,10 @@ spec:
         - /etc/valkey/valkey.conf
         ports:
         - name: client
-          containerPort: {{ .Values.containerPorts.valkey }}
+          containerPort: {{ .Values.ports.valkey }}
           protocol: TCP
         - name: cluster
-          containerPort: {{ .Values.containerPorts.bus }}
+          containerPort: {{ .Values.ports.bus }}
           protocol: TCP
         startupProbe:
           exec:

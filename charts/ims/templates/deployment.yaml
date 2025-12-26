@@ -44,7 +44,20 @@ spec:
         env:
         - name: REALM
           value: {{ tpl .Values.domain . }}
-        {{- index .Values $cscf | toYaml | nindent 8 }}
+        {{- if eq "proxy" $cscf }}
+        - name: IPSEC
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        {{- end }}
+        {{- if eq "interrogating" $cscf }}
+        - name: DBURL
+          value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ .Values.db.interrogating }}
+        {{- end }}
+        {{- if eq "serving" $cscf }}
+        - name: RTPADR
+          value: udp:{{ template "rtpengine.name" .Subcharts.rtpengine }}:{{ .Values.rtpengine.service.port }}
+        {{- end }}
         ports:
         - name: tcp
           containerPort: {{ .Values.service.port }}
