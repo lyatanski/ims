@@ -68,7 +68,7 @@ tolerations: []
 
 affinity: {}
 
-coredns:
-   service:
-     spec:
-       clusterIP: "10.233.0.69"
+dns:
+  service:
+    spec:
+      clusterIP: "10.233.0.69"
