@@ -1,42 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ default (include "coredns.fullname" .) .Values.deployment.name }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "coredns.fullname" . }}
   labels: {{- include "coredns.labels" . | nindent 4 }}
-    app.kubernetes.io/version: {{ .Values.image.tag | default .Chart.AppVersion | replace ":" "-" | replace "@" "_" | trunc 63 | trimSuffix "-" | quote }}
-{{- if .Values.customLabels }}
-{{ toYaml .Values.customLabels | indent 4 }}
-{{- end }}
-  {{- if or .Values.deployment.annotations .Values.customAnnotations }}
-  annotations:
-    {{- if .Values.customAnnotations }}
-    {{- toYaml .Values.customAnnotations | nindent 4 }}
-    {{- end }}
-    {{- if .Values.deployment.annotations }}
-    {{- toYaml .Values.deployment.annotations | nindent 4 }}
-    {{- end }}
-  {{- end }}
 spec:
-  {{- if and (not .Values.autoscaler.enabled) (not .Values.hpa.enabled) }}
   replicas: {{ .Values.replicaCount }}
-  {{- end }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: {{ .Values.rollingUpdate.maxUnavailable }}
       maxSurge: {{ .Values.rollingUpdate.maxSurge }}
   selector:
-    {{- if .Values.deployment.selector }}
-    {{- toYaml .Values.deployment.selector | nindent 4 }}
-    {{- else }}
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name | quote }}
       {{- if .Values.isClusterService }}
       k8s-app: {{ template "coredns.k8sapplabel" . }}
       {{- end }}
       app.kubernetes.io/name: {{ template "coredns.name" . }}
-    {{- end }}
   template:
     metadata:
       labels:
@@ -46,64 +26,37 @@ spec:
         app.kubernetes.io/name: {{ template "coredns.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name | quote }}
     spec:
-      {{- if .Values.podSecurityContext }}
-      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.podSecurityContext }}
+      securityContext: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.terminationGracePeriodSeconds }}
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
       {{- end }}
-      {{- if .Values.priorityClassName }}
-      priorityClassName: {{ .Values.priorityClassName | quote }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
       {{- end }}
-      {{- if .Values.affinity }}
-      affinity:
-{{ toYaml .Values.affinity | indent 8 }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.topologySpreadConstraints }}
-      topologySpreadConstraints:
-{{ tpl (toYaml .Values.topologySpreadConstraints) $ | indent 8 }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.tolerations }}
-      tolerations:
-{{ toYaml .Values.tolerations | indent 8 }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.nodeSelector }}
-      nodeSelector:
-{{ toYaml .Values.nodeSelector | indent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.image.pullSecrets }}
-      imagePullSecrets:
-{{ toYaml .Values.image.pullSecrets | indent 8 }}
-      {{- end }}
-      {{- if .Values.initContainers }}
-      initContainers:
-{{ toYaml .Values.initContainers | indent 8 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
       - name: coredns
         image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
         args: [ "-conf", "/etc/coredns/Corefile" ]
-        volumeMounts:
-        - name: config-volume
-          mountPath: /etc/coredns
-{{- range .Values.extraSecrets }}
-        - name: {{ .name }}
-          mountPath: {{ .mountPath }}
-          readOnly: true
-{{- end }}
-{{- if .Values.extraVolumeMounts }}
-{{- toYaml .Values.extraVolumeMounts | nindent 8}}
-{{- end }}
-{{- if .Values.env }}
-        env:
-{{- toYaml .Values.env | nindent 10}}
-{{- end }}
-        resources:
-        {{- toYaml .Values.resources | nindent 10 }}
-        ports:
-        {{- include "coredns.containerPorts" . | nindent 8 }}
-        {{- if .Values.livenessProbe.enabled }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        resources: {{- toYaml .Values.resources | nindent 10 }}
+        ports: {{- include "coredns.containerPorts" . | nindent 8 }}
         livenessProbe:
           httpGet:
             path: /health
@@ -114,8 +67,6 @@ spec:
           timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
           successThreshold: {{ .Values.livenessProbe.successThreshold }}
           failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
-        {{- end }}
-        {{- if .Values.readinessProbe.enabled }}
         readinessProbe:
           httpGet:
             path: /ready
@@ -126,15 +77,10 @@ spec:
           timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
           successThreshold: {{ .Values.readinessProbe.successThreshold }}
           failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
-        {{- end }}
+        volumeMounts:
+        - name: conf
+          mountPath: /etc/coredns
       volumes:
-      - name: config-volume
+      - name: conf
         configMap:
           name: {{ template "coredns.fullname" . }}
-          items:
-          - key: Corefile
-            path: Corefile
-          {{ range .Values.zoneFiles }}
-          - key: {{ .filename }}
-            path: {{ .filename }}
-          {{ end }}

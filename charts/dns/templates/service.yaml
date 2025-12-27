@@ -2,7 +2,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ default (include "coredns.fullname" .) .Values.service.name }}
-  namespace: {{ .Release.Namespace }}
   labels: {{- include "coredns.labels" . | nindent 4 }}
 spec:
   selector:
@@ -15,32 +14,30 @@ spec:
     {{- end }}
     app.kubernetes.io/name: {{ template "coredns.name" . }}
     {{- end }}
-  {{- if .Values.service.spec.clusterIP }}
-  clusterIP: {{ .Values.service.spec.clusterIP }}
+  {{- with .Values.service.spec.clusterIP }}
+  clusterIP: {{ . }}
   {{- end }}
-  {{- if .Values.service.clusterIPs }}
-  clusterIPs:
-  {{ toYaml .Values.service.clusterIPs | nindent 4 }}
+  {{- with .Values.service.clusterIPs }}
+  clusterIPs: {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if .Values.service.externalIPs }}
-  externalIPs:
-  {{- toYaml .Values.service.externalIPs | nindent 4 }}
+  {{- with .Values.service.externalIPs }}
+  externalIPs: {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if .Values.service.externalTrafficPolicy }}
-  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- with .Values.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
   {{- end }}
-  {{- if .Values.service.loadBalancerIP }}
-  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+  {{- with .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
   {{- end }}
-  {{- if .Values.service.loadBalancerClass }}
-  loadBalancerClass: {{ .Values.service.loadBalancerClass }}
+  {{- with .Values.service.loadBalancerClass }}
+  loadBalancerClass: {{ . }}
   {{- end }}
   ports:
   {{- include "coredns.servicePorts" . | nindent 2 -}}
   type: {{ default "ClusterIP" .Values.serviceType }}
-  {{- if .Values.service.ipFamilyPolicy }}
-  ipFamilyPolicy: {{ .Values.service.ipFamilyPolicy }}
+  {{- with .Values.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ . }}
   {{- end }}
-  {{- if .Values.service.trafficDistribution }}
-  trafficDistribution: {{ .Values.service.trafficDistribution }}
+  {{- with .Values.service.trafficDistribution }}
+  trafficDistribution: {{ . }}
   {{- end }}
