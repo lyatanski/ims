@@ -18,7 +18,7 @@ spec:
       {{- end }}
       labels: {{- include "ims.labels" . | nindent 8 }}
     spec:
-      {{- $dns := (lookup "v1" "Service" .Release.Namespace "dns-coredns") | default .Values.coredns.service -}}
+      {{- $dns := (lookup "v1" "Service" .Release.Namespace "dns-coredns") | default .Values.dns.service -}}
       {{- if $dns }}
       dnsPolicy: None
       dnsConfig:

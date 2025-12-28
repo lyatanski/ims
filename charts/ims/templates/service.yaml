@@ -5,9 +5,8 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "ims.fullname" . }}-{{ $cscf }}cscf
-  labels:
-    {{- include "ims.labels" . | nindent 4 }}
+  name: {{ .Release.Name }}-{{ $cscf }}cscf
+  labels: {{- include "ims.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
   clusterIP: None
@@ -20,8 +19,7 @@ spec:
     targetPort: {{ .Values.service.port }}
     protocol: UDP
     name: udp
-  selector:
-    {{- include "ims.selectorLabels" . | nindent 4 }}
+  selector: {{- include "ims.selectorLabels" . | nindent 4 }}
 ---
 {{- end }}
 {{- end }}
