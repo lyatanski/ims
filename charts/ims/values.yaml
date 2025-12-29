@@ -54,4 +54,19 @@ affinity: {}
 dns:
   service:
     spec:
-      clusterIP: "10.233.0.69"
+      clusterIP: 10.233.0.69
+  zones:
+  - zone: 3gppnetwork.org
+    plugins:
+    - name: template
+      parameters: IN SRV
+      configBlock: |-
+        match "(?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
+        answer "{{`{{ .Name }}`}} 1D SRV 0 0 5060 {{ .Release.Name }}-{{`{{ or .Group.name \"icscf\" }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
+        fallthrough
+    - name: template
+      parameters: IN ANY
+      configBlock: |-
+        match "(^|[.])(?P<name>[^.]*).*\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
+        answer "{{`{{ .Name }}`}} 1D IN CNAME {{ .Release.Name }}-{{`{{ .Group.name }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
+        fallthrough

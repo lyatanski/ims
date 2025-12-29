@@ -1,7 +1,7 @@
-{{- $outer := . -}}
+{{- $dot := . -}}
 {{- range tuple "proxy" "interrogating" "serving" }}
 {{- $cscf := . -}}
-{{- with $outer -}}
+{{- with $dot -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -11,12 +11,14 @@ spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels: {{- include "ims.selectorLabels" . | nindent 6 }}
+      role: {{ trunc 1 $cscf }}cscf
   template:
     metadata:
       {{- with .Values.podAnnotations }}
       annotations: {{- toYaml . | nindent 8 }}
       {{- end }}
       labels: {{- include "ims.labels" . | nindent 8 }}
+        role: {{ trunc 1 $cscf }}cscf
     spec:
       {{- $dns := (lookup "v1" "Service" .Release.Namespace "dns-coredns") | default .Values.dns.service -}}
       {{- if $dns }}
