@@ -1,0 +1,88 @@
+# Default values for coredns.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+image:
+  repository: docker.io/coredns/coredns
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+replicaCount: 1
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+rollingUpdate:
+  maxUnavailable: 1
+  maxSurge: 25%
+
+terminationGracePeriodSeconds: 10
+podAnnotations: {}
+serviceType: ClusterIP
+
+service:
+  name: ""
+  annotations: {}
+  selector: {}
+  spec:
+    clusterIP: "10.233.0.69"
+
+priorityClassName: ""
+
+podSecurityContext: {}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    add:
+    - NET_BIND_SERVICE
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+
+servers:
+- zones:
+  - zone: .
+  port: 53
+  plugins:
+  - name: log
+  - name: errors
+  - name: ready
+  - name: health
+    configBlock: |-
+      lameduck 5s
+  - name: prometheus
+    parameters: :9153
+  - name: forward
+    parameters: . /etc/resolv.conf
+  - name: loop
+  - name: reload
+  - name: loadbalance
+
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 5
+  successThreshold: 1
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 5
+  timeoutSeconds: 5
+  failureThreshold: 1
+  successThreshold: 1
+
+affinity: {}
+topologySpreadConstraints: []
+nodeSelector: {}
+tolerations: []
+podDisruptionBudget: {}
+

@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "coredns.fullname" . }}
+  labels: {{- include "coredns.labels" . | nindent 4 }}
+data:
+  Corefile: |-
+    {{ $dot := . }}
+    {{- range .Values.zones }}
+    {{ default "." .zone }} {
+      {{- range .plugins }}
+        {{ .name }}{{ if .parameters }} {{ .parameters }}{{ end }}
+        {{- if .configBlock }} {
+          {{- tpl .configBlock $dot | nindent 12 }}
+        }{{ end }}
+      {{- end }}
+    }
+    {{- end -}}
+
+    {{- range .Values.servers }}
+    {{- range .zones }}
+    {{ default "" .scheme }}{{ default "." .zone }}{{ else }}.{{ end }} {
+      {{- range .plugins }}
+        {{ .name }}{{ if .parameters }} {{ .parameters }}{{ end }}
+        {{- if .configBlock }} {
+          {{- .configBlock | nindent 12 }}
+        }{{ end }}
+      {{- end }}
+    }
+    {{- end }}

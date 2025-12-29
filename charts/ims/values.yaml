@@ -16,37 +16,25 @@ db:
   interrogating: 3
   serving: 4
 
-# This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
 replicaCount: 1
 
 # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
   repository: ghcr.io/lyatanski/kamailio
-  # Overrides the image tag whose default is the chart appVersion.
   tag: latest
-  # This sets the pull policy for images.
   pullPolicy: IfNotPresent
 
-# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
 # This is to override the chart name.
 nameOverride: ""
 fullnameOverride: ""
 
-# This is for setting Kubernetes Annotations to a Pod.
-# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
 podAnnotations: {}
 
-# This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
 service:
-  # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
   port: 5060
 
 resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
   # limits:
   #   cpu: 100m
   #   memory: 128Mi
@@ -54,7 +42,6 @@ resources: {}
   #   cpu: 100m
   #   memory: 128Mi
 
-# This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
 autoscaling:
   enabled: false
   minReplicas: 1
@@ -68,7 +55,22 @@ tolerations: []
 
 affinity: {}
 
-coredns:
-   service:
-     spec:
-       clusterIP: "10.233.0.69"
+dns:
+  service:
+    spec:
+      clusterIP: 10.233.0.69
+  zones:
+  - zone: 3gppnetwork.org
+    plugins:
+    - name: template
+      parameters: IN SRV
+      configBlock: |-
+        match "(?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
+        answer "{{`{{ .Name }}`}} 1D SRV 0 0 5060 {{ .Release.Name }}-{{`{{ or .Group.name \"icscf\" }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
+        fallthrough
+    - name: template
+      parameters: IN ANY
+      configBlock: |-
+        match "(^|[.])(?P<name>[^.]*).*\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
+        answer "{{`{{ .Name }}`}} 1D IN CNAME {{ .Release.Name }}-{{`{{ .Group.name }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
+        fallthrough

@@ -5,9 +5,9 @@ type: application
 version: 0.1.0
 appVersion: 6.0.4
 dependencies:
-- name: coredns
+- name: dns
   version: "*"
-  repository: file://../coredns
+  repository: file://../dns
 - name: rtpengine
   version: "*"
   repository: file://../rtpengine
