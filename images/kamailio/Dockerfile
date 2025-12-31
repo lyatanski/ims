@@ -39,6 +39,7 @@ RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
             pua ims_registrar_pcscf ims_usrloc_pcscf ims_ipsec_pcscf ims_qos \
             ims_icscf \
             ims_registrar_scscf ims_usrloc_scscf ims_auth ims_isc ims_charging \
+            enum \
             presence \
             dispatcher \
             rtpengine \
