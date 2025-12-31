@@ -144,18 +144,18 @@ services:
       scscf:
         condition: service_healthy
 
-#  pcap:
-#    profiles:
-#    - debug
-#    network_mode: host
-#    command: tcpdump -i any -w /pcap/trace.pcap
-#    volumes:
-#    - ./pcap:/pcap
-#    build:
-#      context: .
-#      dockerfile_inline: |
-#        FROM alpine
-#        RUN apk add tcpdump
+  pcap:
+    profiles:
+    - debug
+    network_mode: host
+    command: ptcpdump -i any --pname kamailio -w /pcap/trace.pcap
+    volumes:
+    - ./pcap:/pcap
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine
+        RUN wget -qO- https://github.com/mozillazg/ptcpdump/releases/download/v0.36.0/ptcpdump_0.36.0_linux_amd64.tar.gz | tar -C /bin -xzf- ptcpdump
 
 
 configs:
