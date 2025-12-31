@@ -2,27 +2,22 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "dra.name" . }}
-  labels:
-    {{- include "dra.labels" . | nindent 4 }}
+  labels: {{- include "dra.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
-    matchLabels:
-      {{- include "dra.selectorLabels" . | nindent 6 }}
+    matchLabels: {{- include "dra.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       {{- with .Values.podAnnotations }}
-      annotations:
-        {{- toYaml . | nindent 8 }}
+      annotations: {{- toYaml . | nindent 8 }}
       {{- end }}
-      labels:
-        {{- include "dra.labels" . | nindent 8 }}
+      labels: {{- include "dra.labels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
       - name: openssl
@@ -55,8 +50,7 @@ spec:
           containerPort: {{ .Values.service.port }}
           protocol: TCP
         {{- with .Values.resources }}
-        resources:
-          {{- toYaml . | nindent 12 }}
+        resources: {{- toYaml . | nindent 12 }}
         {{- end }}
         volumeMounts:
         - name: conf
@@ -71,14 +65,11 @@ spec:
         emptyDir:
           sizeLimit: 10Mi
       {{- with .Values.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
+      affinity: {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
+      tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
