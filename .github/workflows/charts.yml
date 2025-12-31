@@ -43,7 +43,7 @@ jobs:
       uses: helm/kind-action@v1
 
     - name: Install
-      run: helm install ims oci://ghcr.io/${{ github.actor }}/ims
+      run: helm install --set dns.service.spec.clusterIP=$(kubectl cluster-info dump | sed -n 's/.*--service-cluster-ip-range=\([0-9]\+\.[0-9]\+\.[0-9]\+\.\).*/\169/p' | sort -u) ims oci://ghcr.io/${{ github.actor }}/ims
 
     - name: Check
       run: kubectl get all
