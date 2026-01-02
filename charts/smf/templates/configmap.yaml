@@ -61,4 +61,4 @@ data:
       dns:
       - 8.8.8.8
       p-cscf:
-      - 1.2.3.4
+      - ims-pcscf
