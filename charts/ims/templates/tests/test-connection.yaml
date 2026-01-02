@@ -13,4 +13,8 @@ spec:
     - gtp
     - -pgwc
     - core-smf
+    securityContext:
+      capabilities:
+        add:
+        - NET_ADMIN
   restartPolicy: Never
