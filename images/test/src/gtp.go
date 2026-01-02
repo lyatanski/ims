@@ -283,7 +283,8 @@ func main() {
 
 	ues, err := strconv.Atoi(os.Getenv("SCALE"))
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		ues = 1
 	}
 	for i := 1; i <= ues; i++ {
 		wg.Add(1)
