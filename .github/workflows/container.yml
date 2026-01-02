@@ -22,7 +22,7 @@ jobs:
         - cgr-loader
         - cgr-ui
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Build
       run: >
         docker build -t ghcr.io/${{ github.actor }}/${{ matrix.context }}
@@ -49,7 +49,7 @@ jobs:
     - images
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Install Kmod
       run: |
         sudo apt update

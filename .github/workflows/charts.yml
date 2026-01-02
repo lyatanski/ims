@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Update dependencies HSS
       run: helm dependency update charts/hss
@@ -33,3 +33,17 @@ jobs:
     - name: Publish Open5GS
       run: helm push core-*.tgz oci://ghcr.io/${{ github.actor }}
 
+  test:
+    needs:
+    - charts
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Create KinD Cluster
+      uses: helm/kind-action@v1
+
+    - name: Install
+      run: helm install --set dns.service.spec.clusterIP=$(kubectl cluster-info dump | sed -n 's/.*--service-cluster-ip-range=\([0-9]\+\.[0-9]\+\.[0-9]\+\.\).*/\169/p' | sort -u) ims oci://ghcr.io/${{ github.actor }}/ims
+
+    - name: Check
+      run: kubectl get all
