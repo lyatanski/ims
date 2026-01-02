@@ -1,9 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Release.Name }}-smf-gtpc
+  name: {{ .Release.Name }}-{{ .Chart.Name }}
   labels: {{- include "open5gs.labels" . | nindent 4 }}
 spec:
+  type: ClusterIP
+  clusterIP: None
   ports:
   - name: gtpc
     port: {{ .Values.gtpc }}
