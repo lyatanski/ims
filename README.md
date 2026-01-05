@@ -35,11 +35,11 @@ architecture-beta
     scscf:B -- R:rtp
 ```
 
-Why another setup:
-- use modern compose features (like interpolation) for simplicity
-- create helm charts for Kubernetes installation
-- go into a bit more depth of the Kamailio configuration for better understanding
+Why the setup is needed:
 - provide entirely software based playground for testing
+- delve a bit deeper into the Kamailio configuration documenting the process
+- make simple and clean solution utilizing compose features like interpolation
+- create helm charts for Kubernetes installation
 
 
 ## How to use
@@ -72,7 +72,7 @@ To observe the packets
 - Emergency [TS 23.167](https://www.etsi.org/deliver/etsi_ts/123100_123199/123167/18.02.00_60/ts_123167v180200p.pdf)
 
 
-## Transactions
+## Flows
 - [Registration](doc/registration.md)
 - [Session Control](doc/session.md)
 - [Transaction](doc/transaction.md)
