@@ -2,6 +2,6 @@
 labels
 */}}
 {{- define "open5gs.labels" -}}
-app: smf
+app: {{ .Chart.Name }}
 {{- end }}
 

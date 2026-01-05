@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}-smf
+  name: {{ .Release.Name }}-{{ .Chart.Name }}
   labels: {{- include "open5gs.labels" . | nindent 4 }}
 data:
   open5gs.yaml: |
@@ -47,7 +47,7 @@ data:
         - address: 0.0.0.0
         client:
           upf:
-          - address: core4-upf-pfcp
+          - address: {{ .Release.Name }}-upf-pfcp
       gtpc:
         server:
         - address: 0.0.0.0
@@ -61,4 +61,4 @@ data:
       dns:
       - 8.8.8.8
       p-cscf:
-      - 1.2.3.4
+      - ims-pcscf

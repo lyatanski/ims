@@ -9,5 +9,12 @@ spec:
   containers:
   - name: wget
     image: ghcr.io/lyatanski/test
-    command: ['gtp']
+    command:
+    - gtp
+    - -pgwc
+    - core-smf
+    securityContext:
+      capabilities:
+        add:
+        - NET_ADMIN
   restartPolicy: Never

@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}-smf
+  name: {{ .Release.Name }}-{{ .Chart.Name }}
   labels: {{- include "open5gs.labels" . | nindent 4 }}
 spec:
   selector:
@@ -47,4 +47,4 @@ spec:
       volumes:
       - name: conf
         configMap:
-          name: {{ .Release.Name }}-smf
+          name: {{ .Release.Name }}-{{ .Chart.Name }}

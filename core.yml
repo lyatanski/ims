@@ -121,8 +121,6 @@ services:
     depends_on:
       cert-smf:
         condition: service_completed_successfully
-      upf:
-        condition: service_started
       pcrf:
         condition: service_started
 
@@ -147,6 +145,9 @@ services:
     cap_add:
     - NET_ADMIN
     restart: unless-stopped
+    depends_on:
+      smf:
+        condition: service_started
 
   upftun:
     image: alpine
@@ -183,7 +184,6 @@ configs:
 
       LoadExtension = "dbg_msg_dumps.fdx" : "0x8888";
       ConnectPeer = "hss.epc.${REALM}" { No_TLS; };
-
 
   hss.yaml:
     content: |
@@ -244,87 +244,90 @@ configs:
           server:
           - address: 0.0.0.0
             port: 9090
-        session:
-        - name: internet
-          type: 3  # 1:IPv4, 2:IPv6, 3:IPv4v6
-          ambr:
-            downlink:
-              value: 1
-              unit: 3  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-            uplink:
-              value: 1
-              unit: 3
-          qos:
-            index: 9
-            arp:
-              priority_level: 8
-              pre_emption_vulnerability: 1  # 1: Disabled, 2:Enabled
-              pre_emption_capability: 1  # 1: Disabled, 2:Enabled
-        - name: ims
-          type: 3  # 1:IPv4, 2:IPv6, 3:IPv4v6
-          ambr:
-            downlink:
-              value: 1
-              unit: 3  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-            uplink:
-              value: 1
-              unit: 3  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-          qos:
-            index: 5
-            arp:
-              priority_level: 1
-              pre_emption_vulnerability: 1  # 1: Disabled, 2:Enabled
-              pre_emption_capability: 1  # 1: Disabled, 2:Enabled
-          pcc_rule:
-          - qos:
-              index: 1
+        policy:
+        - supi_range:          # Filter policies by SUPI
+          - 001010000000000-001019999999999
+          session:
+          - name: internet
+            type: 3  # 1:IPv4, 2:IPv6, 3:IPv4v6
+            ambr:
+              downlink:
+                value: 1
+                unit: 3  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+              uplink:
+                value: 1
+                unit: 3
+            qos:
+              index: 9
+              arp:
+                priority_level: 8
+                pre_emption_vulnerability: 1  # 1: Disabled, 2:Enabled
+                pre_emption_capability: 1  # 1: Disabled, 2:Enabled
+          - name: ims
+            type: 3  # 1:IPv4, 2:IPv6, 3:IPv4v6
+            ambr:
+              downlink:
+                value: 1
+                unit: 3  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+              uplink:
+                value: 1
+                unit: 3  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+            qos:
+              index: 5
               arp:
                 priority_level: 1
-                pre_emption_vulnerability: 1   # 1: Disabled, 2:Enabled
-                pre_emption_capability: 1   # 1: Disabled, 2:Enabled
-              mbr:
-                downlink:
-                  value: 82
-                  unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-                uplink:
-                  value: 82
-                  unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-              gbr:
-                downlink:
-                  value: 82
-                  unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-                uplink:
-                  value: 82
-                  unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-            flow:
-            - direction: 2
-              description: "permit out icmp from any to assigned"
-            - direction: 1
-              description: "permit out icmp from any to assigned"
-            - direction: 2
-              description: "permit out udp from 10.200.136.98/32 23455 to assigned 1-65535"
-            - direction: 1
-              description: "permit out udp from 10.200.136.98/32 1-65535 to assigned 50021"
-          - qos:
-              index: 2
-              arp:
-                priority_level: 4
-                pre_emption_vulnerability: 2   # 1: Disabled, 2:Enabled
-                pre_emption_capability: 2   # 1: Disabled, 2:Enabled
-              mbr:
-                downlink:
-                  value: 802
-                  unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-                uplink:
-                  value: 802
-                  unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-              gbr:
-                downlink:
-                  value: 802
-                  unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
-                uplink:
-                  value: 802
-                  unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+                pre_emption_vulnerability: 1  # 1: Disabled, 2:Enabled
+                pre_emption_capability: 1  # 1: Disabled, 2:Enabled
+            pcc_rule:
+            - qos:
+                index: 1
+                arp:
+                  priority_level: 1
+                  pre_emption_vulnerability: 1   # 1: Disabled, 2:Enabled
+                  pre_emption_capability: 1   # 1: Disabled, 2:Enabled
+                mbr:
+                  downlink:
+                    value: 82
+                    unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+                  uplink:
+                    value: 82
+                    unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+                gbr:
+                  downlink:
+                    value: 82
+                    unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+                  uplink:
+                    value: 82
+                    unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+              flow:
+              - direction: 2
+                description: "permit out icmp from any to assigned"
+              - direction: 1
+                description: "permit out icmp from any to assigned"
+              - direction: 2
+                description: "permit out udp from 10.200.136.98/32 23455 to assigned 1-65535"
+              - direction: 1
+                description: "permit out udp from 10.200.136.98/32 1-65535 to assigned 50021"
+            - qos:
+                index: 2
+                arp:
+                  priority_level: 4
+                  pre_emption_vulnerability: 2   # 1: Disabled, 2:Enabled
+                  pre_emption_capability: 2   # 1: Disabled, 2:Enabled
+                mbr:
+                  downlink:
+                    value: 802
+                    unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+                  uplink:
+                    value: 802
+                    unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+                gbr:
+                  downlink:
+                    value: 802
+                    unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
+                  uplink:
+                    value: 802
+                    unit: 1  # 0:bps, 1:Kbps, 2:Mbps, 3:Gbps, 4:Tbps
 
   pcrf.diameter:
     content: |
@@ -360,10 +363,9 @@ configs:
             port: 9091
         pfcp:
           server:
-          - address: 0.0.0.0
+          - dev: eth0
+            advertise: smf
           client:
-            upf:
-            - address: upf
         gtpc:
           server:
           - address: 0.0.0.0
@@ -378,7 +380,9 @@ configs:
         dns:
         - ${DNSv4}
         p-cscf:
-        - ${IPSEC}
+        - pcscf
+        ctf:
+          enabled: no
 
   smf.diameter:
     content: |
@@ -412,7 +416,8 @@ configs:
             port: 9091
         pfcp:
           server:
-          - address: 0.0.0.0
+          - dev: eth0
+            advertise: upf
           client:
             smf:
             - address: smf

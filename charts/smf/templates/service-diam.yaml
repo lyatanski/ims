@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Release.Name }}-smf-gx
+  name: {{ .Release.Name }}-{{ .Chart.Name }}-gx
   labels: {{- include "open5gs.labels" . | nindent 4 }}
 spec:
   ports:
