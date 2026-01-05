@@ -275,8 +275,8 @@ configs:
 
 networks:
   default:
-    #enable_ipv6: true
+    enable_ipv6: true
     ipam:
       config:
       - subnet: ${NETv4}
-        #- subnet: ${NETv6}
+      - subnet: ${NETv6}

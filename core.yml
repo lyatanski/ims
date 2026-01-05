@@ -363,7 +363,7 @@ configs:
             port: 9091
         pfcp:
           server:
-          - address: 0.0.0.0
+          - dev: eth0
             advertise: smf
           client:
         gtpc:
@@ -416,7 +416,7 @@ configs:
             port: 9091
         pfcp:
           server:
-          - address: 0.0.0.0
+          - dev: eth0
             advertise: upf
           client:
             smf:
