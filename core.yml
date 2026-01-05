@@ -121,8 +121,6 @@ services:
     depends_on:
       cert-smf:
         condition: service_completed_successfully
-      upf:
-        condition: service_started
       pcrf:
         condition: service_started
 
@@ -147,6 +145,9 @@ services:
     cap_add:
     - NET_ADMIN
     restart: unless-stopped
+    depends_on:
+      smf:
+        condition: service_started
 
   upftun:
     image: alpine
@@ -183,7 +184,6 @@ configs:
 
       LoadExtension = "dbg_msg_dumps.fdx" : "0x8888";
       ConnectPeer = "hss.epc.${REALM}" { No_TLS; };
-
 
   hss.yaml:
     content: |
