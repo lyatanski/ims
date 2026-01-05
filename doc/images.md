@@ -74,3 +74,9 @@ dkr.cgrates.org/master/cgr-console
 dkr.cgrates.org/master/cgr-tester
 ```
 If version `1.0` provides more convenient solution, custom build should be utilized.
+
+## Test
+Multiple technologies need to be utilized for the test image:
+- [Doubange](https://github.com/lyatanski/doubango) for SIP and RTP implementation
+- GTPv2 implementation. Convinient solution is to use [go-gtp](https://github.com/wmnsk/go-gtp)
+- GTP-U implementation. There are miltiple approaches but probably the Linux kernel module is one simple approach to implement. However this approach has limitation in dedicated bearer implementation which could be problematic. Alternative solution could be utilizing `tun` device and routing the traffic to it. Probably eBPF solution should be considered as it could transparently wrap the IP frames and provide better performance than `tun` device.

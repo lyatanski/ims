@@ -107,4 +107,4 @@ To observe the packets
   - [ ] Alertmanager
   - [x] Grafana
 - Testing (compose.yml)
-  - [x] Doubango
+  - [x] [Doubango](doc/images.md#test)
