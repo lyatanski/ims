@@ -62,9 +62,10 @@ The image should contain basic freeDiameter daemon build.
 
 
 ## [CGRateS](https://github.com/cgrates/cgrates) (billing)
-At the time of writing, there are 2 main versions maintained:
-- master, aka. the current stable version
-- 1.0, aka. development branch.
+At the time of writing, there are 3 main versions maintained:
+- v0.10, aka. stable
+- master, aka. development
+- 1.0, aka. experimental
 There are prebuilt images documented in the [official installation guide](https://cgrates.readthedocs.io/en/latest/installation.html#pull-docker-images):
 ```
 dkr.cgrates.org/master/cgr-engine
