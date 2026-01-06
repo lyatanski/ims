@@ -26,8 +26,8 @@ sequenceDiagram
     P-CSCF->>I-CSCF: SIP - REGISTER
     I-CSCF->>S-CSCF: SIP - REGISTER
     S-CSCF->>HSS: Diameter - Server-Assignment-Request
-    HSS->>S-CSCF: Diameter - Server-Assignment-Answer
     Note over S-CSCF,HSS: update S-CSCF address in HSS
+    HSS->>S-CSCF: Diameter - Server-Assignment-Answer
     Note over S-CSCF,HSS: receive iFC from HSS
     S-CSCF->>I-CSCF: SIP 200 - OK
     I-CSCF->>P-CSCF: SIP 200 - OK
