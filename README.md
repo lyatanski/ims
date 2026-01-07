@@ -35,9 +35,9 @@ architecture-beta
     scscf:B -- R:rtp
 ```
 
-Why the setup is needed:
+Why the setup?
 - provide entirely software based playground for testing
-- delve a bit deeper into the Kamailio configuration documenting the process
+- delve a bit deeper into the open source components configuration and documenting the process
 - make simple and clean solution utilizing compose features like interpolation
 - create helm charts for Kubernetes installation
 
