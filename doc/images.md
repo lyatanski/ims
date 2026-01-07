@@ -74,7 +74,25 @@ dkr.cgrates.org/master/cgr-migrator
 dkr.cgrates.org/master/cgr-console
 dkr.cgrates.org/master/cgr-tester
 ```
-If version `1.0` provides more convenient solution, custom build should be utilized.
+
+engine - contains all the microservices
+- DiameterAgent: translates Diameter message AVPs to internal API call fields;
+- SessionS: gateway between the Agent and rest of CGRateS subsystems;
+- ChargerS: decide the number of billing runs for customer/supplier charging;
+- AttributeS: populate extra data to requests (ie: prepaid/postpaid, passwords, paypal account, LCR profile);
+- RALs: calculate costs as well as account bundle management;
+- SupplierS: selection of suppliers for each session (in case of OpenSIPS, it will work in tandem with their DRouting module);
+- StatS: computing statistics in real-time regarding sessions and their charging;
+- ThresholdS: monitoring and reacting to events coming from above subsystems;
+- EEs: exporting rated CDRs from CGR StorDB (export path: /tmp).
+loader - used for initial bootstraf for user data/profiles from CSV files
+console - CLI for interacting with the oengine
+migrator - used for database migration
+tester - load testing
+
+[Documentation](https://cgrates.readthedocs.io/en/latest/index.html0
+[Support](https://groups.google.com/g/cgrates)
+[Source](https://github.com/cgrates/cgrates)
 
 ## Test
 Multiple technologies need to be utilized for the test image:
