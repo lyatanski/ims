@@ -1,47 +1,55 @@
 # General
 
-Image selection is pretty important for optimizing starup times and performance.
-Smaller options (Alpine based or distroless) should be preferred.
+Utilizing optimized container images is important for improving startup/pull time,
+runtime performance and attack surface. It would be preferable to utilize smaller
+images either based on **Alpine** or **distroless**.
 
 
 ## [Kamailio](https://github.com/kamailio/kamailio) (P-CSCF/I-CSCF/S-CSCF)
-Kamailio already has latest and greatest (master) built into minimal container:
-`ghcr.io/kamailio/kamailio-ci:master-alpine`. This is all fine and dandy, until we stumble upon missing module for P-CSCF IPsec. Why this particular module is missing, when the rest of the IMS modules are present? Bug?
-
-Nevertheless, we can build our own image, installing Kamailio alpine packages.
+Kamailio provides relatively minimal container image from the latest master branch:
+`ghcr.io/kamailio/kamailio-ci:master-alpine`. Still bespoke image with just the
+required modules included could be built. The source approach should be selected
+for maximal flexibility.
 
 
 ## [CoreDNS](https://coredns.io)
 Benefits of using this particular DNS include:
-- Kubernetes default choice, so in K8S deployments the image could already be present on the cluster and no additional download would be required.
-- Its configuration is pretty convenient and allows quite the flexibility
-The default image on [dockerhub](https://hub.docker.com/r/coredns/coredns) is
-already pretty minimal and good choice.
+- It is the default DNS server in Kubernetes, meaning the image may already exist on the cluster during K8S deployments (reducing image pulls).
+- The configuration format is clean and flexible, allowing advanced service discovery patterns.
+The [official Docker Hub image](https://hub.docker.com/r/coredns/coredns) is already minimal and is a good choice.
 
 
 ## IMS DB
-For IMS to function DB is required. There are multiple options:
+Database is not strictly mandatory for IMS to function. Nevertheless, it could
+improve service recory in case of restarts. The main options are:
 ### [MariaDB](https://mariadb.org)
-Safe choice, but kind of heavy and its performance leaves things to be desired. If  ims_usrloc_scscf DB storage is used, it might be a necessity as there are hardcoded SQL statements in the module implementation.
+Currently some for of relational database is required when ims_usrloc_scscf DB
+storage is used due to hardcoded SQL statements in the module implementation.
+The most tested approach is to deploy MySQL/MariaDB. This database is not ideal
+choice, however, as is resource heavy and is not exactly cloud native solution.
 
 ### [Valkey](https://valkey.io)
-This [Redis](https://redis.io) drop-in replacement will be the choice for this
-setup due to its small image, small memory footprint, fast performance. The only
-drawback is required additional handling in Kamailio for providing "schema".
-There is no need for custom image build and the default Alpine based image,
-hosted on [dockerhub](https://hub.docker.com/r/valkey/valkey/tags?name=alpine),
-will do just fine.
+[Redis](https://redis.io) drop-in replacement will be preferred solution due to:
+- necessary for the [rtpengine](https://github.com/sipwise/rtpengine) high availability.
+- small image size
+- small memory footprint
+- fast performance
+[Kamailio](https://github.com/kamailio/kamailio) requires additional handling in its configuration in the form of providing "schema".
+No custom build is required as there is already [official Alpine-based image](https://hub.docker.com/r/valkey/valkey/tags?name=alpine).
 
 
 ## [rtpengine](https://github.com/sipwise/rtpengine)
-Alpine does provide smaller image size and newer releases, but it lacks support for some transcoding.
-Debian does not currently provide any benefits over Ubuntu.
+Provides media relay functionality to the setup.
+
+Installation from the package management repository should be avoided.
+On Alpine it lacks some transcoding functionality.
+On Ubuntu based system the version could be quite old and lack convenient features.
+
+Build from source ashould be preferred approach.
 
 
 ## [open5gs](https://github.com/open5gs/open5gs) (HSS/PCRF/PGW)
-It seem there are not any prebuild options so build from source will be the
-approach. The build will be Alpine based for size reduction. For detailed build
-instructions, please check the Dockerfile for its creation.
+There do not appear to be suitable prebuilt images for this use case, so the optimal approach would be to build from source.
 
 
 ## [freeDiameter](https://github.com/freeDiameter/freeDiameter) (DRA)
@@ -54,7 +62,11 @@ The image should contain basic freeDiameter daemon build.
 
 
 ## [CGRateS](https://github.com/cgrates/cgrates) (billing)
-There are some prebuilt images described in the official [documentation](https://cgrates.readthedocs.io/en/latest/installation.html#pull-docker-images)
+At the time of writing, there are 3 main versions maintained:
+- v0.10, aka. stable
+- master, aka. development
+- 1.0, aka. experimental
+There are prebuilt images documented in the [official installation guide](https://cgrates.readthedocs.io/en/latest/installation.html#pull-docker-images):
 ```
 dkr.cgrates.org/master/cgr-engine
 dkr.cgrates.org/master/cgr-loader
@@ -62,6 +74,28 @@ dkr.cgrates.org/master/cgr-migrator
 dkr.cgrates.org/master/cgr-console
 dkr.cgrates.org/master/cgr-tester
 ```
-For detailed build instructions, the Dockerfile in this repo could be used.
 
+engine - contains all the microservices
+- DiameterAgent: translates Diameter message AVPs to internal API call fields;
+- SessionS: gateway between the Agent and rest of CGRateS subsystems;
+- ChargerS: decide the number of billing runs for customer/supplier charging;
+- AttributeS: populate extra data to requests (ie: prepaid/postpaid, passwords, paypal account, LCR profile);
+- RALs: calculate costs as well as account bundle management;
+- SupplierS: selection of suppliers for each session (in case of OpenSIPS, it will work in tandem with their DRouting module);
+- StatS: computing statistics in real-time regarding sessions and their charging;
+- ThresholdS: monitoring and reacting to events coming from above subsystems;
+- EEs: exporting rated CDRs from CGR StorDB (export path: /tmp).
+loader - used for initial bootstraf for user data/profiles from CSV files
+console - CLI for interacting with the oengine
+migrator - used for database migration
+tester - load testing
 
+[Documentation](https://cgrates.readthedocs.io/en/latest/index.html0
+[Support](https://groups.google.com/g/cgrates)
+[Source](https://github.com/cgrates/cgrates)
+
+## Test
+Multiple technologies need to be utilized for the test image:
+- [Doubange](https://github.com/lyatanski/doubango) for SIP and RTP implementation
+- GTPv2 implementation. Convinient solution is to use [go-gtp](https://github.com/wmnsk/go-gtp)
+- GTP-U implementation. There are miltiple approaches but probably the Linux kernel module is one simple approach to implement. However this approach has limitation in dedicated bearer implementation which could be problematic. Alternative solution could be utilizing `tun` device and routing the traffic to it. Probably eBPF solution should be considered as it could transparently wrap the IP frames and provide better performance than `tun` device.
