@@ -63,7 +63,7 @@ RUN --mount=type=bind,from=build,source=/kamailio/utils/kamctl/db_redis/kamailio
     && mkdir -p /etc/cscf/schema/serving \
     && cp /dbmap/dialog_in /dbmap/dialog_out /dbmap/dialog_vars /etc/cscf/schema/serving \
     && cp /dbmap/contact /dbmap/impu /dbmap/impu_contact /dbmap/subscriber_scscf /dbmap/impu_subscriber /etc/cscf/schema/serving \
-    && cp /dbmap/ro_session /etc/cscf/schema/serving
+    && cp /dbmap/ro_session /etc/cscf/schema/serving \
     && cp /dbmap/rtpengine /etc/cscf/schema/serving
 COPY cscf/ /etc/cscf
 
