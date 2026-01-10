@@ -62,3 +62,5 @@ data:
       - 8.8.8.8
       p-cscf:
       - ims-pcscf
+      ctf:
+        enabled: no

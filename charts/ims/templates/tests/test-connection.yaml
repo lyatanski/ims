@@ -12,7 +12,7 @@ spec:
     command:
     - gtp
     - -pgwc
-    - core-smf
+    - {{ .Values.test.pgwc }}
     securityContext:
       capabilities:
         add:
