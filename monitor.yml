@@ -34,6 +34,15 @@ services:
     - source: prometheus.yml
       target: /etc/prometheus/prometheus.yml
 
+  jsonnet:
+    image: ghcr.io/lyatanski/grafonnet
+    command: jsonnet /dash/ims.jsonnet -o /board/ims.json
+    configs:
+    - source: ims.jsonnet
+      target: /dash/ims.jsonnet
+    volumes:
+    - dash:/board
+
   grafana:
     image: grafana/grafana
     environment:
@@ -45,14 +54,17 @@ services:
       target: /etc/grafana/provisioning/datasources/ds.yaml
     - source: dashboards.yml
       target: /etc/grafana/provisioning/dashboards/ds.yaml
-    - source: logs.json
-      target: /etc/dashboards/logs.json
-    - source: cadvisor.json
-      target: /etc/dashboards/cadvisor.json
-    - source: ims.json
-      target: /etc/dashboards/ims.json
-    - source: rtpengine.json
-      target: /etc/dashboards/rtpengine.json
+        #- source: logs.json
+        #  target: /etc/dashboards/logs.json
+        #- source: cadvisor.json
+        #  target: /etc/dashboards/cadvisor.json
+        #- source: rtpengine.json
+        #  target: /etc/dashboards/rtpengine.json
+    volumes:
+    - dash:/etc/dashboards/
+    depends_on:
+      jsonnet:
+        condition: service_completed_successfully
     ports:
     - 3000:3000
 
@@ -114,8 +126,8 @@ configs:
   cadvisor.json:
     file: dash/stat.json
 
-  ims.json:
-    file: dash/ims.json
+  ims.jsonnet:
+    file: dash/ims.jsonnet
 
   rtpengine.json:
     file: dash/rtp.json
@@ -149,3 +161,5 @@ configs:
         static_configs:
         - targets:
           - rtpengine:9090
+volumes:
+  dash:
