@@ -36,10 +36,17 @@ services:
 
   jsonnet:
     image: ghcr.io/lyatanski/grafonnet
-    command: jsonnet /dash/ims.jsonnet -o /board/ims.json
+    command:
+    - sh
+    - -c
+    - |
+      jsonnet /dash/ims.jsonnet -o /board/ims.json
+      jsonnet /dash/log.jsonnet -o /board/log.json
     configs:
     - source: ims.jsonnet
       target: /dash/ims.jsonnet
+    - source: log.jsonnet
+      target: /dash/log.jsonnet
     volumes:
     - dash:/board
 
@@ -96,19 +103,19 @@ configs:
       datasources:
       - name: Loki
         type: loki
-        access: proxy
         orgId: 1
+        uid: loki
         url: http://loki:3100
+        access: proxy
         basicAuth: false
-        isDefault: true
-        version: 1
         editable: false
       - name: Prometheus
         type: prometheus
-        access: proxy
         uid: prometheus
         url: http://prometheus:9090
+        access: proxy
         basicAuth: false
+        editable: false
 
   dashboards.yml:
     content: |
@@ -128,6 +135,9 @@ configs:
 
   ims.jsonnet:
     file: dash/ims.jsonnet
+
+  log.jsonnet:
+    file: dash/log.jsonnet
 
   rtpengine.json:
     file: dash/rtp.json
