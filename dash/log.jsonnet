@@ -24,6 +24,5 @@ g.dashboard.new('logs')
   + g.panel.logs.queryOptions.withDatasource('loki', ds)
   + g.panel.logs.queryOptions.withTargets([
     g.query.loki.new(ds, '{container=~"$container"} |~ "(?i)$search"')
-    + g.query.loki.withRefId('A'),
   ]),
 ])

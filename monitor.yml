@@ -40,14 +40,17 @@ services:
     - sh
     - -c
     - |
-      jsonnet /dash/ims.jsonnet -o /board/ims.json
-      jsonnet /dash/log.jsonnet -o /board/log.json
       jsonnet /dash/stat.jsonnet -o /board/stat.json
+      jsonnet /dash/log.jsonnet -o /board/log.json
+      jsonnet /dash/rtp.jsonnet -o /board/rtp.json
+      jsonnet /dash/ims.jsonnet -o /board/ims.json
     configs:
     - source: stat.jsonnet
       target: /dash/stat.jsonnet
     - source: log.jsonnet
       target: /dash/log.jsonnet
+    - source: rtp.jsonnet
+      target: /dash/rtp.jsonnet
     - source: ims.jsonnet
       target: /dash/ims.jsonnet
     volumes:
@@ -64,12 +67,6 @@ services:
       target: /etc/grafana/provisioning/datasources/ds.yaml
     - source: dashboards.yml
       target: /etc/grafana/provisioning/dashboards/ds.yaml
-        #- source: logs.json
-        #  target: /etc/dashboards/logs.json
-        #- source: cadvisor.json
-        #  target: /etc/dashboards/cadvisor.json
-        #- source: rtpengine.json
-        #  target: /etc/dashboards/rtpengine.json
     volumes:
     - dash:/etc/dashboards/
     depends_on:
@@ -145,8 +142,8 @@ configs:
   log.jsonnet:
     file: dash/log.jsonnet
 
-  rtpengine.json:
-    file: dash/rtp.json
+  rtp.jsonnet:
+    file: dash/rtp.jsonnet
 
   prometheus.yml:
     content: |
