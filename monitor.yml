@@ -42,11 +42,14 @@ services:
     - |
       jsonnet /dash/ims.jsonnet -o /board/ims.json
       jsonnet /dash/log.jsonnet -o /board/log.json
+      jsonnet /dash/stat.jsonnet -o /board/stat.json
     configs:
-    - source: ims.jsonnet
-      target: /dash/ims.jsonnet
+    - source: stat.jsonnet
+      target: /dash/stat.jsonnet
     - source: log.jsonnet
       target: /dash/log.jsonnet
+    - source: ims.jsonnet
+      target: /dash/ims.jsonnet
     volumes:
     - dash:/board
 
@@ -132,6 +135,9 @@ configs:
 
   cadvisor.json:
     file: dash/stat.json
+
+  stat.jsonnet:
+    file: dash/stat.jsonnet
 
   ims.jsonnet:
     file: dash/ims.jsonnet
