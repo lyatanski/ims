@@ -38,12 +38,11 @@ services:
     image: ghcr.io/lyatanski/grafonnet
     command:
     - sh
-    - -ec
+    - -exc
     - |
-      jsonnet /dash/stat.jsonnet -o /board/stat.json
-      jsonnet /dash/log.jsonnet -o /board/log.json
-      jsonnet /dash/rtp.jsonnet -o /board/rtp.json
-      jsonnet /dash/ims.jsonnet -o /board/ims.json
+      for jsonnet in /dash/*.jsonnet; do
+        jsonnet $$jsonnet -o /board/$$(basename $$jsonnet .jsonnet).json
+      done
     configs:
     - source: stat.jsonnet
       target: /dash/stat.jsonnet
@@ -222,7 +221,7 @@ configs:
         + g.panel.logs.panelOptions.withTransparent()
         + g.panel.logs.queryOptions.withDatasource('loki', ds)
         + g.panel.logs.queryOptions.withTargets([
-          g.query.loki.new(ds, '{container=~"$container"} |~ "(?i)$search"')
+          g.query.loki.new(ds, '{container=~"$$container"} |~ "(?i)$$search"')
         ]),
       ])
 
@@ -246,7 +245,7 @@ configs:
         + g.panel.gauge.panelOptions.withGridPos(h=5, w=3, x=x, y=y);
 
       local tsTarget(reason, legend) =
-        g.query.prometheus.new(ds, 'rtpengine_closed_sessions_total{reason="%s", job="$job", instance="$instance"}' % reason)
+        g.query.prometheus.new(ds, 'rtpengine_closed_sessions_total{reason="%s", job="$job"}' % reason)
         + g.query.prometheus.withLegendFormat(legend);
 
       g.dashboard.new('RTP')
@@ -254,9 +253,9 @@ configs:
       + g.dashboard.time.withFrom('now-6h')
       + g.dashboard.withRefresh('5s')
       + g.dashboard.withPanels([
-        gauge('Foreign Sessions',     'rtpengine_sessions{type="foreign", job="$job", instance="$instance"}', 0, 0),
-        gauge('Own Sessions',         'rtpengine_sessions{type="own", job="$job", instance="$instance"}',     3, 0),
-        gauge('Transcoding Sessions', 'rtpengine_transcoded_media{job="$job", instance="$instance"}',         6, 0),
+        gauge('Foreign Sessions',     'rtpengine_sessions{type="foreign", job="$$job"}', 0, 0),
+        gauge('Own Sessions',         'rtpengine_sessions{type="own", job="$$job"}',     3, 0),
+        gauge('Transcoding Sessions', 'rtpengine_transcoded_media{job="$$job"}',         6, 0),
 
         g.panel.timeSeries.new('Total Closed Sessions')
         + g.panel.timeSeries.queryOptions.withDatasource('prometheus', ds)
@@ -271,13 +270,13 @@ configs:
         ])
         + g.panel.timeSeries.panelOptions.withGridPos(h=8, w=24, x=0, y=5),
 
-        stat('Uptime',                'rtpengine_uptime_seconds{job="$job", instance="$instance"}',            10, 0,  7, 5, 's'),
-        stat('Total sessions',        'rtpengine_sessions_total{job="$job", instance="$instance"}',            17, 0,  7, 5),
-        stat('Total Relayed Packets', 'rtpengine_packets_total{type="userspace"}',                             0,  13, 6, 5),
-        stat('Total Relayed Bytes',   'rtpengine_bytes_total{type="userspace"}',                               6,  13, 4, 5, 'decbytes'),
-        stat('Total Relayed Errors',  'rtpengine_packet_errors_total{type="userspace"}',                       10, 13, 6, 5),
-        stat('Zero packet streams',   'rtpengine_zero_packet_streams_total{job="$job", instance="$instance"}', 16, 13, 4, 5),
-        stat('Total 1-way streams',   'rtpengine_one_way_sessions_total{job="$job", instance="$instance"}',    20, 13, 4, 5),
+        stat('Uptime',                'rtpengine_uptime_seconds{job="$$job"}',            10, 0,  7, 5, 's'),
+        stat('Total sessions',        'rtpengine_sessions_total{job="$$job"}',            17, 0,  7, 5),
+        stat('Total Relayed Packets', 'rtpengine_packets_total{type="userspace"}',        0,  13, 6, 5),
+        stat('Total Relayed Bytes',   'rtpengine_bytes_total{type="userspace"}',          6,  13, 4, 5, 'decbytes'),
+        stat('Total Relayed Errors',  'rtpengine_packet_errors_total{type="userspace"}',  10, 13, 6, 5),
+        stat('Zero packet streams',   'rtpengine_zero_packet_streams_total{job="$$job"}', 16, 13, 4, 5),
+        stat('Total 1-way streams',   'rtpengine_one_way_sessions_total{job="$$job"}',    20, 13, 4, 5),
       ])
 
   prometheus.yml:
