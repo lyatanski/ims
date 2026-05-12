@@ -38,7 +38,7 @@ services:
     image: ghcr.io/lyatanski/grafonnet
     command:
     - sh
-    - -c
+    - -ec
     - |
       jsonnet /dash/stat.jsonnet -o /board/stat.json
       jsonnet /dash/log.jsonnet -o /board/log.json
@@ -127,23 +127,158 @@ configs:
         options:
           path: /etc/dashboards
 
-  logs.json:
-    file: dash/log.json
-
-  cadvisor.json:
-    file: dash/stat.json
-
   stat.jsonnet:
-    file: dash/stat.jsonnet
+    content: |
+      local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+      local ds = 'prometheus';
+
+      local stat(title, expr, pos, unit=null) =
+        g.panel.stat.new(title)
+        + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.stat.queryOptions.withTargets([g.query.prometheus.new(ds, expr)])
+        + g.panel.stat.panelOptions.withGridPos(pos.h, pos.w, pos.x, pos.y)
+        + g.panel.stat.panelOptions.withTransparent()
+        + if unit == null then {} else g.panel.stat.standardOptions.withUnit(unit);
+
+      local ts(title, expr, pos, unit) =
+        g.panel.timeSeries.new(title)
+        + g.panel.timeSeries.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.timeSeries.queryOptions.withTargets([
+            g.query.prometheus.new(ds, expr)
+            + g.query.prometheus.withLegendFormat('{{name}}')
+          ])
+        + g.panel.timeSeries.panelOptions.withGridPos(pos.h, pos.w, pos.x, pos.y)
+        + g.panel.timeSeries.standardOptions.withUnit(unit);
+
+      g.dashboard.new('stat')
+      + g.dashboard.withDescription('container resource monitoring')
+      + g.dashboard.time.withFrom('now-6h')
+      + g.dashboard.withRefresh('5s')
+      + g.dashboard.graphTooltip.withSharedCrosshair()
+      + g.dashboard.withPanels([
+        stat('Running containers', 'count(time() - container_last_seen{name!=\'\'} < 30)',              {h: 3, w: 8, x: 0,  y: 0}),
+        stat('Total Mem Usage',    'sum(container_memory_usage_bytes{name!=\'\'})',                     {h: 3, w: 8, x: 8,  y: 0}, 'bytes'),
+        stat('Total CPU Usage',    'sum(rate(container_cpu_user_seconds_total{name!=\'\'}[5m]) * 100)', {h: 3, w: 8, x: 16, y: 0}, 'percent')
+        + g.panel.stat.standardOptions.withMin(0)
+        + g.panel.stat.standardOptions.withMax(100),
+
+        ts('CPU Usage',  'rate(container_cpu_user_seconds_total{name!=\'\'}[5m]) * 100',                {h: 7, w: 24, x: 0,  y: 3 }, 'percent'),
+        ts('Mem Usage',  'container_memory_usage_bytes{name!=\'\'}',                                    {h: 7, w: 24, x: 0,  y: 10}, 'bytes'),
+        ts('Network Rx', 'irate(container_network_receive_bytes_total{name!=\'\'}[5m])',                {h: 7, w: 12, x: 0,  y: 17}, 'Bps'),
+        ts('Network Tx', 'irate(container_network_transmit_bytes_total{name!=\'\'}[5m])',               {h: 7, w: 12, x: 12, y: 17}, 'Bps'),
+      ])
 
   ims.jsonnet:
-    file: dash/ims.jsonnet
+    content: |
+      local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+      local ds = 'prometheus';
+
+      g.dashboard.new('IMS')
+      + g.dashboard.withDescription('IMS overview')
+      + g.dashboard.time.withFrom('now-6h')
+      + g.dashboard.withRefresh('5s')
+      + g.dashboard.withPanels([
+          g.panel.stat.new('registrations')
+          + g.panel.stat.panelOptions.withGridPos(h=6, w=6, x=0, y=0)
+          + g.panel.stat.queryOptions.withTargets([
+            g.query.prometheus.new(ds, 'kamailio_ims_registrar_scscf_accepted_regs')
+            ]),
+          g.panel.stat.new('calls')
+          + g.panel.stat.panelOptions.withGridPos(h=6, w=6, x=6, y=0)
+          + g.panel.stat.queryOptions.withTargets([
+            g.query.prometheus.new(ds, 'kamailio_dialog_ng_active{job="scscf"}')
+            ]),
+          g.panel.stat.new('failed')
+          + g.panel.stat.panelOptions.withGridPos(h=6, w=6, x=12, y=0)
+          + g.panel.stat.queryOptions.withTargets([
+            g.query.prometheus.new(ds, 'kamailio_ims_registrar_scscf_rejected_regs')
+            ]),
+      ])
 
   log.jsonnet:
-    file: dash/log.jsonnet
+    content: |
+      local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+      local ds = 'loki';
+      local var = g.dashboard.variable;
+
+      g.dashboard.new('logs')
+      + g.dashboard.withDescription('logs overview')
+      + g.dashboard.time.withFrom('now-6h')
+      + g.dashboard.withRefresh('5s')
+      + g.dashboard.withVariables([
+        var.query.new('container', 'label_values(container)')
+        + var.query.withDatasource('loki', ds)
+        + var.query.generalOptions.withLabel('Container')
+        + var.query.refresh.onLoad()
+        + var.query.withSort(5)
+        + var.query.selectionOptions.withMulti()
+        + var.query.selectionOptions.withIncludeAll(customAllValue='.+'),
+        var.textbox.new('search')
+        + var.textbox.generalOptions.withLabel('Search'),
+      ])
+      + g.dashboard.withPanels([
+        g.panel.logs.new('')
+        + g.panel.logs.panelOptions.withGridPos(h=22, w=24, x=0, y=0)
+        + g.panel.logs.panelOptions.withTransparent()
+        + g.panel.logs.queryOptions.withDatasource('loki', ds)
+        + g.panel.logs.queryOptions.withTargets([
+          g.query.loki.new(ds, '{container=~"$container"} |~ "(?i)$search"')
+        ]),
+      ])
 
   rtp.jsonnet:
-    file: dash/rtp.jsonnet
+    content: |
+      local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+      local ds = 'prometheus';
+      
+      local stat(title, expr, x, y, w, h, unit=null) =
+        g.panel.stat.new(title)
+        + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.stat.queryOptions.withTargets([g.query.prometheus.new(ds, expr)])
+        + g.panel.stat.options.withGraphMode('area')
+        + g.panel.stat.panelOptions.withGridPos(h=h, w=w, x=x, y=y)
+        + if unit == null then {} else g.panel.stat.standardOptions.withUnit(unit);
+
+      local gauge(title, expr, x, y) =
+        g.panel.gauge.new(title)
+        + g.panel.gauge.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.gauge.queryOptions.withTargets([g.query.prometheus.new(ds, expr)])
+        + g.panel.gauge.panelOptions.withGridPos(h=5, w=3, x=x, y=y);
+
+      local tsTarget(reason, legend) =
+        g.query.prometheus.new(ds, 'rtpengine_closed_sessions_total{reason="%s", job="$job", instance="$instance"}' % reason)
+        + g.query.prometheus.withLegendFormat(legend);
+
+      g.dashboard.new('RTP')
+      + g.dashboard.withDescription('A general view of RTPEngine.')
+      + g.dashboard.time.withFrom('now-6h')
+      + g.dashboard.withRefresh('5s')
+      + g.dashboard.withPanels([
+        gauge('Foreign Sessions',     'rtpengine_sessions{type="foreign", job="$job", instance="$instance"}', 0, 0),
+        gauge('Own Sessions',         'rtpengine_sessions{type="own", job="$job", instance="$instance"}',     3, 0),
+        gauge('Transcoding Sessions', 'rtpengine_transcoded_media{job="$job", instance="$instance"}',         6, 0),
+
+        g.panel.timeSeries.new('Total Closed Sessions')
+        + g.panel.timeSeries.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.timeSeries.queryOptions.withTargets([
+          tsTarget('rejected',         'Rejected'),
+          tsTarget('timeout',          'Timeout'),
+          tsTarget('silent_timeout',   'Silent Timeout'),
+          tsTarget('final_timeout',    'Final Timeout'),
+          tsTarget('offer_timeout',    'Offer Timeout'),
+          tsTarget('terminated',       'Terminated'),
+          tsTarget('force_terminated', 'Force Timeout'),
+        ])
+        + g.panel.timeSeries.panelOptions.withGridPos(h=8, w=24, x=0, y=5),
+
+        stat('Uptime',                'rtpengine_uptime_seconds{job="$job", instance="$instance"}',            10, 0,  7, 5, 's'),
+        stat('Total sessions',        'rtpengine_sessions_total{job="$job", instance="$instance"}',            17, 0,  7, 5),
+        stat('Total Relayed Packets', 'rtpengine_packets_total{type="userspace"}',                             0,  13, 6, 5),
+        stat('Total Relayed Bytes',   'rtpengine_bytes_total{type="userspace"}',                               6,  13, 4, 5, 'decbytes'),
+        stat('Total Relayed Errors',  'rtpengine_packet_errors_total{type="userspace"}',                       10, 13, 6, 5),
+        stat('Zero packet streams',   'rtpengine_zero_packet_streams_total{job="$job", instance="$instance"}', 16, 13, 4, 5),
+        stat('Total 1-way streams',   'rtpengine_one_way_sessions_total{job="$job", instance="$instance"}',    20, 13, 4, 5),
+      ])
 
   prometheus.yml:
     content: |
