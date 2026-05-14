@@ -20,7 +20,7 @@ jobs:
         - cgr-console
         - cgr-engine
         - cgr-loader
-        - cgr-ui
+        #- cgr-ui
         - grafonnet
     steps:
     - uses: actions/checkout@v6

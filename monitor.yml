@@ -61,13 +61,14 @@ services:
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /usr/share/grafana/dashboards/stat.json
     configs:
     - source: datasources.yml
       target: /etc/grafana/provisioning/datasources/ds.yaml
     - source: dashboards.yml
       target: /etc/grafana/provisioning/dashboards/ds.yaml
     volumes:
-    - dash:/etc/dashboards/
+    - dash:/usr/share/grafana/dashboards
     depends_on:
       jsonnet:
         condition: service_completed_successfully
