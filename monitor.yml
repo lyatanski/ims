@@ -125,7 +125,7 @@ configs:
         type: file
         updateIntervalSeconds: 3600
         options:
-          path: /etc/dashboards
+          path: /usr/share/grafana/dashboards
 
   stat.jsonnet:
     content: |

@@ -57,7 +57,11 @@ configs:
               //"listen_bijson": "",    // turn off 2014
               "chargers_conns": ["*localhost"],
               "rals_conns": ["*localhost"],
+              "cdrs_conns": ["*localhost"],
               "thresholds_conns": [],
+          },
+          "cdrs": {
+              "enabled": true,
           },
           "rals": {
               "enabled": true,
@@ -96,15 +100,18 @@ configs:
                       "value": "~*req.Session-Id",
                   },
                   {
+                      // Called-Party-Address is a tel:/sip: URI, keep only the number
+                      // so it can match rating destination prefixes
                       "tag": "Destination", "path": "*cgreq.Destination",
                       "type": "*variable", "mandatory": true,
-                      "value": "~*req.Service-Information.IMS-Information.Called-Party-Address",
+                      "value": "~*req.Service-Information.IMS-Information.Called-Party-Address:s/(tel|sip):([0-9]+)(@.*)?/$${2}/",
                   },
                   {
+                      // Subscription-Id-Data carries the asserted identity URI,
+                      // keep only the number to address the balance account
                       "tag": "Account", "path": "*cgreq.Account",
-                      //"type": "*variable",
-                      //"value": "~*req.Service-Information.Subscription-Id.Subscription-Id-Data",
-                      "type": "*constant", "value": "Test",
+                      "type": "*variable", "mandatory": true,
+                      "value": "~*req.Subscription-Id.Subscription-Id-Data:s/(tel|sip):([0-9]+)(@.*)?/$${2}/",
                   },
                   {
                       "tag": "Usage", "path": "*cgreq.Usage",
@@ -136,10 +143,12 @@ configs:
                       "reply_fields": [
                           { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
                           {
+                              // grant what RALs actually reserved (min of requested
+                              // service units and remaining balance)
                               "tag": "GrantedUnits",
                               "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
-                              "type": "*constant",
-                              "value": "30",
+                              "type": "*variable",
+                              "value": "~*cgrep.MaxUsage{*duration_seconds}",
                               "mandatory": true,
                           },
                       ]
@@ -154,10 +163,12 @@ configs:
                       "reply_fields": [
                           { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
                           {
+                              // grant what RALs actually reserved (min of requested
+                              // service units and remaining balance)
                               "tag": "GrantedUnits",
                               "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
-                              "type": "*constant",
-                              "value": "30",
+                              "type": "*variable",
+                              "value": "~*cgrep.MaxUsage{*duration_seconds}",
                               "mandatory": true,
                           },
                       ]
@@ -165,7 +176,7 @@ configs:
                   {
                       "id": "VoiceTerm",
                       "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:3" ],
-                      "flags": [ "*terminate", "*accounts" ],
+                      "flags": [ "*terminate", "*accounts", "*cdrs" ],
                       "request_fields": [
                           { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
                           {
@@ -225,7 +236,7 @@ configs:
       rpc.call("ApierV2.SetTPDestination", {
           "TPid": "cgrates.org",
           "ID": "DST_TEST",
-          "Prefixes": ["614"]
+          "Prefixes": ["${DIAL}"]
       })
       rpc.call("ApierV2.SetTPRate", {
           "TPid":"cgrates.org",
@@ -289,23 +300,27 @@ configs:
           'AttributeIDs' : ['*none'],
           'Weight': 0,
       })
-      rpc.call("ApierV2.SetAccount", {
-          "Tenant": "cgrates.org",
-          "Account": "Test"
-      })
-      rpc.call("ApierV2.SetBalance", {
-          "Tenant": "cgrates.org",
-          "Account": "Test",
-          "BalanceType": "*voice",
-          "Categories": "*any",
-          "Balance": {
-              "ID": "5minute",
-              "Value": "5m",
-              "Weight": 25
-          }
-      })
-      rpc.call("ApierV2.GetAccount",{
-          'Tenant': 'cgrates.org',
-          'Account': 'Test'
-      })
+      # one prepaid account per test subscriber, named after the number
+      # asserted by the S-CSCF in Subscription-Id (${DIAL} + 9 digit MSIN)
+      for msin in range(1, ${SCALE} + 1):
+          account = "${DIAL}%09d" % msin
+          rpc.call("ApierV2.SetAccount", {
+              "Tenant": "cgrates.org",
+              "Account": account
+          })
+          rpc.call("ApierV2.SetBalance", {
+              "Tenant": "cgrates.org",
+              "Account": account,
+              "BalanceType": "*voice",
+              "Categories": "*any",
+              "Balance": {
+                  "ID": "5minute",
+                  "Value": "5m",
+                  "Weight": 25
+              }
+          })
+          rpc.call("ApierV2.GetAccount",{
+              'Tenant': 'cgrates.org',
+              'Account': account
+          })
 
