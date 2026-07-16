@@ -63,9 +63,15 @@ The image should contain basic freeDiameter daemon build.
 
 ## [CGRateS](https://github.com/cgrates/cgrates) (billing)
 At the time of writing, there are 3 main versions maintained:
-- v0.10, aka. stable
-- master, aka. development
-- 1.0, aka. experimental
+- v0.10, aka. stable (old, missing years of fixes and features)
+- master (v0.11.0~dev), aka. development — recommended; this is what upstream
+  builds nightly packages from and what this project builds
+- 1.0, aka. experimental (rewritten AccountS/RateS/ActionS subsystems with a
+  different configuration and API surface)
+
+The engine exposes its JSON-RPC API over plain HTTP (`listen.http`, path
+`/jsonrpc`), so provisioning only needs an HTTP client — see the `preload`
+service in billing.yml and cgr-tester.sh.
 There are prebuilt images documented in the [official installation guide](https://cgrates.readthedocs.io/en/latest/installation.html#pull-docker-images):
 ```
 dkr.cgrates.org/master/cgr-engine
@@ -96,6 +102,6 @@ tester - load testing
 
 ## Test
 Multiple technologies need to be utilized for the test image:
-- [Doubange](https://github.com/lyatanski/doubango) for SIP and RTP implementation
+- [Doubango](https://github.com/lyatanski/doubango) for SIP and RTP implementation
 - GTPv2 implementation. Convinient solution is to use [go-gtp](https://github.com/wmnsk/go-gtp)
 - GTP-U implementation. There are miltiple approaches but probably the Linux kernel module is one simple approach to implement. However this approach has limitation in dedicated bearer implementation which could be problematic. Alternative solution could be utilizing `tun` device and routing the traffic to it. Probably eBPF solution should be considered as it could transparently wrap the IP frames and provide better performance than `tun` device.

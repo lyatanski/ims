@@ -125,7 +125,7 @@ configs:
         type: file
         updateIntervalSeconds: 3600
         options:
-          path: /etc/dashboards
+          path: /usr/share/grafana/dashboards
 
   stat.jsonnet:
     content: |
@@ -170,29 +170,183 @@ configs:
 
   ims.jsonnet:
     content: |
+      // IMS KPI dashboard - aligned with 3GPP TS 32.454 (KPIs for the IMS).
+      //
+      // KPIs are grouped by TS 32.454 category (accessibility, retainability,
+      // utilization). Most panels reuse native Kamailio xhttp_prom statistics;
+      // the session-establishment and setup-time KPIs use custom counters that
+      // the S-CSCF exposes (declared in monitor.cfg, incremented in serving.cfg)
+      // because Kamailio's tm module does not export transaction stats.
+      // See doc/monitor.md for the full KPI-to-metric mapping.
       local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
       local ds = 'prometheus';
 
-      g.dashboard.new('IMS')
-      + g.dashboard.withDescription('IMS overview')
+      // ---- metric names (all carry a job label: pcscf / icscf / scscf) ----
+      local m = {
+        reg_ok:    'kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}',
+        reg_no:    'kamailio_ims_registrar_scscf_rejected_regs{job="scscf"}',
+        sar_to:    'kamailio_ims_registrar_scscf_sar_timeouts{job="scscf"}',
+        sar_rt:    'kamailio_ims_registrar_scscf_sar_avg_response_time{job="scscf"}',
+        mar_to:    'kamailio_ims_auth_mar_timeouts{job="scscf"}',
+        mar_rt:    'kamailio_ims_auth_mar_avg_response_time{job="scscf"}',
+        ses_att:   'kamailio_ims_session_setup_attempts_total{job="scscf"}',
+        ses_ok:    'kamailio_ims_session_setup_success_total{job="scscf"}',
+        ses_no:    'kamailio_ims_session_setup_failure_total{job="scscf"}',
+        dur_b:     'kamailio_ims_session_setup_duration_bucket{job="scscf"}',
+        dur_s:     'kamailio_ims_session_setup_duration_sum{job="scscf"}',
+        dur_c:     'kamailio_ims_session_setup_duration_count{job="scscf"}',
+        impus:     'kamailio_ims_usrloc_scscf_active_impus{job="scscf"}',
+        contacts:  'kamailio_ims_usrloc_scscf_active_contacts{job="scscf"}',
+        subs:      'kamailio_ims_usrloc_scscf_active_subscriptions{job="scscf"}',
+        pcontacts: 'kamailio_ims_usrloc_pcscf_registered_contacts{job="pcscf"}',
+        dlg_act:   'kamailio_dialog_ng_active{job="scscf"}',
+        dlg_early: 'kamailio_dialog_ng_early{job="scscf"}',
+        dlg_proc:  'kamailio_dialog_ng_processed{job="scscf"}',
+        dlg_exp:   'kamailio_dialog_ng_expired{job="scscf"}',
+        ro_act:    'kamailio_ims_charging_active_ro_sessions{job="scscf"}',
+        ccr_i:     'kamailio_ims_charging_initial_ccrs{job="scscf"}',
+        ccr_ok:    'kamailio_ims_charging_successful_initial_ccrs{job="scscf"}',
+        ccr_rt:    'kamailio_ims_charging_ccr_avg_response_time{job="scscf"}',
+        ccr_to:    'kamailio_ims_charging_ccr_timeouts{job="scscf"}',
+        killed:    'kamailio_ims_charging_killed_calls{job="scscf"}',
+        uar_rx:    'kamailio_ims_icscf_uar_replies_received{job="icscf"}',
+        uar_rt:    'kamailio_ims_icscf_uar_replies_response_time{job="icscf"}',
+        lir_rx:    'kamailio_ims_icscf_lir_replies_received{job="icscf"}',
+        lir_rt:    'kamailio_ims_icscf_lir_replies_response_time{job="icscf"}',
+      };
+
+      // ---- PromQL fragment helpers ($$ escapes Compose interpolation) ----
+      local inc(x)  = 'sum(increase(' + x + '[$$__range]))';
+      local rt(x)   = 'sum(rate(' + x + '[$$__rate_interval]))';
+      local cur(x)  = 'sum(' + x + ')';
+      local avgf(x) = 'avg(' + x + ')';
+      // failures TS 32.454 attributes to the UE / user, excluded from the
+      // network success rate: 404 not found, 480/486/600/603 busy/unavailable,
+      // 484 address incomplete, 487 released before answer.
+      local fail_user = 'sum(increase(kamailio_ims_session_setup_failure_total{job="scscf", code=~"404|480|484|486|487|600|603"}[$$__range]))';
+
+      // ---- threshold palettes ----
+      local ok_thr   = [{ color: 'red', value: null }, { color: 'yellow', value: 95 }, { color: 'green', value: 99 }];
+      local drop_thr = [{ color: 'green', value: null }, { color: 'yellow', value: 2 }, { color: 'red', value: 5 }];
+      local time_thr = [{ color: 'green', value: null }, { color: 'yellow', value: 1000 }, { color: 'red', value: 3000 }];
+      local to_thr   = [{ color: 'green', value: null }, { color: 'red', value: 1 }];
+
+      // ---- panel helpers ----
+      local tgt(expr, legend='') =
+        g.query.prometheus.new(ds, expr)
+        + (if legend == '' then {} else g.query.prometheus.withLegendFormat(legend));
+
+      local steps(arr) =
+        g.panel.stat.standardOptions.thresholds.withSteps([
+          g.panel.stat.standardOptions.threshold.step.withColor(s.color)
+          + g.panel.stat.standardOptions.threshold.step.withValue(s.value)
+          for s in arr
+        ]);
+
+      local stat(title, expr, p, unit='short', decimals=0) =
+        g.panel.stat.new(title)
+        + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.stat.queryOptions.withTargets([tgt(expr)])
+        + g.panel.stat.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.stat.standardOptions.withUnit(unit)
+        + g.panel.stat.standardOptions.withDecimals(decimals);
+
+      local kpi(title, expr, p, thr, unit='percent', decimals=2) =
+        g.panel.stat.new(title)
+        + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.stat.queryOptions.withTargets([tgt(expr)])
+        + g.panel.stat.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.stat.options.withColorMode('background')
+        + g.panel.stat.options.withGraphMode('area')
+        + g.panel.stat.standardOptions.withUnit(unit)
+        + g.panel.stat.standardOptions.withDecimals(decimals)
+        + steps(thr);
+
+      local ts(title, targets, p, unit='short') =
+        g.panel.timeSeries.new(title)
+        + g.panel.timeSeries.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.timeSeries.queryOptions.withTargets(targets)
+        + g.panel.timeSeries.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.timeSeries.standardOptions.withUnit(unit);
+
+      local row(title, y) =
+        g.panel.row.new(title)
+        + g.panel.row.withGridPos(y);
+
+      g.dashboard.new('IMS KPI (3GPP TS 32.454)')
+      + g.dashboard.withDescription('IMS Key Performance Indicators per 3GPP TS 32.454. Reuses Kamailio xhttp_prom statistics; session-establishment and setup-time KPIs use custom S-CSCF counters.')
       + g.dashboard.time.withFrom('now-6h')
       + g.dashboard.withRefresh('5s')
+      + g.dashboard.graphTooltip.withSharedCrosshair()
       + g.dashboard.withPanels([
-          g.panel.stat.new('registrations')
-          + g.panel.stat.panelOptions.withGridPos(h=6, w=6, x=0, y=0)
-          + g.panel.stat.queryOptions.withTargets([
-            g.query.prometheus.new(ds, 'kamailio_ims_registrar_scscf_accepted_regs')
-            ]),
-          g.panel.stat.new('calls')
-          + g.panel.stat.panelOptions.withGridPos(h=6, w=6, x=6, y=0)
-          + g.panel.stat.queryOptions.withTargets([
-            g.query.prometheus.new(ds, 'kamailio_dialog_ng_active{job="scscf"}')
-            ]),
-          g.panel.stat.new('failed')
-          + g.panel.stat.panelOptions.withGridPos(h=6, w=6, x=12, y=0)
-          + g.panel.stat.queryOptions.withTargets([
-            g.query.prometheus.new(ds, 'kamailio_ims_registrar_scscf_rejected_regs')
-            ]),
+        // ===== Accessibility - Registration =====
+        row('Accessibility - Registration (Initial Registration Success Rate)', 0),
+        kpi('Registration Success Rate (S-CSCF)', '100 * ' + inc(m.reg_ok) + ' / (' + inc(m.reg_ok) + ' + ' + inc(m.reg_no) + ')', { h: 6, w: 6, x: 0, y: 1 }, ok_thr),
+        stat('Registration Attempts', '(' + inc(m.reg_ok) + ' + ' + inc(m.reg_no) + ')', { h: 6, w: 6, x: 6, y: 1 }),
+        stat('Successful Registrations', inc(m.reg_ok), { h: 6, w: 6, x: 12, y: 1 }),
+        stat('Rejected Registrations', inc(m.reg_no), { h: 6, w: 6, x: 18, y: 1 }),
+        ts('Registration Rate', [tgt(rt(m.reg_ok), 'accepted'), tgt(rt(m.reg_no), 'rejected'), tgt(rt(m.sar_to), 'SAR timeouts')], { h: 7, w: 24, x: 0, y: 7 }, 'reqps'),
+
+        // ===== Accessibility - Session Establishment =====
+        row('Accessibility - Session Establishment (SESR)', 14),
+        kpi('Session Establishment Success Rate', '100 * ' + inc(m.ses_ok) + ' / ' + inc(m.ses_att), { h: 6, w: 8, x: 0, y: 15 }, ok_thr),
+        kpi('Session Establishment Network Success Rate', '100 * ' + inc(m.ses_ok) + ' / (' + inc(m.ses_att) + ' - ' + fail_user + ')', { h: 6, w: 8, x: 8, y: 15 }, ok_thr),
+        stat('Session Setup Attempts', inc(m.ses_att), { h: 6, w: 8, x: 16, y: 15 }),
+        ts('Session Setup Rate', [tgt(rt(m.ses_att), 'attempts'), tgt(rt(m.ses_ok), 'success'), tgt(rt(m.ses_no), 'failure')], { h: 7, w: 12, x: 0, y: 21 }, 'reqps'),
+        ts('Session Setup Failures by Code', [tgt('sum by (code) (rate(kamailio_ims_session_setup_failure_total{job="scscf"}[$$__rate_interval]))', '{{code}}')], { h: 7, w: 12, x: 12, y: 21 }, 'reqps'),
+
+        // ===== Accessibility - Session Setup Time (latency) =====
+        row('Accessibility - Session Setup Time', 28),
+        kpi('Session Setup Time (mean)', inc(m.dur_s) + ' / ' + inc(m.dur_c), { h: 6, w: 8, x: 0, y: 29 }, time_thr, 'ms', 0),
+        stat('Session Setup Time p95', 'histogram_quantile(0.95, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 8, y: 29 }, 'ms'),
+        stat('Session Setup Time p99', 'histogram_quantile(0.99, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 16, y: 29 }, 'ms'),
+        ts('Session Setup Time Percentiles', [
+          tgt('histogram_quantile(0.50, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', 'p50'),
+          tgt('histogram_quantile(0.95, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', 'p95'),
+          tgt('histogram_quantile(0.99, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', 'p99'),
+        ], { h: 7, w: 12, x: 0, y: 35 }, 'ms'),
+        ts('Diameter Control-Plane Latency', [
+          tgt(avgf(m.sar_rt), 'Cx SAR (registration)'),
+          tgt(avgf(m.mar_rt), 'Cx MAR (authentication)'),
+          tgt(avgf(m.ccr_rt), 'Ro CCR (charging)'),
+          tgt('(' + rt(m.uar_rt) + ') / (' + rt(m.uar_rx) + ')', 'Cx UAR (I-CSCF)'),
+        ], { h: 7, w: 12, x: 12, y: 35 }, 'ms'),
+
+        // ===== Retainability =====
+        row('Retainability - IMS Session Drop Rate', 42),
+        kpi('IMS Session Drop Rate', '100 * ' + inc(m.dlg_exp) + ' / ' + inc(m.dlg_proc), { h: 6, w: 8, x: 0, y: 43 }, drop_thr),
+        stat('Active Sessions', cur(m.dlg_act), { h: 6, w: 8, x: 8, y: 43 }),
+        stat('Early Dialogs', cur(m.dlg_early), { h: 6, w: 8, x: 16, y: 43 }),
+        ts('Dialogs Processed vs Expired', [tgt(rt(m.dlg_proc), 'processed'), tgt(rt(m.dlg_exp), 'expired / killed')], { h: 7, w: 12, x: 0, y: 49 }, 'reqps'),
+        ts('Active & Early Dialogs', [tgt(cur(m.dlg_act), 'active'), tgt(cur(m.dlg_early), 'early')], { h: 7, w: 12, x: 12, y: 49 }),
+
+        // ===== Utilization - Registered base =====
+        row('Utilization - Registered Base', 56),
+        stat('Registered IMPUs (S-CSCF)', cur(m.impus), { h: 6, w: 6, x: 0, y: 57 }),
+        stat('Registered Contacts (S-CSCF)', cur(m.contacts), { h: 6, w: 6, x: 6, y: 57 }),
+        stat('Reg-event Subscriptions', cur(m.subs), { h: 6, w: 6, x: 12, y: 57 }),
+        stat('Registered Contacts (P-CSCF)', cur(m.pcontacts), { h: 6, w: 6, x: 18, y: 57 }),
+        ts('Registered Base', [
+          tgt(cur(m.impus), 'IMPUs (S-CSCF)'),
+          tgt(cur(m.contacts), 'contacts (S-CSCF)'),
+          tgt(cur(m.subs), 'reg-event subs'),
+          tgt(cur(m.pcontacts), 'contacts (P-CSCF)'),
+        ], { h: 7, w: 24, x: 0, y: 63 }),
+
+        // ===== Charging (Ro / TS 32.299) =====
+        row('Charging - Ro (TS 32.299)', 70),
+        stat('Active Ro Sessions', cur(m.ro_act), { h: 6, w: 6, x: 0, y: 71 }),
+        stat('Initial CCRs', inc(m.ccr_i), { h: 6, w: 6, x: 6, y: 71 }),
+        stat('Successful Initial CCRs', inc(m.ccr_ok), { h: 6, w: 6, x: 12, y: 71 }),
+        stat('Killed Calls (out of credit)', inc(m.killed), { h: 6, w: 6, x: 18, y: 71 }),
+
+        // ===== Element health - Diameter (Cx / Ro) =====
+        row('Element Health - Diameter (Cx / Ro)', 77),
+        stat('I-CSCF UAR Replies', inc(m.uar_rx), { h: 6, w: 6, x: 0, y: 78 }),
+        stat('I-CSCF LIR Replies', inc(m.lir_rx), { h: 6, w: 6, x: 6, y: 78 }),
+        kpi('MAR Timeouts (auth)', inc(m.mar_to), { h: 6, w: 4, x: 12, y: 78 }, to_thr, 'short', 0),
+        kpi('SAR Timeouts (reg)', inc(m.sar_to), { h: 6, w: 4, x: 16, y: 78 }, to_thr, 'short', 0),
+        kpi('CCR Timeouts (charging)', inc(m.ccr_to), { h: 6, w: 4, x: 20, y: 78 }, to_thr, 'short', 0),
       ])
 
   log.jsonnet:
@@ -246,7 +400,7 @@ configs:
         + g.panel.gauge.panelOptions.withGridPos(h=5, w=3, x=x, y=y);
 
       local tsTarget(reason, legend) =
-        g.query.prometheus.new(ds, 'rtpengine_closed_sessions_total{reason="%s", job="$job"}' % reason)
+        g.query.prometheus.new(ds, 'rtpengine_closed_sessions_total{reason="%s", job="$$job"}' % reason)
         + g.query.prometheus.withLegendFormat(legend);
 
       g.dashboard.new('RTP')
