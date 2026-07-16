@@ -100,7 +100,7 @@ To observe the packets
 - Billing (billing.yml)
   - [x] [OCS](doc/images.md#cgrates-billing)
 - Monitoring (monitor.yml)
-  - [x] Promtail
+  - [x] Fluent Bit
   - [x] Loki
   - [x] cAdvisor
   - [x] Prometheus

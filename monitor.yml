@@ -1,13 +1,14 @@
 services:
-  promtail:
-    image: grafana/promtail
-    command: -config.file=/etc/promtail/config.yml
+  fluentbit:
+    image: fluent/fluent-bit
+    command: -c /fluent-bit/etc/fluent-bit.conf
     configs:
-    - source: promtail.yml
-      target: /etc/promtail/config.yml
+    - source: fluent-bit.conf
+      target: /fluent-bit/etc/fluent-bit.conf
+    - source: enrich.lua
+      target: /fluent-bit/etc/enrich.lua
     volumes:
-    - /var/lib/docker:/var/lib/docker
-    - /var/run/docker.sock:/var/run/docker.sock
+    - /var/lib/docker/containers:/var/lib/docker/containers:ro
 
   loki:
     image: grafana/loki
@@ -77,25 +78,67 @@ services:
 
 
 configs:
-  promtail.yml:
+  fluent-bit.conf:
     content: |
-      server:
-        http_listen_port: 9080
-        grpc_listen_port: 0
-      positions:
-        filename: /tmp/positions.yaml
-      clients:
-      - url: http://loki:3100/loki/api/v1/push
-      scrape_configs:
-      - job_name: system
-        docker_sd_configs:
-        - host: unix:///var/run/docker.sock
-          refresh_interval: 5s
-        relabel_configs:
-        - source_labels: ['__meta_docker_container_name']
-          regex: '/(.*)'
-          target_label: 'container'
-        #pipeline_stages:
+      [SERVICE]
+          flush     1
+          log_level info
+
+      [INPUT]
+          name             tail
+          tag              docker.*
+          path             /var/lib/docker/containers/*/*-json.log
+          path_key         filepath
+          multiline.parser docker
+          db               /tmp/flb.db
+          refresh_interval 5
+          read_from_head   true
+
+      [FILTER]
+          name   lua
+          match  docker.*
+          script /fluent-bit/etc/enrich.lua
+          call   set_container
+
+      [OUTPUT]
+          name            loki
+          match           docker.*
+          host            loki
+          port            3100
+          label_keys      $$container
+          remove_keys     stream,time,filepath
+          drop_single_key raw
+
+  enrich.lua:
+    content: |
+      -- Resolve the Docker container name from the log file path and set it as
+      -- the `container` record key (replaces Promtail's docker_sd relabel of
+      -- __meta_docker_container_name). Cached per id to avoid re-reading the
+      -- container's config.v2.json on every log line.
+      local cache = {}
+
+      local function name_for(id)
+        if cache[id] then return cache[id] end
+        local name = id:sub(1, 12)
+        local f = io.open('/var/lib/docker/containers/' .. id .. '/config.v2.json', 'r')
+        if f then
+          local data = f:read('*a')
+          f:close()
+          local n = data:match('"Name":"/([^"]+)"')
+          if n then name = n end
+        end
+        cache[id] = name
+        return name
+      end
+
+      function set_container(tag, ts, record)
+        local fp = record['filepath']
+        if fp then
+          local id = fp:match('/containers/([0-9a-f]+)/')
+          if id then record['container'] = name_for(id) end
+        end
+        return 1, ts, record
+      end
 
   datasources.yml:
     content: |
@@ -151,6 +194,7 @@ configs:
         + g.panel.timeSeries.standardOptions.withUnit(unit);
 
       g.dashboard.new('stat')
+      + g.dashboard.withUid('stat')
       + g.dashboard.withDescription('container resource monitoring')
       + g.dashboard.time.withFrom('now-6h')
       + g.dashboard.withRefresh('5s')
@@ -274,6 +318,7 @@ configs:
         + g.panel.row.withGridPos(y);
 
       g.dashboard.new('IMS KPI (3GPP TS 32.454)')
+      + g.dashboard.withUid('ims')
       + g.dashboard.withDescription('IMS Key Performance Indicators per 3GPP TS 32.454. Reuses Kamailio xhttp_prom statistics; session-establishment and setup-time KPIs use custom S-CSCF counters.')
       + g.dashboard.time.withFrom('now-6h')
       + g.dashboard.withRefresh('5s')
@@ -356,6 +401,7 @@ configs:
       local var = g.dashboard.variable;
 
       g.dashboard.new('logs')
+      + g.dashboard.withUid('logs')
       + g.dashboard.withDescription('logs overview')
       + g.dashboard.time.withFrom('now-6h')
       + g.dashboard.withRefresh('5s')
@@ -404,6 +450,7 @@ configs:
         + g.query.prometheus.withLegendFormat(legend);
 
       g.dashboard.new('RTP')
+      + g.dashboard.withUid('rtp')
       + g.dashboard.withDescription('A general view of RTPEngine.')
       + g.dashboard.time.withFrom('now-6h')
       + g.dashboard.withRefresh('5s')
