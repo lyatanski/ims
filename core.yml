@@ -45,7 +45,7 @@ services:
     - cert-hss:/var/hss
 
   subscribers:
-    image: mongo:8.0
+    image: mongo
     entrypoint: mongosh --host mongo --file /opt/subscribers.js
     configs:
     - source: subscribers
@@ -164,7 +164,7 @@ services:
     restart: on-failure
 
   mongo:
-    image: mongo:8.0
+    image: mongo
     command: --bind_ip 0.0.0.0
     tmpfs:
     - /data/configdb
@@ -434,12 +434,14 @@ configs:
   subscribers:
     content: |
       db = db.getSiblingDB('open5gs')
+      plmn = '${MCC}${MNC}';
+      l = 15 - plmn.length;
       for(i = 1; i <= ${SCALE}; i++){
         db.subscribers.insertOne(
         {
             _id: new ObjectId(),
             schema_version: NumberInt(1),
-            imsi: '${MCC}${MNC}'+'000000000000000'.substring('${MCC}${MNC}'.length+`$${i}`.length)+`$${i}`,
+            imsi: `$${plmn}$${String(i).padStart(l, "0")}`,
             msisdn: ['${DIAL}'+'000000000'.substring(`$${i}`.length)+`$${i}`],
             imeisv: [],
             mme_host: [],
