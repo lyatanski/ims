@@ -21,7 +21,7 @@ services:
 
   hss:
     image: ghcr.io/lyatanski/open5gs
-    command: hssd -c /etc/hss/open5gs.yaml -t
+    command: hssd -c /etc/hss/open5gs.yaml
     configs:
     - source: hss.yaml
       target: /etc/hss/open5gs.yaml
@@ -85,7 +85,7 @@ services:
 
   pcrf:
     image: ghcr.io/lyatanski/open5gs
-    command: pcrfd -c /etc/pcrf/open5gs.yaml -t
+    command: pcrfd -c /etc/pcrf/open5gs.yaml
     configs:
     - source: pcrf.yaml
       target: /etc/pcrf/open5gs.yaml
@@ -108,7 +108,7 @@ services:
 
   smf:
     image: ghcr.io/lyatanski/open5gs
-    command: smfd -c /etc/smf/open5gs.yaml -t
+    command: smfd -c /etc/smf/open5gs.yaml
     configs:
     - source: smf.yaml
       target: /etc/smf/open5gs.yaml
@@ -133,7 +133,7 @@ services:
 
   upf:
     image: ghcr.io/lyatanski/open5gs
-    command: upfd -c /etc/upf/open5gs.yaml -t
+    command: upfd -c /etc/upf/open5gs.yaml
     configs:
     - source: upf.yaml
       target: /etc/upf/open5gs.yaml
@@ -166,6 +166,11 @@ services:
   mongo:
     image: mongo
     command: --bind_ip 0.0.0.0
+    #healthcheck:
+    #  test: mongosh --quiet --eval db.runCommand("ping").ok
+    #  interval: 5s
+    #  timeout: 5s
+    #  retries: 10
     tmpfs:
     - /data/configdb
     - /data/db
@@ -206,11 +211,12 @@ configs:
             port: 9090
         sms_over_ims: "sip:smsc.epc.${REALM}"
       logger:
+        level: error          # info floods the single event loop under load
         file:
           path: /var/log/hss.log
       global:
         max:
-          ue: 1024
+          ue: 16384           # subscriber/auth context pool
 
   hss.diameter:
     content: |
@@ -233,11 +239,12 @@ configs:
   pcrf.yaml:
     content: |
       logger:
+        level: error          # info floods the single event loop under load
         file:
           path: /var/log/pcrf.log
       global:
         max:
-          ue: 1024
+          ue: 16384           # Gx session pool; sized for high create rate
       pcrf:
         freeDiameter: /etc/pcrf/diameter.conf
         metrics:
@@ -350,11 +357,12 @@ configs:
   smf.yaml:
     content: |
       logger:
+        level: error          # info floods the single event loop under load
         file:
           path: /var/log/smf.log
       global:
         max:
-          ue: 1024
+          ue: 16384           # session/UE context pool; sized for high create rate
       smf:
         freeDiameter: /etc/smf/diameter.conf
         metrics:
@@ -404,11 +412,12 @@ configs:
   upf.yaml:
     content: |
       logger:
+        level: error          # info floods the single event loop under load
         file:
           path: /var/log/upf.log
       global:
         max:
-          ue: 1024
+          ue: 16384           # session/UE context pool; sized for high create rate
       upf:
         metrics:
           server:
@@ -436,8 +445,10 @@ configs:
       db = db.getSiblingDB('open5gs')
       plmn = '${MCC}${MNC}';
       l = 15 - plmn.length;
+      // Create the unique imsi index open5gs expects before seeding.
+      db.subscribers.createIndex({ imsi: 1 }, { unique: true });
       for(i = 1; i <= ${SCALE}; i++){
-        db.subscribers.insertOne(
+        try { db.subscribers.insertOne(
         {
             _id: new ObjectId(),
             schema_version: NumberInt(1),
@@ -490,7 +501,7 @@ configs:
             operator_determined_barring: 0,
             subscribed_rau_tau_timer: 12,
             __v: 0
-        })
+        }) } catch (e) { if (e.code !== 11000) throw e }  // ignore dup on re-seed
       }
 
 

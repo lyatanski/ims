@@ -1,7 +1,6 @@
 include:
 - core.yml
 - billing.yml
-- monitor.yml
 
 
 x-kamailio: &kamailio
@@ -195,7 +194,7 @@ configs:
           Realm="ims.${REALM}"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
-          Workers="1"
+          Workers="4"
       >
               <Peer FQDN="pcrf.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
               <Auth id="16777236" vendor="10415"/> <!-- Rx 3GPP -->
@@ -211,7 +210,7 @@ configs:
           Realm="ims.${REALM}"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
-          Workers="1"
+          Workers="4"
       >
               <Peer FQDN="hss.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
               <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
@@ -227,7 +226,7 @@ configs:
           Realm="ims.${REALM}"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
-          Workers="1"
+          Workers="4"
       >
               <Peer FQDN="hss.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
               <Peer FQDN="ocs.${REALM}" Realm="${REALM}" port="3868"/>
