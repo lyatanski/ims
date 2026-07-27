@@ -53,6 +53,12 @@ services:
       target: /dash/rtp.jsonnet
     - source: ims.jsonnet
       target: /dash/ims.jsonnet
+    - source: load.jsonnet
+      target: /dash/load.jsonnet
+    - source: open5gs.jsonnet
+      target: /dash/open5gs.jsonnet
+    - source: arch.jsonnet
+      target: /dash/arch.jsonnet
     volumes:
     - dash:/board
 
@@ -394,6 +400,329 @@ configs:
         kpi('CCR Timeouts (charging)', inc(m.ccr_to), { h: 6, w: 4, x: 20, y: 78 }, to_thr, 'short', 0),
       ])
 
+  load.jsonnet:
+    content: |
+      // Registration Load & Bottleneck dashboard. Walks the IMS registration path top
+      // to bottom so you can SEE which stage gates under load:
+      //   outcome -> SIP UDP transport -> Cx round-trip (HSS/DRA) -> HSS DB (mongo).
+      local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+      local ds = 'prometheus';
+
+      local ri = '[$$__rate_interval]';
+      local rng = '[$$__range]';
+
+      local tgt(expr, legend='') =
+        g.query.prometheus.new(ds, expr)
+        + (if legend == '' then {} else g.query.prometheus.withLegendFormat(legend));
+
+      local steps(arr) =
+        g.panel.stat.standardOptions.thresholds.withSteps([
+          g.panel.stat.standardOptions.threshold.step.withColor(s.color)
+          + g.panel.stat.standardOptions.threshold.step.withValue(s.value)
+          for s in arr
+        ]);
+
+      local stat(title, expr, p, unit='short', decimals=0) =
+        g.panel.stat.new(title)
+        + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.stat.queryOptions.withTargets([tgt(expr)])
+        + g.panel.stat.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.stat.standardOptions.withUnit(unit)
+        + g.panel.stat.standardOptions.withDecimals(decimals);
+
+      local kpi(title, expr, p, thr, unit='percent', decimals=2) =
+        g.panel.stat.new(title)
+        + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.stat.queryOptions.withTargets([tgt(expr)])
+        + g.panel.stat.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.stat.options.withColorMode('background')
+        + g.panel.stat.options.withGraphMode('area')
+        + g.panel.stat.standardOptions.withUnit(unit)
+        + g.panel.stat.standardOptions.withDecimals(decimals)
+        + steps(thr);
+
+      local ts(title, targets, p, unit='short') =
+        g.panel.timeSeries.new(title)
+        + g.panel.timeSeries.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.timeSeries.queryOptions.withTargets(targets)
+        + g.panel.timeSeries.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.timeSeries.standardOptions.withUnit(unit);
+
+      local row(title, y) =
+        g.panel.row.new(title) + g.panel.row.withGridPos(y);
+
+      // windowed Cx round-trip (ms) = rate(response_time sum) / rate(replies count)
+      local cxrt(base, joblbl) =
+        '(sum(rate(' + base + '_replies_response_time{job="' + joblbl + '"}' + ri + ')) / '
+        + 'sum(rate(' + base + '_replies_received{job="' + joblbl + '"}' + ri + ')))';
+
+      local ok_thr   = [{ color: 'red', value: null }, { color: 'yellow', value: 95 }, { color: 'green', value: 99 }];
+      local time_thr = [{ color: 'green', value: null }, { color: 'yellow', value: 100 }, { color: 'red', value: 1000 }];
+      local drop_thr = [{ color: 'green', value: null }, { color: 'red', value: 1 }];
+
+      g.dashboard.new('Registration Load & Bottleneck')
+      + g.dashboard.withUid('load')
+      + g.dashboard.withDescription('Walks the IMS registration path under load to localize the gate: outcome -> SIP UDP transport -> Cx round-trip (HSS/DRA) -> HSS database (mongo).')
+      + g.dashboard.time.withFrom('now-15m')
+      + g.dashboard.withRefresh('2s')
+      + g.dashboard.graphTooltip.withSharedCrosshair()
+      + g.dashboard.withPanels([
+        // ===== Outcome =====
+        row('Outcome - registrations', 0),
+        kpi('Registration Success Rate', '100 * sum(increase(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}' + rng + ')) / (sum(increase(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}' + rng + ')) + sum(increase(kamailio_ims_registrar_scscf_rejected_regs{job="scscf"}' + rng + ')))', { h: 6, w: 8, x: 0, y: 1 }, ok_thr),
+        stat('Registered Contacts (P-CSCF)', 'sum(kamailio_ims_usrloc_pcscf_registered_contacts{job="pcscf"})', { h: 6, w: 8, x: 8, y: 1 }),
+        stat('Registered IMPUs (S-CSCF)', 'sum(kamailio_ims_usrloc_scscf_active_impus{job="scscf"})', { h: 6, w: 8, x: 16, y: 1 }),
+        ts('Registration rate', [
+          tgt('sum(rate(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}' + ri + '))', 'accepted'),
+          tgt('sum(rate(kamailio_ims_registrar_scscf_rejected_regs{job="scscf"}' + ri + '))', 'rejected'),
+        ], { h: 7, w: 24, x: 0, y: 7 }, 'reqps'),
+
+        // ===== SIP UDP transport =====
+        row('SIP transport - UDP receive-buffer drops (the gate once Cx is fast)', 14),
+        kpi('P-CSCF UDP RcvbufErrors (range)', 'sum(increase(node_netstat_Udp_RcvbufErrors{cscf="pcscf"}' + rng + '))', { h: 6, w: 8, x: 0, y: 15 }, drop_thr, 'short', 0),
+        ts('UDP RcvbufErrors /s (by CSCF)', [tgt('rate(node_netstat_Udp_RcvbufErrors' + ri + ')', '{{cscf}}')], { h: 7, w: 8, x: 8, y: 15 }, 'cps'),
+        ts('UDP InDatagrams vs dropped /s (P-CSCF)', [
+          tgt('rate(node_netstat_Udp_InDatagrams{cscf="pcscf"}' + ri + ')', 'in datagrams'),
+          tgt('rate(node_netstat_Udp_InErrors{cscf="pcscf"}' + ri + ')', 'in errors (dropped)'),
+        ], { h: 7, w: 8, x: 16, y: 15 }, 'cps'),
+
+        // ===== Cx round-trip =====
+        row('Cx round-trip (HSS / DRA) - is the HSS slow?', 22),
+        kpi('MAR windowed RT (auth)', cxrt('kamailio_ims_auth_mar', 'scscf'), { h: 6, w: 8, x: 0, y: 23 }, time_thr, 'ms', 0),
+        ts('Cx round-trip time (windowed)', [
+          tgt(cxrt('kamailio_ims_icscf_uar', 'icscf'), 'UAR (I-CSCF)'),
+          tgt(cxrt('kamailio_ims_auth_mar', 'scscf'), 'MAR (S-CSCF auth)'),
+          tgt(cxrt('kamailio_ims_registrar_scscf_sar', 'scscf'), 'SAR (S-CSCF reg)'),
+        ], { h: 7, w: 8, x: 8, y: 23 }, 'ms'),
+        ts('Cx timeouts /s', [
+          tgt('rate(kamailio_ims_auth_mar_timeouts{job="scscf"}' + ri + ')', 'MAR'),
+          tgt('rate(kamailio_ims_registrar_scscf_sar_timeouts{job="scscf"}' + ri + ')', 'SAR'),
+          tgt('rate(kamailio_ims_icscf_uar_timeouts{job="icscf"}' + ri + ')', 'UAR'),
+        ], { h: 7, w: 8, x: 16, y: 23 }, 'cps'),
+
+        // ===== HSS database (mongo) =====
+        row('HSS database (mongo) - is it the DB?', 30),
+        kpi('COLLSCANs (range)', 'sum(increase(mongodb_ss_metrics_queryExecutor_collectionScans_total' + rng + '))', { h: 6, w: 8, x: 0, y: 31 }, drop_thr, 'short', 0),
+        ts('Collection scans /s', [tgt('rate(mongodb_ss_metrics_queryExecutor_collectionScans_total' + ri + ')', 'collection scans')], { h: 7, w: 8, x: 8, y: 31 }, 'cps'),
+        ts('Docs scanned /s vs index keys /s', [
+          tgt('rate(mongodb_ss_metrics_queryExecutor_scannedObjects' + ri + ')', 'documents scanned'),
+          tgt('rate(mongodb_ss_metrics_queryExecutor_scanned' + ri + ')', 'index keys scanned'),
+        ], { h: 7, w: 8, x: 16, y: 31 }, 'ops'),
+        ts('Mongo ops /s by type', [tgt('rate(mongodb_ss_opcounters' + ri + ')', '{{legacy_op_type}}')], { h: 7, w: 24, x: 0, y: 38 }, 'ops'),
+
+        // ===== Resources =====
+        row('Resources', 45),
+        ts('CPU % per container', [tgt('rate(container_cpu_user_seconds_total{name!=\'\'}' + ri + ')*100', '{{name}}')], { h: 8, w: 24, x: 0, y: 46 }, 'percent'),
+      ])
+
+  open5gs.jsonnet:
+    content: |
+      local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+      local ds = 'prometheus';
+
+      local ts(title, exprs, p, unit='short') =
+        g.panel.timeSeries.new(title)
+        + g.panel.timeSeries.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.timeSeries.queryOptions.withTargets([g.query.prometheus.new(ds, e) for e in exprs])
+        + g.panel.timeSeries.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.timeSeries.standardOptions.withUnit(unit);
+
+      g.dashboard.new('Open5GS')
+      + g.dashboard.withUid('open5gs')
+      + g.dashboard.withDescription('Open5GS EPC core: UPF user-plane (N3 GTP-U, sessions) and MME (eNBs, sessions).')
+      + g.dashboard.time.withFrom('now-6h')
+      + g.dashboard.withRefresh('5s')
+      + g.dashboard.graphTooltip.withSharedCrosshair()
+      + g.dashboard.withPanels([
+        ts('UPF - GTP Packets', ['fivegs_ep_n3_gtp_indatapktn3upf', 'fivegs_ep_n3_gtp_outdatapktn3upf'], { h: 8, w: 12, x: 0, y: 0 }),
+        ts('UPF - Active Sessions', ['fivegs_upffunction_upf_sessionnbr'], { h: 8, w: 12, x: 12, y: 0 }),
+      ])
+
+  arch.jsonnet:
+    content: |
+      // IMS / EPC architecture canvas.
+      local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+      local ds = { type: 'prometheus', uid: 'prometheus' };
+
+      // ---- geometry: col/row grid mirroring the mermaid layout ----
+      local OX = 50; local OY = 100; local CW = 250; local RH = 150;
+      local W = 150; local H = 80;
+      local px(c) = OX + c * CW;
+      local py(r) = OY + r * RH;
+
+      // ---- domain palette ----
+      local core  = 'semi-dark-blue';    // open5gs EPC (SMF/UPF/HSS/PCRF)
+      local cscf  = 'semi-dark-green';   // Kamailio IMS core (P/I/S-CSCF)
+      local media = 'semi-dark-orange';  // rtpengine
+      local ocsc  = 'dark-red';          // online charging
+      local testc = '#41464d';           // load generator
+
+      // ri holds Grafana's rate-interval macro, written with a doubled dollar so
+      // Compose interpolation leaves exactly one dollar for the compiled jsonnet.
+      local ri = '[$$__rate_interval]';
+
+      // ---- nodes: id, title, caption (metric meaning), grid pos, colour, expr ----
+      local nodes = [
+        { id: 'smf',   t: 'SMF',       c: 'SM sessions',   col: 0, row: 0, bg: core,  e: 'sum(fivegs_smffunction_sm_sessionnbr{job="smf"})' },
+        { id: 'pcrf',  t: 'PCRF',      c: 'Gx CCR /s',     col: 1, row: 0, bg: core,  e: 'sum(rate(gx_rx_ccr{job="pcrf"}' + ri + '))' },
+        { id: 'icscf', t: 'I-CSCF',    c: 'UAR /s',        col: 2, row: 0, bg: cscf,  e: 'sum(rate(kamailio_ims_icscf_uar_replies_received{job="icscf"}' + ri + '))' },
+        { id: 'hss',   t: 'HSS',       c: 'IMPUs',         col: 3, row: 0, bg: core,  e: 'sum(hss_impu{job="hss"})' },
+        { id: 'upf',   t: 'UPF',       c: 'PFCP sessions', col: 0, row: 1, bg: core,  e: 'sum(fivegs_upffunction_upf_sessionnbr{job="upf"})' },
+        { id: 'pcscf', t: 'P-CSCF',    c: 'contacts',      col: 1, row: 1, bg: cscf,  e: 'sum(kamailio_ims_usrloc_pcscf_registered_contacts{job="pcscf"})' },
+        { id: 'scscf', t: 'S-CSCF',    c: 'reg IMPUs',     col: 3, row: 1, bg: cscf,  e: 'sum(kamailio_ims_usrloc_scscf_active_impus{job="scscf"})' },
+        { id: 'ocs',   t: 'OCS',       c: 'Ro sessions',   col: 4, row: 1, bg: ocsc,  e: 'sum(kamailio_ims_charging_active_ro_sessions{job="scscf"})' },
+        { id: 'rtp',   t: 'rtpengine', c: 'own sessions',  col: 1, row: 2, bg: media, e: 'sum(rtpengine_sessions{type="own",job="rtpengine"})' },
+      ];
+
+      // ---- node-center lookup, for placing latency chips on the arrows ----
+      local byId = { [n.id]: n for n in nodes };
+      local cx(id) = px(byId[id].col) + W / 2;
+      local cy(id) = py(byId[id].row) + H / 2;
+
+      // windowed Cx round-trip (ms) = rate(response_time sum) / rate(replies count)
+      local cxrt(base, joblbl) =
+        '(sum(rate(' + base + '_replies_response_time{job="' + joblbl + '"}' + ri + ')) / '
+        + 'sum(rate(' + base + '_replies_received{job="' + joblbl + '"}' + ri + ')))';
+
+      // ---- latency edges: only the Diameter legs expose a measured avg RT ----
+      // Cx to the HSS (UAR from I-CSCF, MAR/SAR from S-CSCF) and Ro CCR to the
+      // OCS. Each chip is placed at the arrow midpoint; dx/dy nudge it off the
+      // line into whitespace. The S-CSCF->HSS arrow carries two (MAR + SAR),
+      // stacked above/below its midpoint.
+      local lat = [
+        { id: 'uar', a: 'icscf', b: 'hss', t: 'UAR', dx: 16, dy: 0,   e: cxrt('kamailio_ims_icscf_uar', 'icscf') },
+        { id: 'mar', a: 'scscf', b: 'hss', t: 'MAR', dx: 60, dy: -13, e: 'avg(kamailio_ims_auth_mar_avg_response_time{job="scscf"})' },
+        { id: 'sar', a: 'scscf', b: 'hss', t: 'SAR', dx: 60, dy: 13,  e: 'avg(kamailio_ims_registrar_scscf_sar_avg_response_time{job="scscf"})' },
+        { id: 'ccr', a: 'scscf', b: 'ocs', t: 'CCR', dx: 16, dy: 0,   e: 'avg(kamailio_ims_charging_ccr_avg_response_time{job="scscf"})' },
+      ];
+
+      // ---- connection anchors (element-local, -1..1; y up) ----
+      local T = { x: 0, y: 1 }; local B = { x: 0, y: -1 };
+      local L = { x: -1, y: 0 }; local R = { x: 1, y: 0 };
+      local link(from, to, dst) = {
+        color: { fixed: '#9aa0a6' }, size: { fixed: 2 }, path: 'straight',
+        source: from, target: dst, targetName: to,
+      };
+      // edges keyed by source element, one entry per mermaid connection
+      local conns = {
+        smf:   [link(B, 'upf', T), link(R, 'pcrf', L)],
+        pcrf:  [link(B, 'pcscf', T)],
+        upf:   [link(R, 'pcscf', L), link(B, 'rtp', L)],
+        pcscf: [link(R, 'icscf', B), link(R, 'scscf', L)],
+        icscf: [link(R, 'hss', L), link(B, 'scscf', L)],
+        scscf: [link(T, 'hss', B), link(R, 'ocs', L), link(L, 'Mw', R), link(B, 'rtp', R)],
+      };
+
+      // ---- element builders ----
+      local card(n) = {
+        type: 'metric-value', name: n.id,
+        config: { align: 'center', valign: 'bottom', size: 26,
+                  color: { fixed: '#ffffff' },
+                  text: { mode: 'field', field: n.id, fixed: '' } },
+        background: { color: { fixed: n.bg } },
+        border: { color: { fixed: '#ffffff' }, width: 1 },
+        placement: { top: py(n.row), left: px(n.col), width: W, height: H },
+        constraint: { horizontal: 'left', vertical: 'top' },
+        connections: if std.objectHas(conns, n.id) then conns[n.id] else [],
+      };
+      local label(n) = {
+        type: 'text', name: n.id + '-t',
+        config: { align: 'center', valign: 'middle', size: 14,
+                  color: { fixed: '#ffffff' },
+                  text: { mode: 'fixed', fixed: n.t } },
+        background: { color: { fixed: 'transparent' } },
+        placement: { top: py(n.row) + 6, left: px(n.col), width: W, height: 20 },
+        constraint: { horizontal: 'left', vertical: 'top' },
+      };
+      local caption(n) = {
+        type: 'text', name: n.id + '-c',
+        config: { align: 'center', valign: 'middle', size: 10,
+                  color: { fixed: '#dadce0' },
+                  text: { mode: 'fixed', fixed: n.c } },
+        background: { color: { fixed: 'transparent' } },
+        placement: { top: py(n.row) + 24, left: px(n.col), width: W, height: 14 },
+        constraint: { horizontal: 'left', vertical: 'top' },
+      };
+      // ---- latency chip: interface name + live average RT (ms) on its arrow ----
+      local CHW = 52; local CHH = 20; local NMW = 32;
+      local latmid(ed) = { x: (cx(ed.a) + cx(ed.b)) / 2 + ed.dx,
+                           y: (cy(ed.a) + cy(ed.b)) / 2 + ed.dy };
+      local latName(ed) = {
+        type: 'text', name: ed.id + '-ln',
+        config: { align: 'right', valign: 'middle', size: 11,
+                  color: { fixed: '#dadce0' },
+                  text: { mode: 'fixed', fixed: ed.t } },
+        background: { color: { fixed: 'transparent' } },
+        placement: { top: latmid(ed).y - CHH / 2, left: latmid(ed).x - CHW / 2 - NMW,
+                     width: NMW, height: CHH },
+        constraint: { horizontal: 'left', vertical: 'top' },
+      };
+      local latChip(ed) = {
+        type: 'metric-value', name: ed.id + '-lv',
+        config: { align: 'left', valign: 'middle', size: 12,
+                  color: { fixed: '#ffd54f' },
+                  text: { mode: 'field', field: ed.id, fixed: '' } },
+        background: { color: { fixed: 'rgba(0,0,0,0.55)' } },
+        border: { color: { fixed: '#5f6368' }, width: 1 },
+        placement: { top: latmid(ed).y - CHH / 2, left: latmid(ed).x - CHW / 2,
+                     width: CHW, height: CHH },
+        constraint: { horizontal: 'left', vertical: 'top' },
+      };
+      local panel = {
+        type: 'canvas', id: 1, title: 'IMS / EPC Architecture',
+        datasource: ds,
+        gridPos: { h: 18, w: 24, x: 0, y: 0 },
+        fieldConfig: {
+          defaults: { decimals: 0, color: { mode: 'fixed' } },
+          overrides: [
+            {
+              matcher: { id: 'byFrameRefID', options: std.char(65 + std.length(nodes) + j) },
+              properties: [{ id: 'unit', value: 'ms' }],
+            }
+            for j in std.range(0, std.length(lat) - 1)
+          ],
+        },
+        options: {
+          inlineEditing: true, showAdvancedTypes: true, panZoom: true, infinitePan: false,
+          root: {
+            type: 'frame', name: 'Element 1',
+            background: { color: { fixed: 'transparent' } },
+            border: { color: { fixed: 'dark-green' } },
+            constraint: { horizontal: 'left', vertical: 'top' },
+            placement: { top: 0, left: 0, width: 100, height: 100 },
+            elements:
+              [card(n) for n in nodes]
+              + [label(n) for n in nodes] + [caption(n) for n in nodes]
+              + [latName(ed) for ed in lat] + [latChip(ed) for ed in lat],
+          },
+        },
+        targets:
+          [
+            {
+              datasource: ds, refId: std.char(65 + i),
+              expr: nodes[i].e, legendFormat: nodes[i].id,
+              instant: true, range: false,
+            }
+            for i in std.range(0, std.length(nodes) - 1)
+          ]
+          + [
+            {
+              datasource: ds, refId: std.char(65 + std.length(nodes) + j),
+              expr: lat[j].e, legendFormat: lat[j].id,
+              instant: true, range: false,
+            }
+            for j in std.range(0, std.length(lat) - 1)
+          ],
+      };
+
+      g.dashboard.new('Architecture')
+      + g.dashboard.withUid('arch')
+      + g.dashboard.withDescription('Architecture')
+      + g.dashboard.time.withFrom('now-6h')
+      + g.dashboard.withRefresh('5s')
+      + g.dashboard.graphTooltip.withSharedCrosshair()
+      + g.dashboard.withPanels([panel])
+
   log.jsonnet:
     content: |
       local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
@@ -510,5 +839,43 @@ configs:
         static_configs:
         - targets:
           - rtpengine:9090
+      # open5gs EPC/IMS core. NB: the HSS Cx counters (cx_rx_uar/mar/sar) update
+      # with a lag/batch — trustworthy cumulatively, not for real-time windows.
+      - job_name: hss
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - hss:9090
+      - job_name: pcrf
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - pcrf:9090
+      - job_name: smf
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - smf:9091
+      - job_name: upf
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - upf:9091
+      # HSS database load (mongo).
+      - job_name: mongo
+        honor_timestamps: false
+        static_configs:
+        - targets:
+          - mongodb-exporter:9216
+      # Per-CSCF UDP receive-buffer drops (node_exporter in each CSCF's netns).
+      - job_name: udp
+        honor_timestamps: false
+        static_configs:
+        - targets: [pcscf:9100]
+          labels: {cscf: pcscf}
+        - targets: [icscf:9100]
+          labels: {cscf: icscf}
+        - targets: [scscf:9100]
+          labels: {cscf: scscf}
 volumes:
   dash:

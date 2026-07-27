@@ -1,6 +1,7 @@
 include:
 - core.yml
 - billing.yml
+- monitor.yml
 
 
 x-kamailio: &kamailio
