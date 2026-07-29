@@ -49,6 +49,12 @@ As the setup loads and uses kernel module, best to test in VM
 
 For always up to date commands, check out [CI](.github/workflows/compose.yml) configuration
 
+To swap the HSS (and the mongo / subscriber-seed / DRA machinery behind it) for the
+[pro2call](../pro2call) Cx emulator — no provisioning, any IMSI, so load lands on the
+CSCF chain instead — point `$CORE` at [stub.yml](stub.yml)
+
+    CORE=stub.yml docker compose up -d --remove-orphans
+
 To observe the packets
 
     wireshark -i any --display-filter 'gtpv2 or sip or diameter.cmd.code != 280'

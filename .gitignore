@@ -1,3 +1,7 @@
 ### Helm ###
 # Chart dependencies
 **/charts/*.tgz
+
+### Compose ###
+/priv.yml
+/fuse.yml

@@ -1,5 +1,5 @@
 include:
-- core.yml
+- ${CORE:-core.yml}   # CORE=stub.yml swaps the HSS for the pro2call Cx stub
 - billing.yml
 - monitor.yml
 
@@ -23,14 +23,19 @@ services:
     environment:
       REALM: ${REALM}
       DBURL: redis:6379/1
-      IPSEC: ${IPSEC}
+      # Gm — ims_ipsec_pcscf binds its IPsec/SIP sockets to this address, and
+      # it is what the SMF hands the UE in the PCO. Mw already listens on
+      # 0.0.0.0, so this is the only address that has to move when Gm gets a
+      # network of its own; $GMv4 defaults to the Mw address, leaving the
+      # single-network variants exactly as they were (see stub.yml / priv.yml).
+      IPSEC: ${GMv4:-${IPSEC}}
     configs:
     - source: pcscf.xml
       target: /etc/cscf/diameter.xml
     cap_add:
     - NET_ADMIN
     networks:
-      default:
+      default:            # Mw
         ipv4_address: ${IPSEC}
     depends_on:
       kmod:
@@ -86,9 +91,11 @@ services:
       start_period: 5s
 
   # as UE IPs will not be in the setup IP range, they need special attention
+  # (head -1: with a multi-homed UPF the name resolves to one address per shared
+  # network, which would otherwise expand into a malformed `via a b`)
   route:
     image: alpine
-    command: sh -c "ip route add ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u)"
+    command: sh -c "ip route add ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1)"
     network_mode: service:pcscf
     cap_add:
     - NET_ADMIN
