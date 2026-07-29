@@ -541,31 +541,53 @@ configs:
   arch.jsonnet:
     content: |
       // IMS / EPC architecture canvas.
+      //
+      // The blocks carry state (sessions / contacts / IMPUs); the traffic lives on the
+      // connection lines. Every line is coloured by the protocol of its reference point
+      // (legend top-left) and every Diameter leg carries a badge with the live request
+      // rate and, where the node measures one, the round-trip time.
       local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
       local ds = { type: 'prometheus', uid: 'prometheus' };
 
-      // ---- geometry: col/row grid mirroring the mermaid layout ----
-      local OX = 50; local OY = 100; local CW = 250; local RH = 150;
-      local W = 150; local H = 80;
+      // ---- geometry: col/row grid mirroring the mermaid layout in README.md ----
+      // CW - W and RH - H are the gaps between blocks the badges live in: 130x70 px.
+      local OX = 50; local OY = 100; local CW = 270; local RH = 150;
+      local W = 140; local H = 80;
       local px(c) = OX + c * CW;
       local py(r) = OY + r * RH;
 
-      // ---- domain palette ----
+      // ---- domain palette (block fill) ----
       local core  = 'semi-dark-blue';    // open5gs EPC (SMF/UPF/HSS/PCRF)
       local cscf  = 'semi-dark-green';   // Kamailio IMS core (P/I/S-CSCF)
       local media = 'semi-dark-orange';  // rtpengine
       local ocsc  = 'dark-red';          // online charging
-      local testc = '#41464d';           // load generator
+
+      // ---- protocol palette (line colour + badge accent) ----
+      // Gx, Rx, Cx and Ro are all Diameter, so they share one colour and the legend
+      // one entry; the badge sitting on the line names the actual interface.
+      local diam = '#b877d9';
+      local proto = {
+        gx:   { n: 'Gx',   c: diam },       // Diameter, SMF/PGW-C <-> PCRF
+        rx:   { n: 'Rx',   c: diam },       // Diameter, P-CSCF <-> PCRF
+        cx:   { n: 'Cx',   c: diam },       // Diameter, I/S-CSCF <-> HSS
+        ro:   { n: 'Ro',   c: diam },       // Diameter, S-CSCF <-> OCS
+        sip:  { n: 'SIP',  c: '#73bf69' },  // Gm / Mw
+        pfcp: { n: 'PFCP', c: '#f2cc0c' },  // N4 / Sxa
+        rtp:  { n: 'RTP',  c: '#ff9830' },  // media
+      };
+      local legend = [{ n: 'Diameter', c: diam }, proto.sip, proto.pfcp, proto.rtp];
 
       // ri holds Grafana's rate-interval macro, written with a doubled dollar so
       // Compose interpolation leaves exactly one dollar for the compiled jsonnet.
       local ri = '[$$__rate_interval]';
 
       // ---- nodes: id, title, caption (metric meaning), grid pos, colour, expr ----
+      // A node without `e` shows no figure: the I-CSCF and the PCRF hold no state,
+      // all they have is Diameter throughput, and that now reads off the arrows.
       local nodes = [
         { id: 'smf',   t: 'SMF',       c: 'SM sessions',   col: 0, row: 0, bg: core,  e: 'sum(fivegs_smffunction_sm_sessionnbr{job="smf"})' },
-        { id: 'pcrf',  t: 'PCRF',      c: 'Gx CCR /s',     col: 1, row: 0, bg: core,  e: 'sum(rate(gx_rx_ccr{job="pcrf"}' + ri + '))' },
-        { id: 'icscf', t: 'I-CSCF',    c: 'UAR /s',        col: 2, row: 0, bg: cscf,  e: 'sum(rate(kamailio_ims_icscf_uar_replies_received{job="icscf"}' + ri + '))' },
+        { id: 'pcrf',  t: 'PCRF',                          col: 1, row: 0, bg: core },
+        { id: 'icscf', t: 'I-CSCF',                        col: 2, row: 0, bg: cscf },
         { id: 'hss',   t: 'HSS',       c: 'IMPUs',         col: 3, row: 0, bg: core,  e: 'sum(hss_impu{job="hss"})' },
         { id: 'upf',   t: 'UPF',       c: 'PFCP sessions', col: 0, row: 1, bg: core,  e: 'sum(fivegs_upffunction_upf_sessionnbr{job="upf"})' },
         { id: 'pcscf', t: 'P-CSCF',    c: 'contacts',      col: 1, row: 1, bg: cscf,  e: 'sum(kamailio_ims_usrloc_pcscf_registered_contacts{job="pcscf"})' },
@@ -573,101 +595,188 @@ configs:
         { id: 'ocs',   t: 'OCS',       c: 'Ro sessions',   col: 4, row: 1, bg: ocsc,  e: 'sum(kamailio_ims_charging_active_ro_sessions{job="scscf"})' },
         { id: 'rtp',   t: 'rtpengine', c: 'own sessions',  col: 1, row: 2, bg: media, e: 'sum(rtpengine_sessions{type="own",job="rtpengine"})' },
       ];
+      local hasVal(n) = std.objectHas(n, 'e');
 
-      // ---- node-center lookup, for placing latency chips on the arrows ----
+      // ---- node-centre lookup, for placing the badges on the arrows ----
       local byId = { [n.id]: n for n in nodes };
       local cx(id) = px(byId[id].col) + W / 2;
       local cy(id) = py(byId[id].row) + H / 2;
 
-      // windowed Cx round-trip (ms) = rate(response_time sum) / rate(replies count)
-      local cxrt(base, joblbl) =
-        '(sum(rate(' + base + '_replies_response_time{job="' + joblbl + '"}' + ri + ')) / '
-        + 'sum(rate(' + base + '_replies_received{job="' + joblbl + '"}' + ri + ')))';
-
-      // ---- latency edges: only the Diameter legs expose a measured avg RT ----
-      // Cx to the HSS (UAR from I-CSCF, MAR/SAR from S-CSCF) and Ro CCR to the
-      // OCS. Each chip is placed at the arrow midpoint; dx/dy nudge it off the
-      // line into whitespace. The S-CSCF->HSS arrow carries two (MAR + SAR),
-      // stacked above/below its midpoint.
-      local lat = [
-        { id: 'uar', a: 'icscf', b: 'hss', t: 'UAR', dx: 16, dy: 0,   e: cxrt('kamailio_ims_icscf_uar', 'icscf') },
-        { id: 'mar', a: 'scscf', b: 'hss', t: 'MAR', dx: 60, dy: -13, e: 'avg(kamailio_ims_auth_mar_avg_response_time{job="scscf"})' },
-        { id: 'sar', a: 'scscf', b: 'hss', t: 'SAR', dx: 60, dy: 13,  e: 'avg(kamailio_ims_registrar_scscf_sar_avg_response_time{job="scscf"})' },
-        { id: 'ccr', a: 'scscf', b: 'ocs', t: 'CCR', dx: 16, dy: 0,   e: 'avg(kamailio_ims_charging_ccr_avg_response_time{job="scscf"})' },
-      ];
-
       // ---- connection anchors (element-local, -1..1; y up) ----
       local T = { x: 0, y: 1 }; local B = { x: 0, y: -1 };
       local L = { x: -1, y: 0 }; local R = { x: 1, y: 0 };
-      local link(from, to, dst) = {
-        color: { fixed: '#9aa0a6' }, size: { fixed: 2 }, path: 'straight',
-        source: from, target: dst, targetName: to,
-      };
-      // edges keyed by source element, one entry per mermaid connection
+
+      // ---- reference points: one entry per mermaid connection, coloured by protocol.
+      // (The mermaid Mw junction is drawn as the three direct CSCF links it stands for.)
+      local links = [
+        { a: 'smf',   sa: B, b: 'upf',   ta: T, p: proto.pfcp },
+        { a: 'smf',   sa: R, b: 'pcrf',  ta: L, p: proto.gx },
+        { a: 'pcrf',  sa: B, b: 'pcscf', ta: T, p: proto.rx },
+        { a: 'upf',   sa: R, b: 'pcscf', ta: L, p: proto.sip },
+        { a: 'upf',   sa: B, b: 'rtp',   ta: L, p: proto.rtp },
+        { a: 'pcscf', sa: R, b: 'icscf', ta: B, p: proto.sip },
+        { a: 'pcscf', sa: R, b: 'scscf', ta: L, p: proto.sip },
+        { a: 'icscf', sa: R, b: 'hss',   ta: L, p: proto.cx },
+        { a: 'icscf', sa: B, b: 'scscf', ta: L, p: proto.sip },
+        { a: 'scscf', sa: T, b: 'hss',   ta: B, p: proto.cx },
+        { a: 'scscf', sa: R, b: 'ocs',   ta: L, p: proto.ro },
+        { a: 'scscf', sa: B, b: 'rtp',   ta: R, p: proto.rtp },
+      ];
+      // Edges keyed by source element, as the canvas element model wants them.
+      // Direction 'none' keeps them plain lines - the canvas default is 'forward',
+      // which is where the arrow heads came from. Grafana >= 12.3 wants a dimension
+      // config here rather than the bare string older versions took.
       local conns = {
-        smf:   [link(B, 'upf', T), link(R, 'pcrf', L)],
-        pcrf:  [link(B, 'pcscf', T)],
-        upf:   [link(R, 'pcscf', L), link(B, 'rtp', L)],
-        pcscf: [link(R, 'icscf', B), link(R, 'scscf', L)],
-        icscf: [link(R, 'hss', L), link(B, 'scscf', L)],
-        scscf: [link(T, 'hss', B), link(R, 'ocs', L), link(L, 'Mw', R), link(B, 'rtp', R)],
+        [src]: [
+          {
+            color: { fixed: l.p.c }, size: { fixed: 2 }, path: 'straight',
+            direction: { mode: 'fixed', fixed: 'none' },
+            source: l.sa, target: l.ta, targetName: l.b,
+          }
+          for l in links if l.a == src
+        ]
+        for src in std.set([l.a for l in links])
       };
 
+      // ---- PromQL helpers ----
+      local rps(m, job) = 'sum(rate(' + m + '{job="' + job + '"}' + ri + '))';
+      // Windowed round-trip (ms) = rate(response-time sum) / rate(reply count).
+      // The `> 0` guard is what keeps the chip readable: with no replies in the window
+      // the division is 0/0, Prometheus returns a NaN sample (not an empty result, so
+      // `or` alone cannot catch it) and the chip prints "NaN" - which is exactly what
+      // the UAR arrow did whenever the load stopped. Filtering the denominator drops
+      // the sample instead, and `or` then falls back to the module's own lifetime
+      // average, so an idle leg reads its long-run RT rather than nothing.
+      local rtt(job, sum, cnt, avg) =
+        '(' + rps(sum, job) + ' / (' + rps(cnt, job) + ' > 0))'
+        + ' or avg(' + avg + '{job="' + job + '"})';
+      local icscfRtt(x) = rtt('icscf',
+                              'kamailio_ims_icscf_' + x + '_replies_response_time',
+                              'kamailio_ims_icscf_' + x + '_replies_received',
+                              'kamailio_ims_icscf_' + x + '_avg_response_time');
+
+      // ---- Diameter legs: request rate, plus round-trip where the node measures one.
+      // dx/dy nudge the badge off the line it annotates - above/below a horizontal
+      // line, left/right of a vertical one - so the line never strikes through the
+      // figures. open5gs exports no Gx/Rx response time, so those two carry a rate
+      // only; the Cx pairs (UAR/LIR at the I-CSCF, MAR/SAR at the S-CSCF) share a
+      // line and sit on opposite sides of it.
+      local dia = [
+        { id: 'gx', t: 'Gx CCR', a: 'smf', b: 'pcrf', p: proto.gx, dx: 0, dy: -32,
+          r: rps('gx_rx_ccr', 'pcrf') },
+        { id: 'rx', t: 'Rx AAR', a: 'pcrf', b: 'pcscf', p: proto.rx, dx: 46, dy: 0,
+          r: rps('rx_rx_aar', 'pcrf') },
+        { id: 'uar', t: 'Cx UAR', a: 'icscf', b: 'hss', p: proto.cx, dx: 0, dy: -32,
+          r: rps('kamailio_ims_icscf_uar_replies_received', 'icscf'),
+          l: icscfRtt('uar') },
+        { id: 'lir', t: 'Cx LIR', a: 'icscf', b: 'hss', p: proto.cx, dx: 0, dy: 32,
+          r: rps('kamailio_ims_icscf_lir_replies_received', 'icscf'),
+          l: icscfRtt('lir') },
+        { id: 'mar', t: 'Cx MAR', a: 'scscf', b: 'hss', p: proto.cx, dx: 66, dy: 0,
+          r: rps('kamailio_ims_auth_mar_replies_received', 'scscf'),
+          l: rtt('scscf', 'kamailio_ims_auth_mar_replies_response_time',
+                 'kamailio_ims_auth_mar_replies_received',
+                 'kamailio_ims_auth_mar_avg_response_time') },
+        { id: 'sar', t: 'Cx SAR', a: 'scscf', b: 'hss', p: proto.cx, dx: -66, dy: 0,
+          r: rps('kamailio_ims_registrar_scscf_sar_replies_received', 'scscf'),
+          l: rtt('scscf', 'kamailio_ims_registrar_scscf_sar_replies_response_time',
+                 'kamailio_ims_registrar_scscf_sar_replies_received',
+                 'kamailio_ims_registrar_scscf_sar_avg_response_time') },
+        { id: 'ccr', t: 'Ro CCR', a: 'scscf', b: 'ocs', p: proto.ro, dx: 0, dy: -32,
+          r: rps('kamailio_ims_charging_ccr_replies_received', 'scscf'),
+          l: rtt('scscf', 'kamailio_ims_charging_ccr_response_time',
+                 'kamailio_ims_charging_ccr_replies_received',
+                 'kamailio_ims_charging_ccr_avg_response_time') },
+      ];
+      local hasLat(ed) = std.objectHas(ed, 'l');
+
+      // ---- one target per live figure; refId is the list index, A..S (19 of them,
+      // keep it under 26 or std.char runs past 'Z') ----
+      local lat_thr = [{ color: 'green', value: null },
+                       { color: '#f2cc0c', value: 100 },
+                       { color: '#ff7383', value: 500 }];
+      local queries =
+        [{ f: n.id, e: n.e, u: 'short', d: 0 } for n in nodes if hasVal(n)]
+        + [{ f: ed.id + '-r', e: ed.r, u: 'suffix:/s', d: 1 } for ed in dia]
+        + [{ f: ed.id + '-l', e: ed.l, u: 'ms', d: 1, thr: lat_thr } for ed in dia if hasLat(ed)];
+      local refId(i) = std.char(65 + i);
+      local ids = std.range(0, std.length(queries) - 1);
+
       // ---- element builders ----
+      local at(l, t, w, h) = {
+        placement: { top: t, left: l, width: w, height: h },
+        constraint: { horizontal: 'left', vertical: 'top' },
+      };
       local card(n) = {
-        type: 'metric-value', name: n.id,
+        type: if hasVal(n) then 'metric-value' else 'rectangle',
+        name: n.id,
         config: { align: 'center', valign: 'bottom', size: 26,
                   color: { fixed: '#ffffff' },
-                  text: { mode: 'field', field: n.id, fixed: '' } },
+                  text: if hasVal(n) then { mode: 'field', field: n.id }
+                        else { mode: 'fixed', fixed: '' } },
         background: { color: { fixed: n.bg } },
         border: { color: { fixed: '#ffffff' }, width: 1 },
-        placement: { top: py(n.row), left: px(n.col), width: W, height: H },
-        constraint: { horizontal: 'left', vertical: 'top' },
         connections: if std.objectHas(conns, n.id) then conns[n.id] else [],
-      };
+      } + at(px(n.col), py(n.row), W, H);
       local label(n) = {
         type: 'text', name: n.id + '-t',
         config: { align: 'center', valign: 'middle', size: 14,
                   color: { fixed: '#ffffff' },
                   text: { mode: 'fixed', fixed: n.t } },
         background: { color: { fixed: 'transparent' } },
-        placement: { top: py(n.row) + 6, left: px(n.col), width: W, height: 20 },
-        constraint: { horizontal: 'left', vertical: 'top' },
-      };
+        // figureless blocks centre their title instead of leaving a hole under it
+      } + at(px(n.col), py(n.row) + (if hasVal(n) then 6 else H / 2 - 10), W, 20);
       local caption(n) = {
         type: 'text', name: n.id + '-c',
         config: { align: 'center', valign: 'middle', size: 10,
                   color: { fixed: '#dadce0' },
                   text: { mode: 'fixed', fixed: n.c } },
         background: { color: { fixed: 'transparent' } },
-        placement: { top: py(n.row) + 24, left: px(n.col), width: W, height: 14 },
-        constraint: { horizontal: 'left', vertical: 'top' },
-      };
-      // ---- latency chip: interface name + live average RT (ms) on its arrow ----
-      local CHW = 52; local CHH = 20; local NMW = 32;
-      local latmid(ed) = { x: (cx(ed.a) + cx(ed.b)) / 2 + ed.dx,
-                           y: (cy(ed.a) + cy(ed.b)) / 2 + ed.dy };
-      local latName(ed) = {
-        type: 'text', name: ed.id + '-ln',
-        config: { align: 'right', valign: 'middle', size: 11,
-                  color: { fixed: '#dadce0' },
+      } + at(px(n.col), py(n.row) + 24, W, 14);
+
+      // ---- badge: a card in the line's own colour, interface name over the
+      // figures - request rate, then round-trip coloured by threshold ----
+      local CHW = 56; local CHH = 20; local NMH = 14;
+      local bw(ed) = if hasLat(ed) then 2 * CHW + 4 else CHW;
+      local bh = NMH + CHH;
+      local bleft(ed) = (cx(ed.a) + cx(ed.b)) / 2 + ed.dx - bw(ed) / 2;
+      local btop(ed) = (cy(ed.a) + cy(ed.b)) / 2 + ed.dy - bh / 2;
+      local badgeBox(ed) = {
+        type: 'rectangle', name: ed.id + '-box',
+        config: { align: 'center', valign: 'middle',
+                  text: { mode: 'fixed', fixed: '' } },
+        background: { color: { fixed: 'rgba(17,18,23,0.88)' } },
+        border: { color: { fixed: ed.p.c }, width: 1 },
+      } + at(bleft(ed), btop(ed), bw(ed), bh);
+      local badgeName(ed) = {
+        type: 'text', name: ed.id + '-n',
+        config: { align: 'center', valign: 'middle', size: 10,
+                  color: { fixed: ed.p.c },
                   text: { mode: 'fixed', fixed: ed.t } },
         background: { color: { fixed: 'transparent' } },
-        placement: { top: latmid(ed).y - CHH / 2, left: latmid(ed).x - CHW / 2 - NMW,
-                     width: NMW, height: CHH },
-        constraint: { horizontal: 'left', vertical: 'top' },
-      };
-      local latChip(ed) = {
-        type: 'metric-value', name: ed.id + '-lv',
-        config: { align: 'left', valign: 'middle', size: 12,
-                  color: { fixed: '#ffd54f' },
-                  text: { mode: 'field', field: ed.id, fixed: '' } },
-        background: { color: { fixed: 'rgba(0,0,0,0.55)' } },
-        border: { color: { fixed: '#5f6368' }, width: 1 },
-        placement: { top: latmid(ed).y - CHH / 2, left: latmid(ed).x - CHW / 2,
-                     width: CHW, height: CHH },
-        constraint: { horizontal: 'left', vertical: 'top' },
-      };
+      } + at(bleft(ed), btop(ed) + 1, bw(ed), NMH);
+      local badgeVal(ed, key, colour, slot) = {
+        type: 'metric-value', name: ed.id + '-' + key,
+        config: { align: 'center', valign: 'middle', size: 12,
+                  color: colour,
+                  text: { mode: 'field', field: ed.id + '-' + key } },
+        background: { color: { fixed: 'transparent' } },
+      } + at(bleft(ed) + slot * (CHW + 4), btop(ed) + NMH, CHW, CHH);
+      local badge(ed) =
+        [badgeBox(ed), badgeName(ed), badgeVal(ed, 'r', { fixed: '#ffffff' }, 0)]
+        + (if hasLat(ed)
+           then [badgeVal(ed, 'l', { fixed: '#ffd54f', field: ed.id + '-l' }, 1)]
+           else []);
+
+      // ---- protocol legend ----
+      local legendItem(p, i) = {
+        type: 'text', name: 'legend-' + p.n,
+        config: { align: 'left', valign: 'middle', size: 11,
+                  color: { fixed: p.c },
+                  text: { mode: 'fixed', fixed: '▬ ' + p.n } },
+        background: { color: { fixed: 'transparent' } },
+      } + at(OX + i * 82, 30, 82, 18);
+
       local panel = {
         type: 'canvas', id: 1, title: 'IMS / EPC Architecture',
         datasource: ds,
@@ -676,14 +785,20 @@ configs:
           defaults: { decimals: 0, color: { mode: 'fixed' } },
           overrides: [
             {
-              matcher: { id: 'byFrameRefID', options: std.char(65 + std.length(nodes) + j) },
-              properties: [{ id: 'unit', value: 'ms' }],
+              matcher: { id: 'byFrameRefID', options: refId(i) },
+              properties:
+                [{ id: 'unit', value: queries[i].u },
+                 { id: 'decimals', value: queries[i].d }]
+                + (if std.objectHas(queries[i], 'thr')
+                   then [{ id: 'color', value: { mode: 'thresholds' } },
+                         { id: 'thresholds', value: { mode: 'absolute', steps: queries[i].thr } }]
+                   else []),
             }
-            for j in std.range(0, std.length(lat) - 1)
+            for i in ids
           ],
         },
         options: {
-          inlineEditing: true, showAdvancedTypes: true, panZoom: true, infinitePan: false,
+          inlineEditing: false, showAdvancedTypes: true, panZoom: true, infinitePan: false,
           root: {
             type: 'frame', name: 'Element 1',
             background: { color: { fixed: 'transparent' } },
@@ -692,32 +807,25 @@ configs:
             placement: { top: 0, left: 0, width: 100, height: 100 },
             elements:
               [card(n) for n in nodes]
-              + [label(n) for n in nodes] + [caption(n) for n in nodes]
-              + [latName(ed) for ed in lat] + [latChip(ed) for ed in lat],
+              + [label(n) for n in nodes]
+              + [caption(n) for n in nodes if hasVal(n)]
+              + std.flattenArrays([badge(ed) for ed in dia])
+              + [legendItem(legend[i], i) for i in std.range(0, std.length(legend) - 1)],
           },
         },
-        targets:
-          [
-            {
-              datasource: ds, refId: std.char(65 + i),
-              expr: nodes[i].e, legendFormat: nodes[i].id,
-              instant: true, range: false,
-            }
-            for i in std.range(0, std.length(nodes) - 1)
-          ]
-          + [
-            {
-              datasource: ds, refId: std.char(65 + std.length(nodes) + j),
-              expr: lat[j].e, legendFormat: lat[j].id,
-              instant: true, range: false,
-            }
-            for j in std.range(0, std.length(lat) - 1)
-          ],
+        targets: [
+          {
+            datasource: ds, refId: refId(i),
+            expr: queries[i].e, legendFormat: queries[i].f,
+            instant: true, range: false,
+          }
+          for i in ids
+        ],
       };
 
       g.dashboard.new('Architecture')
       + g.dashboard.withUid('arch')
-      + g.dashboard.withDescription('Architecture')
+      + g.dashboard.withDescription('IMS / EPC architecture: blocks carry state, protocol-coloured lines carry traffic - request rate and Diameter round-trip per reference point.')
       + g.dashboard.time.withFrom('now-6h')
       + g.dashboard.withRefresh('5s')
       + g.dashboard.graphTooltip.withSharedCrosshair()
