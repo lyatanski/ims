@@ -1,0 +1,48 @@
+Register the tunnel teardown as soon as the tunnel exists.
+
+ipsec_create() attaches ipsec_on_expire to the contact only when the REGISTER's
+Via sent-by port is 5060, so for any other UE the sole remaining place that
+attaches it is ims_registrar_pcscf's update_contacts(), on the 200 OK. A
+registration that gets its 401, has a tunnel built for it, and then never
+completes — the UE gives up, the network drops the second REGISTER, the load
+generator times out — therefore has no teardown registered at all. The pending
+contact expires on pending_reg_expires and is deleted with the tunnel still
+installed: four SAs, four policies and a slot out of ipsec_max_connections, per
+abandoned registration. Under load that is a steady drain.
+
+Nothing about the callback depends on the source port, and by this point the
+tunnel is created, so attach it unconditionally. is_ulcb_registered() guards
+against stacking duplicates when update_contacts() attaches it again on the 200
+OK, and on every subsequent re-registration.
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index 861f101..77c381e 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -1017,14 +1017,19 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 		goto cleanup;
+ 	}
+ 
+-	if(ci.via_port == SIP_PORT) {
+-		if(ul.register_ulcb(pcontact,
+-				   PCSCF_CONTACT_EXPIRE | PCSCF_CONTACT_DELETE, ipsec_on_expire,
+-				   (void *)&pcontact->received_port)
+-				!= 1) {
+-			LM_ERR("Error subscribing for contact\n");
+-			goto cleanup;
+-		}
++	// Attach the teardown as soon as the tunnel exists, not only for a UE whose
++	// Via said 5060 and not only once the registration completes: a REGISTER
++	// that is challenged and then never comes back still leaves this tunnel
++	// behind, and the pending contact it belongs to expires without anything
++	// releasing it. is_ulcb_registered() keeps re-registrations from stacking
++	// up duplicate callbacks on the same contact.
++	if(!ul.is_ulcb_registered(pcontact, ipsec_on_expire)
++			&& ul.register_ulcb(pcontact,
++					   PCSCF_CONTACT_EXPIRE | PCSCF_CONTACT_DELETE,
++					   ipsec_on_expire, (void *)&pcontact->received_port)
++					   != 1) {
++		LM_ERR("Error subscribing for contact\n");
++		goto cleanup;
+ 	}
+ 
+ 	ret = IPSEC_CMD_SUCCESS; // all good, set ret to SUCCESS, and exit
