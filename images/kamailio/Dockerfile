@@ -26,10 +26,15 @@ RUN apk --no-cache upgrade \
     && adduser -D build && addgroup build abuild \
     && echo "%abuild ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abuild
 RUN git clone --depth=1 https://github.com/kamailio/kamailio.git
+# Carried until upstream takes them — each patch header says what it fixes and
+# why. `git apply` fails the build if one stops applying, which is what we want:
+# a silently unpatched image leaks an IPsec tunnel per ended registration.
+COPY patches/ /patches/
+RUN git -C /kamailio apply --verbose /patches/*.patch
 RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
         -D MODULE_GROUP_NAME="" \
         -D INCLUDE_MODULES="xlog debugger \
-            kex siputils textops \
+            kex siputils textops textopsx \
             pv rr sl tm \
             sanity \
             xhttp xhttp_prom \

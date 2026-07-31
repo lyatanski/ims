@@ -16,6 +16,12 @@ x-kamailio: &kamailio
     interval: 5s
     start_period: 5s
 
+x-route: &route
+  image: alpine
+  command: sh -c "ip route replace ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1)"
+  cap_add:
+  - NET_ADMIN
+
 services:
   pcscf:
     << : *kamailio
@@ -90,15 +96,13 @@ services:
       interval: 5s
       start_period: 5s
 
-  # as UE IPs will not be in the setup IP range, they need special attention
-  # (head -1: with a multi-homed UPF the name resolves to one address per shared
-  # network, which would otherwise expand into a malformed `via a b`)
-  route:
-    image: alpine
-    command: sh -c "ip route add ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1)"
+  route-sip:
+    << : *route
     network_mode: service:pcscf
-    cap_add:
-    - NET_ADMIN
+
+  route-rtp:
+    << : *route
+    network_mode: service:rtpengine
 
   kmod:
     image: alpine

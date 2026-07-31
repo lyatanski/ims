@@ -1,0 +1,39 @@
+Don't let an unset reg_state wipe the one a P-CSCF contact already has.
+
+update_pcontact() assigns _ci->reg_state unconditionally, so any caller that
+passes a pcontact_info it did not fill in completely resets the contact to
+PCONTACT_ANY. ims_ipsec_pcscf's ipsec_create() is such a caller: fill_contact()
+memsets the struct and never sets reg_state, so handling the 401 knocks the
+contact save_pending() had just inserted from PCONTACT_REG_PENDING back to
+PCONTACT_ANY.
+
+That breaks the 200 OK. update_contacts() looks the contact up with
+reg_state = PCONTACT_REGISTERED|PCONTACT_REG_PENDING|PCONTACT_REG_PENDING_AAR,
+the state test at the end of get_pcontact_from_cache() can no longer match, and
+the whole successful-registration branch is skipped — so the contact is never
+moved to PCONTACT_REGISTERED here, a later de-REGISTER cannot find it either,
+and, worst of all, ipsec_on_expire is never registered as a usrloc callback.
+Nothing then tears the ESP tunnel down when the contact goes away: every ended
+registration leaks four SAs, eight policies and a protected port pair out of
+ipsec_max_connections.
+
+PCONTACT_ANY is the "unspecified" value everywhere else in this API — it is the
+wildcard get_pcontact() searches with — so treat it as "leave alone" on update,
+exactly as the expires field immediately below already does. No caller sets it
+deliberately: every other update_pcontact() call site in ims_registrar_pcscf
+and ims_ipsec_pcscf passes a concrete state.
+
+diff --git a/src/modules/ims_usrloc_pcscf/udomain.c b/src/modules/ims_usrloc_pcscf/udomain.c
+--- a/src/modules/ims_usrloc_pcscf/udomain.c
++++ b/src/modules/ims_usrloc_pcscf/udomain.c
+@@ -352,7 +352,9 @@ int update_pcontact(struct udomain *_d, struct pcontact_info *_ci,
+ 	ppublic_t *ppublic_ptr;
+ 	int i;
+
+-	_c->reg_state = _ci->reg_state;
++	if(_ci->reg_state != PCONTACT_ANY) {
++		_c->reg_state = _ci->reg_state;
++	}
+
+ 	if(_ci->expires > 0) {
+ 		_c->expires = _ci->expires;
