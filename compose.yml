@@ -144,18 +144,82 @@ services:
       scscf:
         condition: service_healthy
 
-#  pcap:
-#    profiles:
-#    - debug
-#    network_mode: host
-#    command: tcpdump -i any -w /pcap/trace.pcap
-#    volumes:
-#    - ./pcap:/pcap
-#    build:
-#      context: .
-#      dockerfile_inline: |
-#        FROM alpine
-#        RUN apk add tcpdump
+  # Packet capture for the whole setup, written as pcapng with the container and
+  # process behind every packet attached (see doc/trace.md for why that beats a
+  # plain tcpdump here, and for what it costs).
+  #
+  #     docker compose --profile debug up -d pcap
+  #     docker compose stop pcap        # flushes the file - do this before reading it
+  #     wireshark pcap/trace.pcapng
+  #
+  # ptcpdump needs more than a capture privilege: eBPF program loading and the
+  # host PID namespace, without which it can see packets but not name the
+  # process or container they belong to.
+  #
+  # It waits for the CSCFs because `-i any` attaches to the interfaces it finds
+  # at startup: started alongside them, it enumerates while their veths are
+  # still being created and silently captures on three interfaces out of
+  # twenty-five. The healthcheck reports the capture as open, so callers can
+  # wait for it before generating traffic.
+  pcap:
+    profiles:
+    - debug
+    image: quay.io/ptcpdump/ptcpdump
+    depends_on:
+      pcscf:
+        condition: service_healthy
+      icscf:
+        condition: service_healthy
+      scscf:
+        condition: service_healthy
+    healthcheck:
+      test: test -s /pcap/trace.pcapng
+      retries: 30
+      interval: 2s
+      start_period: 5s
+    command:
+    - ptcpdump
+    - -i
+    - any
+    - -w
+    - /pcap/trace.pcapng
+    # RTP would dwarf the signalling; keep the reference points only
+    - port 5060 or port 3868 or port 2123 or port 53
+    network_mode: host
+    pid: host
+    privileged: true
+    volumes:
+    - ./pcap:/pcap
+    - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    - /var/run:/var/run:ro
+    - /run:/run:ro
+
+  # Wireshark in the browser over the captures above - same dissectors, since it
+  # is sharkd behind the page. It shows ptcpdump's per-packet process and
+  # container annotations as frame comments.
+  #
+  #     http://localhost:8085/webshark/
+  #
+  # It lists *.pcap only and skips .pcapng outright, so to browse the capture:
+  #
+  #     cp pcap/trace.pcapng pcap/trace.pcap
+  #
+  # (the same bytes either way - sharkd detects the format from the magic, not
+  # the name). Last released in 2024; see doc/trace.md.
+  webshark:
+    profiles:
+    - debug
+    image: ghcr.io/qxip/webshark
+    environment:
+      SHARKD_SOCKET: /home/node/sharkd.sock
+      CAPTURES_PATH: /captures/
+    volumes:
+    - ./pcap:/captures
+    ports:
+    # IPv4 only on purpose: the app binds 0.0.0.0, so a dual-stack publish on
+    # this IPv6-enabled network gives a listener that accepts and then resets
+    # every request arriving over ::1
+    - 0.0.0.0:8085:8085
 
 
 configs:

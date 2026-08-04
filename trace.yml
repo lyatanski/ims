@@ -1,0 +1,356 @@
+# Signalling tracing overlay: Homer and Grafana Tempo side by side, fed from
+# one capture path so the two can be judged on identical input.
+#
+#     docker compose -f compose.yml -f trace.yml --profile test up -d
+#
+#   Homer  http://localhost:9080  (admin / sipcapture)
+#   Tempo  via Grafana http://localhost:3000 -> Explore -> Tempo
+#
+# HEP is the common bus. SIP comes from Kamailio's own siptrace module, which
+# with trace_mode=1 mirrors every message through core callbacks - no routing
+# logic is touched, see the trace.cfg config at the bottom. Diameter is
+# sniffed off the bridge, because cdp (Kamailio's Diameter stack) has no trace
+# hook and freeDiameter only offers a log dump.
+#
+#   pcscf ]                      +--> homer   (HEP verbatim)
+#   icscf ]--siptrace HEP3--> hepd
+#   scscf ]                      +--> tempo   (OTLP spans) --> grafana
+#                                 ^
+#   dsniff (host netns, tcp/3868) +
+#
+# Only hepd derives spans; Homer receives the HEP verbatim. That split is
+# deliberate - it keeps the Homer path exactly as it would be without Tempo,
+# which is the point of the comparison in doc/trace.md.
+
+services:
+  # ---------------------------------------------------------------- Tempo ---
+  tempo:
+    image: grafana/tempo
+    command: -config.file=/etc/tempo.yaml
+    # the image runs as uid 10001; a named volume comes up root-owned
+    user: root
+    configs:
+    - source: tempo.yaml
+      target: /etc/tempo.yaml
+    volumes:
+    - tempo:/var/tempo
+    expose:
+    - 3200/tcp
+    - 4317/tcp
+    - 4318/tcp
+    # no healthcheck: the image carries no shell or wget to probe /ready with.
+    # The agent retries its OTLP posts, so a slow start costs at most a batch.
+
+  # ------------------------------------------------------- trace agent ------
+  # HEP in, OTLP out. Also tees the raw HEP to Homer.
+  #
+  # The spans go to Tempo only, even though Homer 11 has its own OTLP receiver:
+  # that receiver base64-decodes traceId and spanId out of OTLP/JSON, where the
+  # spec mandates hex, so every id is mangled (a 16-byte trace id arrives as 24
+  # bytes) and the parent links break. See doc/trace.md.
+  hepd:
+    image: ghcr.io/lyatanski/trace
+    command: collector
+    environment:
+      OTLP: http://tempo:4318/v1/traces
+      HEP_FORWARD: homer:9060
+      HEPMAP: 11=pcscf,12=icscf,13=scscf
+    expose:
+    - 9060/udp
+    ports:
+    # published so dsniff, which lives in the host netns, can reach it
+    - 127.0.0.1:9061:9061/udp
+    depends_on:
+    - tempo
+
+  # Diameter off the wire. Needs the host netns: on a bridge network a
+  # container only sees its own traffic, never scscf <-> hss.
+  dsniff:
+    image: ghcr.io/lyatanski/trace
+    command: sniffer
+    network_mode: host
+    cap_add:
+    - NET_RAW
+    - NET_ADMIN
+    environment:
+      COLLECTOR: 127.0.0.1:9061
+      DIA_PORT: 3868
+    depends_on:
+    - hepd
+
+  # ---------------------------------------------------------------- Homer ---
+  # Homer 11 (homer-core): one Go binary where Homer 7 needed three containers
+  # (heplify-server + homer-app + PostgreSQL). Storage is DuckLake - a SQLite
+  # catalog over local Parquet - so there is no database to provision and
+  # nothing to seed. The upstream example adds an S3 tier for cold partitions;
+  # a lab that keeps two days of signalling does not need it, so only the local
+  # hot volume is configured.
+  #
+  # Ports inside the container: 9060 HEP (udp+tcp), 8080 UI and REST API,
+  # 9080 HTTP ingest (not used here - do not confuse it with the published
+  # 9080, which is the UI and is kept on that number for continuity).
+  homer:
+    image: ghcr.io/sipcapture/homer
+    environment:
+      HOMER_INGEST_ENABLE: "true"
+      HOMER_STORAGE_ENABLE: "true"
+      HOMER_NODE_ENABLE: "true"
+      HOMER_COORDINATOR_ENABLE: "true"
+
+      HOMER_INGEST_UDP_ENABLE: "true"
+      HOMER_INGEST_UDP_HOST: 0.0.0.0
+      HOMER_INGEST_UDP_PORT: "9060"
+      HOMER_INGEST_HEP_HEPV3_ENABLE: "true"
+
+      # admin / sipcapture - the hash is sha256 of the password
+      HOMER_COORDINATOR_AUTH_ADMIN_USER: admin
+      HOMER_COORDINATOR_AUTH_ADMIN_PASSWORD_HASH: 883ffc1f37fd0fe542b0fb9740035c4383e7d976c411161d24e62edace280f90
+      HOMER_COORDINATOR_JWT_SECRET: ims-lab-not-a-secret
+
+      HOMER_STORAGE_DUCKLAKE_CATALOG_TYPE: sqlite
+      HOMER_STORAGE_DUCKLAKE_CATALOG_PATH: /data/homer/catalog.sqlite
+      HOMER_STORAGE_DUCKLAKE_DATA_PATH: /data/homer/parquet
+      HOMER_STORAGE_DUCKLAKE_LAKE_NAME: homer_lake
+      # a lab trickles data in; flush often so a search finds it straight away
+      HOMER_STORAGE_DUCKLAKE_FLUSH_INTERVAL_SEC: "5"
+      HOMER_STORAGE_DUCKLAKE_BATCH_SIZE: "100"
+      HOMER_STORAGE_DUCKLAKE_COMPACTION_RETENTION_DAYS: "2"
+      # single local volume, so no tiering to arbitrate
+      HOMER_STORAGE_DUCKLAKE_STORAGE_POLICY_ENABLE: "false"
+
+      HOMER_NODE_DUCKLAKE_LAKE_NAME: homer_lake
+      HOMER_NODE_DUCKLAKE_VOLUMES_0_NAME: hot
+      HOMER_NODE_DUCKLAKE_VOLUMES_0_TYPE: local
+      HOMER_NODE_DUCKLAKE_VOLUMES_0_CATALOG_TYPE: sqlite
+      HOMER_NODE_DUCKLAKE_VOLUMES_0_CATALOG_PATH: /data/homer/catalog.sqlite
+      HOMER_NODE_DUCKLAKE_VOLUMES_0_PATH: /data/homer/parquet
+    volumes:
+    - homer:/data/homer
+    expose:
+    - 9060/udp
+    ports:
+    - 9080:8080
+    # DuckDB pulls the ducklake extension from extensions.duckdb.org on every
+    # fresh start, and a failed download is fatal rather than retried, so a
+    # blip in egress takes the container down. Restarting is enough.
+    restart: on-failure
+    # no healthcheck: the image carries no curl or wget to probe with, and the
+    # HEP tee is fire-and-forget UDP, so nothing needs to wait on it
+
+  # ------------------------------------------------- overlay on the CSCFs ---
+  # trace.cfg is only present when this file is in play; common.cfg picks it up
+  # with import_file, which is silent when the file is absent.
+  pcscf:
+    environment:
+      HEPID: 11
+    configs:
+    - source: trace.cfg
+      target: /etc/cscf/trace.cfg
+
+  icscf:
+    environment:
+      HEPID: 12
+    configs:
+    - source: trace.cfg
+      target: /etc/cscf/trace.cfg
+
+  scscf:
+    environment:
+      HEPID: 13
+    configs:
+    - source: trace.cfg
+      target: /etc/cscf/trace.cfg
+
+  # ------------------------------------------------ overlay on monitoring ---
+  grafana:
+    configs:
+    - source: tempo.datasource.yml
+      target: /etc/grafana/provisioning/datasources/tempo.yaml
+    depends_on:
+    - tempo
+
+  prometheus:
+    # Tempo's metrics generator remote-writes the service graph here
+    command:
+    - --config.file=/etc/prometheus/prometheus.yml
+    - --web.enable-remote-write-receiver
+
+  jsonnet:
+    configs:
+    - source: trace.jsonnet
+      target: /dash/trace.jsonnet
+
+
+configs:
+  trace.cfg:
+    content: |
+      # Mirror every SIP message to the trace agent as HEP3.
+      #
+      # trace_init_mode 1 + trace_mode 1 hook the core send/receive callbacks,
+      # so this captures all traffic without a single sip_trace() call in the
+      # routing logic - nothing in proxy.cfg / interrogating.cfg / serving.cfg
+      # changes. HEPID tells the collector which CSCF a message came from;
+      # siptrace only carries a numeric capture id.
+      #!trydefenv HEPID
+      #!ifndef HEPID
+      #!define HEPID 0
+      #!endif
+
+      loadmodule "siptrace"
+      modparam("siptrace", "trace_to_database", 0)
+      modparam("siptrace", "duplicate_uri", "sip:hepd:9060")
+      modparam("siptrace", "hep_mode_on", 1)
+      modparam("siptrace", "hep_version", 3)
+      modparam("siptrace", "hep_capture_id", HEPID)
+      modparam("siptrace", "trace_init_mode", 1)
+      modparam("siptrace", "trace_mode", 1)
+      modparam("siptrace", "trace_on", 1)
+
+  tempo.yaml:
+    content: |
+      stream_over_http_enabled: true
+
+      server:
+        http_listen_port: 3200
+
+      distributor:
+        receivers:
+          otlp:
+            protocols:
+              grpc:
+                endpoint: 0.0.0.0:4317
+              http:
+                endpoint: 0.0.0.0:4318
+
+      # Tempo 3 dropped the ingester / compactor blocks of the 2.x config: a
+      # single binary keeps recent traces in its live store (so they are
+      # searchable straight away) and schedules compaction internally.
+
+      metrics_generator:
+        registry:
+          external_labels:
+            source: tempo
+        storage:
+          path: /var/tempo/generator/wal
+          remote_write:
+          - url: http://prometheus:9090/api/v1/write
+            send_exemplars: true
+
+      storage:
+        trace:
+          backend: local
+          local:
+            path: /var/tempo/blocks
+          wal:
+            path: /var/tempo/wal
+
+      overrides:
+        defaults:
+          metrics_generator:
+            processors:
+            - service-graphs
+            - span-metrics
+
+      usage_report:
+        reporting_enabled: false
+
+  tempo.datasource.yml:
+    content: |
+      apiVersion: 1
+      datasources:
+      - name: Tempo
+        type: tempo
+        uid: tempo
+        url: http://tempo:3200
+        access: proxy
+        basicAuth: false
+        editable: false
+        jsonData:
+          # the service graph is built by Tempo and read back out of Prometheus
+          serviceMap:
+            datasourceUid: prometheus
+          nodeGraph:
+            enabled: true
+          streamingEnabled:
+            search: true
+          tracesToLogsV2:
+            datasourceUid: loki
+            spanStartTimeShift: -2m
+            spanEndTimeShift: 2m
+            filterByTraceID: false
+            filterBySpanID: false
+            # every CSCF prefixes its log lines with the Call-ID (xlog prefix
+            # in common.cfg), so the Call-ID attribute is the way across
+            tags:
+            - key: sip.call_id
+              value: ""
+            customQuery: true
+            query: '{container=~"ims-.*"} |= "$${__span.tags[''sip.call_id'']}"'
+
+  trace.jsonnet:
+    content: |
+      // Tracing overview. The panels lean on the RED metrics that Tempo's
+      // metrics generator derives from the spans this stack produces, so the
+      // dashboard needs no extra instrumentation.
+      local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+      local prom = 'prometheus';
+
+      local ts(title, targets, p, unit='short') =
+        g.panel.timeSeries.new(title)
+        + g.panel.timeSeries.queryOptions.withDatasource('prometheus', prom)
+        + g.panel.timeSeries.queryOptions.withTargets(targets)
+        + g.panel.timeSeries.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.timeSeries.standardOptions.withUnit(unit);
+
+      local tgt(expr, legend) =
+        g.query.prometheus.new(prom, expr)
+        + g.query.prometheus.withLegendFormat(legend);
+
+      local row(title, y) =
+        g.panel.row.new(title) + g.panel.row.withGridPos(y);
+
+      g.dashboard.new('traces')
+      + g.dashboard.withUid('trace')
+      + g.dashboard.withDescription('SIP and Diameter transaction spans (Tempo)')
+      + g.dashboard.time.withFrom('now-1h')
+      + g.dashboard.withRefresh('10s')
+      + g.dashboard.graphTooltip.withSharedCrosshair()
+      + g.dashboard.withPanels([
+        row('Find a trace', 0),
+        g.panel.table.new('Recent transactions')
+        + g.panel.table.queryOptions.withDatasource('tempo', 'tempo')
+        + g.panel.table.queryOptions.withTargets([
+          { datasource: { type: 'tempo', uid: 'tempo' },
+            queryType: 'traceql',
+            query: '{ resource.service.namespace = "ims" }',
+            limit: 50 },
+        ])
+        + g.panel.table.panelOptions.withGridPos(h=10, w=24, x=0, y=1),
+
+        row('Span rate and latency (from Tempo span metrics)', 11),
+        ts('Transaction rate by node',
+           [tgt('sum by (service) (rate(traces_spanmetrics_calls_total[$$__rate_interval]))', '{{service}}')],
+           { h: 8, w: 12, x: 0, y: 12 }, 'reqps'),
+        ts('Transaction rate by span',
+           [tgt('sum by (span_name) (rate(traces_spanmetrics_calls_total[$$__rate_interval]))', '{{span_name}}')],
+           { h: 8, w: 12, x: 12, y: 12 }, 'reqps'),
+        ts('p95 duration by span',
+           [tgt('histogram_quantile(0.95, sum by (le, span_name) (rate(traces_spanmetrics_latency_bucket[$$__rate_interval])))', '{{span_name}}')],
+           { h: 8, w: 12, x: 0, y: 20 }, 's'),
+        ts('Errored spans',
+           [tgt('sum by (service, span_name) (rate(traces_spanmetrics_calls_total{status_code="STATUS_CODE_ERROR"}[$$__rate_interval]))', '{{service}} {{span_name}}')],
+           { h: 8, w: 12, x: 12, y: 20 }, 'reqps'),
+
+        row('Reference points (from Tempo service graph)', 28),
+        ts('Requests between nodes',
+           [tgt('sum by (client, server) (rate(traces_service_graph_request_total[$$__rate_interval]))', '{{client}} -> {{server}}')],
+           { h: 8, w: 12, x: 0, y: 29 }, 'reqps'),
+        ts('p95 latency between nodes',
+           [tgt('histogram_quantile(0.95, sum by (le, client, server) (rate(traces_service_graph_request_server_seconds_bucket[$$__rate_interval])))', '{{client}} -> {{server}}')],
+           { h: 8, w: 12, x: 12, y: 29 }, 's'),
+      ])
+
+
+volumes:
+  tempo:
+  homer:

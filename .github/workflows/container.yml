@@ -17,6 +17,7 @@ jobs:
         - freediameter
         - openssl
         - open5gs
+        - trace
         - cgr-console
         - cgr-engine
         - cgr-loader
@@ -49,28 +50,53 @@ jobs:
     needs:
     - images
     runs-on: ubuntu-latest
+    env:
+      # every compose call below picks up the tracing overlay too, so Homer,
+      # Tempo and the trace agent are exercised on every run
+      COMPOSE_FILE: compose.yml:trace.yml
     steps:
     - uses: actions/checkout@v6
     - name: Install Kmod
       run: |
         sudo apt update
         sudo apt install -qy --no-install-recommends linux-modules-extra-$(uname -r)
+    # brought up without the test profile first, so the capture is attached and
+    # writing before any signalling happens - ptcpdump takes a few seconds to
+    # load its eBPF programs and would otherwise miss the first REGISTER
     - name: Set Up
-      run: docker compose --profile test --profile debug up --detach --quiet-pull
+      run: docker compose --profile debug up --detach --quiet-pull
+    # --wait blocks on the healthcheck, which reports the capture file as open
+    - name: Capture Ready
+      run: docker compose --profile debug up --detach --wait pcap
+    - name: Test
+      run: docker compose --profile test --profile debug up --detach test
     - name: Wait
       run: docker compose --profile test --profile debug wait test
     - name: Check
       run: docker compose --profile test --profile debug ps --all
       if: always()
+    # ptcpdump buffers; stop it before the capture is read or uploaded
+    - name: Stop Capture
+      run: docker compose --profile test --profile debug stop pcap
+      if: always()
+    - name: Spans
+      # fail loudly if signalling flowed but no span came out the other end
+      run: |
+        docker compose --profile test --profile debug logs hepd
+        docker compose exec -T grafana wget -qO- \
+          'http://tempo:3200/api/search?q=%7B+resource.service.namespace+%3D+%22ims%22+%7D&limit=20' \
+          | tee /dev/stderr | grep -q '"traceID"'
+      if: always()
     - name: Logs
       run: docker compose --profile test --profile debug logs
       if: always()
-#    - name: Trace
-#      uses: actions/upload-artifact@v4
-#      with:
-#        name: trace
-#        path: pcap/trace.pcap
-#      if: always()
+    - name: Trace
+      uses: actions/upload-artifact@v4
+      with:
+        name: trace
+        path: pcap/
+        if-no-files-found: error
+      if: always()
     - name: Tear Down
       run: docker compose --profile test --profile debug down --volumes
       if: always()

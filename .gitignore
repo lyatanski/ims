@@ -1,3 +1,7 @@
 ### Helm ###
 # Chart dependencies
 **/charts/*.tgz
+
+### Tracing ###
+# packet captures written by the pcap service
+pcap/

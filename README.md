@@ -53,6 +53,20 @@ To observe the packets
 
     wireshark -i any --display-filter 'gtpv2 or sip or diameter.cmd.code != 280'
 
+To capture instead, with the container and process behind every packet recorded
+in the file, and to browse the result without leaving the browser
+
+    docker compose --profile debug up -d pcap webshark
+    docker compose stop pcap
+
+For SIP and Diameter as correlated traces in Grafana Tempo, next to the same
+signalling in Homer
+
+    docker compose -f compose.yml -f trace.yml --profile test up -d
+
+See [Tracing](doc/trace.md) for what each of those gives you, and
+[TRACING-ANALYSIS.md](TRACING-ANALYSIS.md) for how they were compared.
+
 
 ## Specifications
 - SIP [RFC 3261](https://www.rfc-editor.org/rfc/rfc3261.html)
@@ -106,5 +120,14 @@ To observe the packets
   - [x] Prometheus
   - [ ] Alertmanager
   - [x] Grafana
+- Tracing (trace.yml, [doc](doc/trace.md))
+  - [x] Homer 11 (homer-core, single binary over DuckLake)
+  - [x] Grafana Tempo
+  - [x] trace agent (SIP over HEP, Diameter off the wire, OTLP out)
+  - [x] siptrace (Kamailio)
+  - [ ] RTCP quality reports
+- Capture (compose.yml, `debug` profile)
+  - [x] ptcpdump
+  - [x] webshark
 - Testing (compose.yml)
   - [x] [Doubango](doc/images.md#test)
