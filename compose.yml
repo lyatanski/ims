@@ -144,23 +144,6 @@ services:
       scscf:
         condition: service_healthy
 
-  # Packet capture for the whole setup, written as pcapng with the container and
-  # process behind every packet attached (see doc/trace.md for why that beats a
-  # plain tcpdump here, and for what it costs).
-  #
-  #     docker compose --profile debug up -d pcap
-  #     docker compose stop pcap        # flushes the file - do this before reading it
-  #     wireshark pcap/trace.pcapng
-  #
-  # ptcpdump needs more than a capture privilege: eBPF program loading and the
-  # host PID namespace, without which it can see packets but not name the
-  # process or container they belong to.
-  #
-  # It waits for the CSCFs because `-i any` attaches to the interfaces it finds
-  # at startup: started alongside them, it enumerates while their veths are
-  # still being created and silently captures on three interfaces out of
-  # twenty-five. The healthcheck reports the capture as open, so callers can
-  # wait for it before generating traffic.
   pcap:
     profiles:
     - debug
@@ -183,8 +166,6 @@ services:
     - any
     - -w
     - /pcap/trace.pcapng
-    # RTP would dwarf the signalling; keep the reference points only
-    - port 5060 or port 3868 or port 2123 or port 53
     network_mode: host
     pid: host
     privileged: true
@@ -194,32 +175,15 @@ services:
     - /var/run:/var/run:ro
     - /run:/run:ro
 
-  # Wireshark in the browser over the captures above - same dissectors, since it
-  # is sharkd behind the page. It shows ptcpdump's per-packet process and
-  # container annotations as frame comments.
-  #
-  #     http://localhost:8085/webshark/
-  #
-  # It lists *.pcap only and skips .pcapng outright, so to browse the capture:
-  #
-  #     cp pcap/trace.pcapng pcap/trace.pcap
-  #
-  # (the same bytes either way - sharkd detects the format from the magic, not
-  # the name). Last released in 2024; see doc/trace.md.
+  # Wireshark in the browser
   webshark:
     profiles:
     - debug
-    image: ghcr.io/qxip/webshark
-    environment:
-      SHARKD_SOCKET: /home/node/sharkd.sock
-      CAPTURES_PATH: /captures/
+    image: ghcr.io/lyatanski/webshark
     volumes:
     - ./pcap:/captures
     ports:
-    # IPv4 only on purpose: the app binds 0.0.0.0, so a dual-stack publish on
-    # this IPv6-enabled network gives a listener that accepts and then resets
-    # every request arriving over ::1
-    - 0.0.0.0:8085:8085
+    - 8085:8085
 
 
 configs:

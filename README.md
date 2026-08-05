@@ -59,6 +59,16 @@ in the file, and to browse the result without leaving the browser
     docker compose --profile debug up -d pcap webshark
     docker compose stop pcap
 
+webshark carries a Lua plugin that relates SIP to Diameter by subscriber, so one
+display filter covers a registration and the Cx exchange behind it
+
+    ims.id == "001010000000001"
+
+and its `Flow` button draws that filtered set as Wireshark's flow graph — the
+whole registration as one sequence diagram, UE to HSS. Gm is included even though
+IPsec protects it: the ESP keys of every registration are in the capture, so
+webshark takes them out of it and reads the protected traffic as the SIP it is.
+
 For SIP and Diameter as correlated traces in Grafana Tempo, next to the same
 signalling in Homer
 
@@ -128,6 +138,7 @@ See [Tracing](doc/trace.md) for what each of those gives you, and
   - [ ] RTCP quality reports
 - Capture (compose.yml, `debug` profile)
   - [x] ptcpdump
-  - [x] webshark
+  - [x] webshark (own build: current sharkd with Lua, own UI over Go)
+  - [x] `ims.lua` — SIP and Diameter under one filter
 - Testing (compose.yml)
   - [x] [Doubango](doc/images.md#test)

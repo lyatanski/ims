@@ -1,0 +1,59 @@
+# sharkd's global preferences, read from the data directory of the Wireshark
+# installed next to it - so every program in this image starts with these columns.
+#
+# The only reason the file exists: Source and Destination carry addresses but not
+# ports, and the sequence-diagram view wants both, as Wireshark's own flow graph
+# labels each arrow end with its port. sharkd will not add a column on request -
+# `frames` takes no column list, and `setconf gui.column.format` after startup
+# renames the columns without changing what they hold - so the ports have to be
+# columns from the very start.
+#
+# They are hidden columns: `status` reports them "visible": false, the packet list
+# skips them, and the flow view reads the ports out of the rows it already has.
+# Everything else below is Wireshark's default column set, unchanged.
+
+gui.column.format:
+	"No.", "%m",
+	"Time", "%t",
+	"Source", "%s",
+	"SrcPort", "%uS",
+	"Destination", "%d",
+	"DstPort", "%uD",
+	"Protocol", "%p",
+	"Length", "%L",
+	"Info", "%i"
+
+# 1-indexed into the list above, hence the two port columns. The format-based
+# spelling of this preference (gui.column.hidden) is deprecated in master.
+gui.column.hide: 4,6
+
+# ESP, because Gm is protected with it: 3GPP runs IPsec ESP in transport mode
+# between the UE and the P-CSCF (TS 33.203), so every SIP message after the
+# registration is behind an ESP header and Wireshark leaves all three of these
+# off by default. Turned on, a protected Gm frame reads as SIP - packet list,
+# dissection tree, flow diagram and ims.lua alike.
+#
+# The two decode preferences are one mechanism and the heuristic is another; both
+# are wanted, because they cover different frames:
+#
+# - The heuristic needs no keys at all. It only applies when the encryption
+#   algorithm really is NULL - which is what this stack negotiates, `ealg=null`
+#   in the Security-Server header - and finds the payload by checking that what
+#   trails it looks like ESP padding. Left at `esp.padding: rfc`, so a frame that
+#   pads any other way is not guessed at.
+# - enable_encryption_decode is the keyed path, over the SAs in the esp_sa table:
+#   it decrypts (or, for a NULL SA, just trims the trailer) and dissects what
+#   comes out. src/esp.go fills that table from the capture, so it covers
+#   encrypted Gm as well - see the comment at the top of that file.
+#
+# enable_authentication_check is the check on all of that: with an SA matched it
+# verifies the ICV with the SA's integrity key and says so in the tree, which is
+# how a key that came out of the capture wrong is visible instead of silent.
+#
+# A frame with an SA is dissected by the keyed path and not by the heuristic, so
+# the two decode preferences go together: with the check on and the decode off, a
+# frame whose SA matches stops at "Data" - the heuristic does not pick it up
+# again. Frames with no SA at all are unaffected and stay with the heuristic.
+esp.enable_null_encryption_decode_heuristic: TRUE
+esp.enable_encryption_decode: TRUE
+esp.enable_authentication_check: TRUE
