@@ -33,6 +33,7 @@ RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
             pv rr sl tm \
             sanity \
             xhttp xhttp_prom \
+            siptrace \
             db_redis db_mysql \
             cdp cdp_avp \
             ims_dialog \

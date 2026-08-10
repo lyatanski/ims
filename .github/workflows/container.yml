@@ -17,6 +17,8 @@ jobs:
         - freediameter
         - openssl
         - open5gs
+        - trace
+        - webshark
         - cgr-console
         - cgr-engine
         - cgr-loader
@@ -49,28 +51,84 @@ jobs:
     needs:
     - images
     runs-on: ubuntu-latest
+    env:
+      # every compose call below picks up the tracing overlay too, so Homer,
+      # Tempo and the trace agent are exercised on every run
+      COMPOSE_FILE: compose.yml:trace.yml
     steps:
     - uses: actions/checkout@v6
     - name: Install Kmod
       run: |
         sudo apt update
         sudo apt install -qy --no-install-recommends linux-modules-extra-$(uname -r)
+    # brought up without the test profile first, so the capture is attached and
+    # writing before any signalling happens - ptcpdump takes a few seconds to
+    # load its eBPF programs and would otherwise miss the first REGISTER
     - name: Set Up
-      run: docker compose --profile test --profile debug up --detach --quiet-pull
+      run: docker compose --profile debug up --detach --quiet-pull
+    # --wait blocks on the healthcheck, which reports the capture file as open
+    - name: Capture Ready
+      run: docker compose --profile debug up --detach --wait pcap
+    - name: Test
+      run: docker compose --profile test --profile debug up --detach test
     - name: Wait
       run: docker compose --profile test --profile debug wait test
     - name: Check
       run: docker compose --profile test --profile debug ps --all
       if: always()
+    # ptcpdump buffers; stop it before the capture is read or uploaded
+    - name: Stop Capture
+      run: docker compose --profile test --profile debug stop pcap
+      if: always()
+    - name: Correlate
+      # webshark's Lua plugin must relate the captured SIP to the captured
+      # Diameter: one subscriber has to come out on a SIP reference point and on
+      # Cx, or the filter is not doing what it claims. tshark is in the image
+      # for exactly this, and reads the plugin the same way sharkd does.
+      run: |
+        . ./.env
+        docker compose --profile debug run --rm --entrypoint tshark webshark \
+          -r /captures/trace.pcapng -Y "ims.id == \"${MCC}${MNC}0000000001\"" \
+          -T fields -e ims.ref | sort -u | tee refs
+        grep -qx Cx refs
+        grep -qxE 'Gm|Mw' refs
+      if: always()
+    - name: Decrypt
+      # Gm is protected with IPsec, so the captured Gm is ESP payload until
+      # webshark takes the keys of each registration out of the capture itself
+      # (images/webshark/src/esp.go). Two things have to hold: SAs come out of the
+      # file at all, and the ESP frames read as the SIP they carry *by those keys*
+      # - which is what the ICV verdict says, and only says when a key matched.
+      # With `ealg=null` negotiated here the payload would be readable without any
+      # key at all, so a True in that column is the whole point of the check.
+      run: |
+        docker compose --profile debug run --rm webshark \
+          -esp /captures/trace.pcapng | tee esp_sa
+        test -s esp_sa
+        docker compose --profile debug run --rm --entrypoint tshark webshark \
+          -r /captures/trace.pcapng -Y 'esp && sip' \
+          -T fields -e frame.number -e esp.icv_good -e _ws.col.protocol | tee esp
+        grep -q True esp
+        ! grep -q False esp
+      if: always()
+    - name: Spans
+      # fail loudly if signalling flowed but no span came out the other end
+      run: |
+        docker compose --profile test --profile debug logs hepd
+        docker compose exec -T grafana wget -qO- \
+          'http://tempo:3200/api/search?q=%7B+resource.service.namespace+%3D+%22ims%22+%7D&limit=20' \
+          | tee /dev/stderr | grep -q '"traceID"'
+      if: always()
     - name: Logs
       run: docker compose --profile test --profile debug logs
       if: always()
-#    - name: Trace
-#      uses: actions/upload-artifact@v4
-#      with:
-#        name: trace
-#        path: pcap/trace.pcap
-#      if: always()
+    - name: Trace
+      uses: actions/upload-artifact@v4
+      with:
+        name: trace
+        path: pcap/
+        if-no-files-found: error
+      if: always()
     - name: Tear Down
       run: docker compose --profile test --profile debug down --volumes
       if: always()

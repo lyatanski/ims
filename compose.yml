@@ -144,18 +144,46 @@ services:
       scscf:
         condition: service_healthy
 
-#  pcap:
-#    profiles:
-#    - debug
-#    network_mode: host
-#    command: tcpdump -i any -w /pcap/trace.pcap
-#    volumes:
-#    - ./pcap:/pcap
-#    build:
-#      context: .
-#      dockerfile_inline: |
-#        FROM alpine
-#        RUN apk add tcpdump
+  pcap:
+    profiles:
+    - debug
+    image: quay.io/ptcpdump/ptcpdump
+    depends_on:
+      pcscf:
+        condition: service_healthy
+      icscf:
+        condition: service_healthy
+      scscf:
+        condition: service_healthy
+    healthcheck:
+      test: test -s /pcap/trace.pcapng
+      retries: 30
+      interval: 2s
+      start_period: 5s
+    command:
+    - ptcpdump
+    - -i
+    - any
+    - -w
+    - /pcap/trace.pcapng
+    network_mode: host
+    pid: host
+    privileged: true
+    volumes:
+    - pcap:/pcap
+    - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    - /var/run:/var/run:ro
+    - /run:/run:ro
+
+  # Wireshark in the browser
+  webshark:
+    profiles:
+    - debug
+    image: ghcr.io/lyatanski/webshark
+    volumes:
+    - pcap:/captures
+    ports:
+    - 8085:8085
 
 
 configs:
@@ -280,3 +308,7 @@ networks:
       config:
       - subnet: ${NETv4}
       - subnet: ${NETv6}
+
+
+volumes:
+  pcap:

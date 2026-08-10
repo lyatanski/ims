@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>webshark</title>
+<link rel=icon href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23000' d='M2.95 0C1.33 0 0 1.32 0 2.95v18.1C0 22.68 1.32 24 2.95 24h18.1c1.62 0 2.95 -1.32 2.95 -2.95V2.95C23.99976 1.32 22.68 0 21.05 0zm0 1.09h18.1c1.04 0 1.85 0.818 1.85 1.86v14h-5.27c-0.335 -0.796 -2.57 -6.47 0.283 -10.9a0.516 0.517 0 0 0 -0.443 -0.794c-5.24 0.0827 -8.2 3.19 -9.74 6.21 -1.35 2.64 -1.63 4.91 -1.69 5.53H1.09v-14c0 -1.04 0.817 -1.86 1.85 -1.86zm13.6 5.24c-2.62 5.24 0.248 11.4 0.248 11.4a0.516 0.517 0 0 0 0.469 0.301h5.62v3.05c0 1.04 -0.817 1.86 -1.85 1.86h-18.1c-1.04 0 -1.85 -0.818 -1.85 -1.86v-3.05h5.39a0.516 0.517 0 0 0 0.514 -0.477s0.226 -2.8 1.66 -5.62c1.34 -2.62 3.67 -5.17 7.91 -5.57z'/></svg>">
+<link rel=stylesheet href=style.css>
+<script>
+  // before first paint, or a stored dark theme shows a white page for a frame
+  const stored = localStorage.getItem('theme')
+  if (stored) document.documentElement.dataset.theme = stored
+</script>
+</head>
+<body>
+
+<header>
+  <button id=back title="Capture list" hidden>&#9664;</button>
+  <span id=brand title=webshark><svg viewBox="0 0 24 24" aria-hidden=true><path d='M2.95 0C1.33 0 0 1.32 0 2.95v18.1C0 22.68 1.32 24 2.95 24h18.1c1.62 0 2.95 -1.32 2.95 -2.95V2.95C23.99976 1.32 22.68 0 21.05 0zm0 1.09h18.1c1.04 0 1.85 0.818 1.85 1.86v14h-5.27c-0.335 -0.796 -2.57 -6.47 0.283 -10.9a0.516 0.517 0 0 0 -0.443 -0.794c-5.24 0.0827 -8.2 3.19 -9.74 6.21 -1.35 2.64 -1.63 4.91 -1.69 5.53H1.09v-14c0 -1.04 0.817 -1.86 1.85 -1.86zm13.6 5.24c-2.62 5.24 0.248 11.4 0.248 11.4a0.516 0.517 0 0 0 0.469 0.301h5.62v3.05c0 1.04 -0.817 1.86 -1.85 1.86h-18.1c-1.04 0 -1.85 -0.818 -1.85 -1.86v-3.05h5.39a0.516 0.517 0 0 0 0.514 -0.477s0.226 -2.8 1.66 -5.62c1.34 -2.62 3.67 -5.17 7.91 -5.57z'/></svg></span>
+  <span id=name hidden></span>
+  <form id=filterbar hidden>
+    <input id=filter placeholder='display filter' spellcheck=false autocomplete=off autocapitalize=off>
+  </form>
+  <span id=count></span>
+  <!-- the two views as one icon: three list rows, or the same three items turned
+       into the lifelines of a sequence diagram. The rest of the state is the
+       hover, and lives in style.css - see view(). -->
+  <button id=mode hidden>
+    <svg viewBox="0 0 64 64" aria-hidden=true fill=none stroke=currentColor
+         stroke-width=4 stroke-linecap=round stroke-linejoin=round>
+      <g class=item style="--lx:11px;--ly:18px;--fx:14px;--fy:13px">
+        <circle r=5 fill=currentColor stroke=none /><line x1=11 x2=40 />
+      </g>
+      <g class=item style="--lx:11px;--ly:32px;--fx:32px;--fy:13px">
+        <circle r=5 fill=currentColor stroke=none /><line x1=11 x2=40 />
+      </g>
+      <g class=item style="--lx:11px;--ly:46px;--fx:50px;--fy:13px">
+        <circle r=5 fill=currentColor stroke=none /><line x1=11 x2=40 />
+      </g>
+      <g class=msg>
+        <path d="M17 31H29M25.5 27.5L29 31L25.5 34.5"/>
+        <path d="M47 45H35M38.5 41.5L35 45L38.5 48.5"/>
+      </g>
+    </svg>
+  </button>
+  <button id=theme title="Theme">&#9680;</button>
+</header>
+
+<section id=files>
+  <table id=filelist></table>
+  <p id=empty hidden>No captures in the directory yet.</p>
+  <label class=upload>Upload<input id=pick type=file multiple hidden></label>
+  <span id=drophint>or drop capture files anywhere on the page</span>
+</section>
+
+<section id=viewer hidden>
+  <div id=flowwarn hidden><span id=flowmsg></span>
+    <a id=flowfilter>filter</a> to narrow it down; the rest draw as plain rows.</div>
+  <div id=list><div id=cols></div><div id=canvas></div><div id=spin hidden></div></div>
+  <div id=panes>
+    <div id=tree></div>
+    <div id=bytes><div id=sources></div><pre id=hex></pre></div>
+  </div>
+</section>
+
+<footer><span id=msg></span><span id=field></span></footer>
+
+<script src=app.js></script>
+</body>
+</html>
