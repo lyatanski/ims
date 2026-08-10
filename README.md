@@ -64,6 +64,10 @@ display filter covers a registration and the Cx exchange behind it
 
     ims.id == "001010000000001"
 
+and, because the plugin learns each subscriber's IMPI/IMPU binding out of the
+registration, the same frames come back under any of that subscriber's names —
+`ims.impi == "001010000000001"` and `ims.impu == "359000000001"` alike
+
 and its `Flow` button draws that filtered set as Wireshark's flow graph — the
 whole registration as one sequence diagram, UE to HSS. Gm is included even though
 IPsec protects it: the ESP keys of every registration are in the capture, so

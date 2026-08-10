@@ -19,7 +19,7 @@ behind these choices, including what was rejected.
 |---|---|
 | Homer | <http://localhost:9080> — `admin` / `sipcapture` |
 | Tempo | <http://localhost:3000> → Explore → Tempo, or the `traces` dashboard |
-| webshark | <http://localhost:8085/webshark/> (`--profile debug`) |
+| webshark | <http://localhost:8085> (`--profile debug`) |
 
 ## How it fits together
 
@@ -220,7 +220,7 @@ ptcpdump's per-packet comments, over the same `pcap/` directory.
     docker compose --profile debug up -d pcap webshark
     docker compose stop pcap        # flushes; do this before opening the file
 
-<http://localhost:8085/webshark/>
+<http://localhost:8085>
 
 Built here (`images/webshark`) rather than pulled from `ghcr.io/qxip/webshark`,
 because the published image's own `sharkd -v` says **`without Lua`** — no plugin
@@ -314,9 +314,15 @@ generated field, so one filter reaches across both protocols:
 | field | what it holds |
 |---|---|
 | `ims.id` | subscriber identity, once per distinct identity in the frame — so an INVITE matches under both parties |
+| `ims.impi` | the private identity: `Authorization` username, Cx `User-Name`, `<PrivateID>` of the Cx User-Data |
+| `ims.impu` | the public identities: `To`, `From`, `P-Asserted-Identity`, `P-Preferred-Identity`, request URI, reg-event `aor`, Cx `Public-Identity`, `<Identity>` of the Cx User-Data |
 | `ims.ref` | reference point: `Gm`, `Mw`, `Cx`, `Rx`, `Gx`, `Ro`, `Sh`, `S6a`, `base` |
 | `ims.msg` | `Cx/UAR`, `Gx/CCA`, `REGISTER`, `REGISTER 401` — request bit and CSeq method resolved |
 | `ims.linked` | set when the identity came from session state rather than from this frame |
+| `ims.related` | set when an identity came from the IMPI/IMPU binding rather than from this frame |
+
+`Subscription-Id-Data` is one or the other according to its `Subscription-Id-Type`:
+an IMSI or an NAI is private, an E.164 number or a SIP URI is public.
 
 ```
 $ tshark -r pcap/trace.pcapng -Y 'ims.id == "001010000000001"' \
@@ -345,7 +351,21 @@ reference points — 30 Mw, 13 Cx, 5 Gm, 2 Gx — which is the whole point: the 
 exchange the HSS saw and the SIP that caused it, selected by who it was about
 rather than by which node or port.
 
-Two mechanisms are worth knowing before trusting it:
+Three mechanisms are worth knowing before trusting it:
+
+- **The IMPI and the IMPU are related, and the relation is learned.** A
+  subscriber's IMSI and MSISDN share no substring, so `ims.impi ==
+  "001010000000001"` and `ims.impu == "359000000001"` would pick out two
+  disjoint sets of frames that are the same person. Three kinds of message say
+  they are one — a `REGISTER`, which carries the `Authorization` username beside
+  its `To`; any single Diameter message, which 3GPP defines as being about one
+  subscriber; and above all the Cx SAA, whose User-Data holds the `<PrivateID>`
+  with every `<Identity>` of the implicit registration set, the one place the
+  MSISDN and the IMPI ever appear together. Every other message only reads the
+  relation, which is what puts an IMPI on a Cx LIR for a bare `tel:` URI, and
+  `ims.related` marks each identity added that way. Messages that hold two
+  subscribers — an INVITE, with a caller in `From` and a callee in `To` — never
+  contribute to it, and come out under both parties as before.
 
 - **`Gm` versus `Mw` is a preference, not a fact on the wire.** They are the
   same protocol on the same port, so the plugin calls a SIP frame `Gm` when one

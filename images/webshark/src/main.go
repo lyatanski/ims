@@ -3,12 +3,13 @@ package main
 // webshark - Wireshark in the browser. Static page plus a JSON API over sharkd,
 // which does all the dissecting.
 //
-//	GET  /webshark/                     the UI (embedded, or WEB=<dir> to serve
+//	GET  /                              the UI (embedded, or WEB=<dir> to serve
 //	                                    it off disk while working on it)
 //	GET  /api/captures                  files in CAPTURES, and which are open
 //	GET  /api/status?f=                 frame count, columns, duration
 //	GET  /api/frames?f=&filter=&skip=&limit=
 //	GET  /api/frame?f=&num=&prev=       dissection tree and bytes
+//	GET  /api/addresses?f=&filter=      how many addresses the diagram would need
 //	GET  /api/check?f=&filter=          compile a display filter
 //	GET  /api/file?f=                   download a capture
 //	POST /api/file?f=                   upload one (raw body)
@@ -91,12 +92,12 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("GET /webshark/", http.StripPrefix("/webshark/", http.FileServer(web)))
-	mux.Handle("GET /", http.RedirectHandler("/webshark/", http.StatusFound))
+	mux.Handle("GET /", http.FileServer(web))
 	mux.HandleFunc("GET /api/captures", srv.captures)
 	mux.HandleFunc("GET /api/status", srv.status)
 	mux.HandleFunc("GET /api/frames", srv.frames)
 	mux.HandleFunc("GET /api/frame", srv.frame)
+	mux.HandleFunc("GET /api/addresses", srv.addresses)
 	mux.HandleFunc("GET /api/check", srv.check)
 	mux.HandleFunc("GET /api/file", srv.download)
 	mux.HandleFunc("POST /api/file", srv.upload)
@@ -203,6 +204,53 @@ func (s *server) frame(w http.ResponseWriter, r *http.Request) {
 		params["prev_frame"] = prev
 	}
 	s.forward(w, r, "frame", params)
+}
+
+// addresses counts the distinct endpoints of a capture, which is how many columns
+// the sequence diagram would need to draw all of it. The endpoints tap is one pass
+// over the whole file, so the diagram can say up front that it has more addresses
+// than it draws - the UI's own node list is built from the pages fetched so far and
+// only finds that out when the frame that overflows it scrolls into view.
+//
+// Endpoints are IP ones: a frame with no network layer (ARP, STP) shows a MAC in
+// the address columns and becomes a node in the diagram too, so this is a floor
+// rather than the total, and the UI keeps counting as it pages for that reason.
+// Wireshark's own flow-graph tap (seqa) is no use here - it truncates to the same
+// 40 nodes the diagram does, so it cannot report the overflow it is hiding.
+func (s *server) addresses(w http.ResponseWriter, r *http.Request) {
+	name, ok := s.name(w, r)
+	if !ok {
+		return
+	}
+	params := map[string]any{"tap0": "endpt:IPv4", "tap1": "endpt:IPv6"}
+	if filter := r.URL.Query().Get("filter"); filter != "" {
+		params["filter"] = filter
+	}
+	raw, err := s.pool.call(name, "tap", params)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err)
+		return
+	}
+	var taps struct {
+		Taps []struct {
+			Hosts []struct {
+				Host string `json:"host"`
+			} `json:"hosts"`
+		} `json:"taps"`
+	}
+	if err := json.Unmarshal(raw, &taps); err != nil {
+		fail(w, http.StatusInternalServerError, err)
+		return
+	}
+	// the two taps are disjoint address spaces, but count a set rather than rely
+	// on that
+	seen := map[string]bool{}
+	for _, tap := range taps.Taps {
+		for _, h := range tap.Hosts {
+			seen[h.Host] = true
+		}
+	}
+	send(w, map[string]any{"n": len(seen)})
 }
 
 func (s *server) check(w http.ResponseWriter, r *http.Request) {

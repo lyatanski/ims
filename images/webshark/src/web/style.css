@@ -52,6 +52,8 @@ header {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--head);
 }
+#brand { display: flex; align-items: center; }
+#brand svg { width: 18px; height: 18px; fill: var(--fg); }
 #name { font-weight: 600; white-space: nowrap; }
 #filterbar { display: flex; flex: 1; gap: 4px; min-width: 0; }
 #filter {
@@ -61,7 +63,10 @@ header {
 }
 #filter:focus { outline: 2px solid var(--sel); outline-offset: -1px; }
 #filter.bad { border-color: #d33; background: color-mix(in srgb, #d33 8%, var(--bg)); }
-#count { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* pushes count+mode+theme to the right edge even when filterbar (the header's
+   only other flexible item) is hidden on the capture list page - so the theme
+   button lands in the same place there as once a capture is open */
+#count { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; margin-left: auto; }
 button, .upload {
   padding: 3px 8px; font: inherit; color: var(--fg); cursor: pointer;
   background: var(--bg); border: 1px solid var(--line); border-radius: 3px;
@@ -69,16 +74,39 @@ button, .upload {
 }
 button:hover, .upload:hover { border-color: var(--sel); }
 
+/* The view switch draws the view it is showing and morphs into the other one on
+   hover, so the hover is a preview of the click. Each list row is one item -
+   a dot and a line - placed by --lx/--ly, and the same item rotated a quarter
+   turn to --fx/--fy is a lifeline; the arrows only belong to the diagram. */
+#mode { display: flex; padding: 3px 6px; }
+#mode svg { width: 18px; height: 18px; }
+#mode .item, #mode .msg { transition: transform .4s cubic-bezier(.4,0,.2,1), opacity .25s; }
+/* percentages would resolve against the view box and swing the rotation
+   around its middle instead of the item's own dot */
+#mode .item { transform-box: view-box; transform-origin: 0 0; }
+#mode .item { transform: translate(var(--lx), var(--ly)) rotate(0deg); }
+#mode .msg { opacity: 0; }
+#mode.flow .item { transform: translate(var(--fx), var(--fy)) rotate(90deg); }
+#mode.flow .msg { opacity: 1; }
+/* ...and the hover shows the state the button is not in. Same specificity as the
+   .flow pair above, so these have to come after it. */
+#mode:hover .item { transform: translate(var(--fx), var(--fy)) rotate(90deg); }
+#mode:hover .msg { opacity: 1; }
+#mode.flow:hover .item { transform: translate(var(--lx), var(--ly)) rotate(0deg); }
+#mode.flow:hover .msg { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  #mode .item, #mode .msg { transition: none; }
+}
+
 /* ------------------------------------------------------------- capture list */
 
 #files { padding: 16px; overflow: auto; }
-#filelist { border-collapse: collapse; width: 100%; max-width: 720px; }
+#filelist { border-collapse: collapse; width: 100%; }
 #filelist td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
 #filelist td.n { font-family: var(--mono); }
 #filelist td.s, #filelist td.a { text-align: right; color: var(--dim); white-space: nowrap; }
 #filelist tr:hover { background: var(--head); }
 #filelist a { color: var(--sel); cursor: pointer; }
-.open { color: var(--dim); font-size: 11px; }
 #drophint, #empty { color: var(--dim); }
 .upload { display: inline-block; margin: 16px 8px 0 0; }
 body.drop { outline: 3px solid var(--sel); outline-offset: -3px; }
@@ -175,6 +203,13 @@ body.drop { outline: 3px solid var(--sel); outline-offset: -3px; }
 .fp { position: absolute; bottom: 2px; font-size: 10px; color: var(--dim); }
 .fp.a { left: 3px; }
 .fp.b { right: 3px; }
+
+#flowwarn {
+  flex: 0 0 auto; padding: 5px 10px; font: 12px var(--mono);
+  color: #c60; background: color-mix(in srgb, #c60 12%, var(--bg));
+  border-bottom: 1px solid var(--line);
+}
+#flowwarn a { color: inherit; text-decoration: underline; cursor: pointer; }
 
 /* ------------------------------------------------------ detail and bytes */
 

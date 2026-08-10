@@ -170,7 +170,7 @@ services:
     pid: host
     privileged: true
     volumes:
-    - ./pcap:/pcap
+    - pcap:/pcap
     - /sys/fs/cgroup:/sys/fs/cgroup:ro
     - /var/run:/var/run:ro
     - /run:/run:ro
@@ -181,7 +181,7 @@ services:
     - debug
     image: ghcr.io/lyatanski/webshark
     volumes:
-    - ./pcap:/captures
+    - pcap:/captures
     ports:
     - 8085:8085
 
@@ -308,3 +308,7 @@ networks:
       config:
       - subnet: ${NETv4}
       - subnet: ${NETv6}
+
+
+volumes:
+  pcap:

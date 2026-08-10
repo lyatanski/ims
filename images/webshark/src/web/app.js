@@ -39,6 +39,8 @@ const S = {
   pages: new Map(),  // page index -> rows, or the Promise fetching them
   selIdx: -1, want: 0,
   nodes: [], node: new Map(),  // flow view: addresses, in the order first seen
+  overflow: false,  // ...and whether an address had to be left out of them
+  addrs: 0,         // addresses in the whole capture, which is the server's count
   nodeW: LANE[0], width: 0,
   open: new Set(),   // expanded tree nodes by field name, kept across frames
   sources: [], src: 0, mark: null,
@@ -231,9 +233,10 @@ const cell = (row, name) => (S.ix[name] >= 0 ? row.c[S.ix[name]] : '') || ''
 // fixed widths for the columns Wireshark keeps narrow, the rest to the last one -
 // which is Info, and wants everything it can get
 const WIDE = {
-  'No.': '76px', Time: '112px', Delta: '96px', Source: '150px',
-  Destination: '150px', Protocol: '76px', Length: '64px',
+  'No.': 76, Time: 112, Delta: 96, Source: 150,
+  Destination: 150, Protocol: 76, Length: 64,
 }
+const INFO_MIN = 160  // below this the 1fr column would hit 0 and vanish
 
 // The list's column titles. The flow view's header is the node columns, which
 // only layout() knows the geometry of.
@@ -245,7 +248,14 @@ function head() {
   if (flowing()) return
   for (const title of S.cols) cols.appendChild(span('', title))
   $('#viewer').style.setProperty('--grid',
-    S.cols.map((c, i) => i === S.cols.length - 1 ? '1fr' : (WIDE[c] || '110px')).join(' '))
+    S.cols.map((c, i) => i === S.cols.length - 1 ? '1fr' : (WIDE[c] || 110) + 'px').join(' '))
+  // otherwise a narrow window shrinks the fixed columns' shared box below their
+  // own total, and the overflow renders past #cols/canvas with no background to
+  // paint it on - the header looks half-transparent and Info can hit 0 width
+  const fixed = S.cols.slice(0, -1).reduce((sum, c) => sum + (WIDE[c] || 110), 0)
+  const minWidth = fixed + INFO_MIN + 'px'
+  cols.style.minWidth = minWidth
+  canvas.style.minWidth = minWidth
 }
 
 // The views share the pages, the filter and the selection, so switching is a
@@ -254,7 +264,7 @@ function view(pick) {
   const top = Math.round(list.scrollTop / rowH())
   S.view = pick
   const button = $('#mode')
-  button.textContent = flowing() ? 'Flow' : 'List'
+  button.classList.toggle('flow', flowing())   // the icon draws whichever view is on
   button.title = flowing()
     ? 'Sequence diagram (click for the packet list)'
     : 'Packet list (click for the sequence diagram)'
@@ -263,9 +273,11 @@ function view(pick) {
   slots = []
   unlane()
   head()
+  warnFlow()
   canvas.style.height = height() + 'px'   // as in reveal(): rows of another height
   list.scrollTop = top * rowH()           // scroll to the same frame, not the same px
   sync(); paint()
+  addresses()   // after the paint: the rows are worth more than the warning is
 }
 
 $('#mode').onclick = () => view(flowing() ? 'list' : 'flow')
@@ -280,12 +292,44 @@ $('#mode').onclick = () => view(flowing() ? 'list' : 'flow')
 function nodes(rows) {
   for (const row of rows) {
     for (const addr of [cell(row, 'src'), cell(row, 'dst')]) {
-      if (addr && !S.node.has(addr) && S.nodes.length < NODES) {
-        S.node.set(addr, S.nodes.length)
-        S.nodes.push(addr)
-      }
+      if (!addr || S.node.has(addr)) continue
+      if (S.nodes.length < NODES) { S.node.set(addr, S.nodes.length); S.nodes.push(addr) }
+      else S.overflow = true
     }
   }
+  warnFlow()
+}
+
+// Too many addresses for the diagram to draw them all: the frames using the ones
+// past NODES keep their rows, as plain text rather than arrows (see arrow()), and a
+// filter narrowing the capture down is the way back to a real diagram.
+//
+// Two things know about it. addresses() has asked the server for the whole
+// capture's count, so the warning is up before a row that overflows is anywhere
+// near the screen; S.overflow is the node list filling up as pages arrive, which is
+// the backstop for what that count leaves out - the MAC of a frame with no IP.
+function warnFlow() {
+  const over = S.addrs > NODES
+  $('#flowwarn').hidden = !(flowing() && (over || S.overflow))
+  $('#flowmsg').textContent = over
+    ? S.addrs + ' addresses, more than the ' + NODES + ' this diagram draws —'
+    : 'More addresses than the ' + NODES + ' this diagram draws —'
+}
+
+// One pass over the capture, so it is worth doing once per file and filter and not
+// on every switch into the view. It shares the capture's sharkd with the pages, and
+// that answers one request at a time: on a big capture the count can hold a page up
+// for a moment, which draws the placeholder rows a page in flight already draws.
+let asked = ''
+async function addresses() {
+  if (!flowing() || !S.file) return
+  const key = S.file + '\n' + S.filter
+  if (asked === key) return
+  asked = key
+  const res = await api('addresses', { f: S.file, filter: S.filter }).catch(() => null)
+  if (!res || asked !== key) return   // the filter moved on while this was out
+  S.addrs = res.n
+  warnFlow()
 }
 
 const lanes = []   // one lifeline element per node
@@ -556,6 +600,9 @@ function rewind() {
   S.end = !S.filter
   S.nodes = []          // the node columns are the pages', and those are gone
   S.node.clear()
+  S.overflow = false
+  S.addrs = 0           // ...and the count was of the set the filter just replaced
+  warnFlow()
   unlane()
   list.scrollTop = 0
   $('#tree').textContent = ''
@@ -564,10 +611,11 @@ function rewind() {
   $('#field').textContent = ''
   $('#viewer').classList.remove('picked')
   counter(); sync(); paint()
+  addresses()   // the filter is the answer to the warning, so re-ask on every one
 }
 
 $('#filterbar').addEventListener('submit', e => { e.preventDefault(); filter($('#filter').value) })
-$('#clear').onclick = () => filter('')
+$('#flowfilter').onclick = () => $('#filter').focus()
 
 // -------------------------------------------------------------------- files ---
 
@@ -581,8 +629,9 @@ async function files() {
   $('#viewer').hidden = true
   $('#files').hidden = false
   for (const sel of ['#back', '#filterbar', '#mode']) $(sel).hidden = true
-  $('#name').textContent = 'webshark'
-  $('#count').textContent = ''
+  $('#brand').hidden = false
+  $('#name').hidden = true
+  counter()
   sync()
 
   const captures = await api('captures').catch(err => { note(err.message); return [] })
@@ -596,12 +645,6 @@ async function files() {
     link.textContent = c.name
     link.onclick = () => openCapture(c.name)
     name.appendChild(link)
-    if (c.open) {
-      const tag = document.createElement('span')
-      tag.className = 'open'
-      tag.textContent = ' ● dissector loaded'
-      name.appendChild(tag)
-    }
     tr.insertCell().outerHTML = '<td class=s>' + human(c.size) + '</td>'
     tr.insertCell().outerHTML = '<td class=a><a href="/api/file?f=' +
       encodeURIComponent(c.name) + '" download>download</a></td>'
@@ -625,7 +668,9 @@ async function openCapture(file, want, num, as) {
   $('#files').hidden = true
   $('#viewer').hidden = false
   for (const sel of ['#back', '#filterbar']) $(sel).hidden = false
-  $('#name').textContent = st.filename + ' · ' + human(st.filesize)
+  $('#brand').hidden = true
+  $('#name').hidden = false
+  $('#name').textContent = st.filename.replace(/\.[^.]+$/, '')
   $('#filter').value = S.filter
   note('')
   // the viewer is on screen before the view is built, so the flow view can lay
@@ -690,10 +735,13 @@ theme(localStorage.getItem('theme') || 'system')
 // -------------------------------------------------------------------- plumb ---
 
 const note = text => { $('#msg').textContent = text }
+// counts only - the word would be there in one form and not the other
 function counter() {
-  $('#count').textContent = !S.file ? ''
+  const el = $('#count')
+  el.textContent = !S.file ? ''
     : S.filter ? S.count + (S.end ? '' : '+') + ' of ' + S.total
-    : S.total + ' frames'
+    : String(S.total)
+  el.title = !S.file ? '' : S.filter ? 'matching frames of the capture' : 'frames'
 }
 
 // The URL is the whole of the app's state, so a view can be linked or reloaded.
