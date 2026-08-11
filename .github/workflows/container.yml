@@ -52,10 +52,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
-    - name: Install Kmod
-      run: |
-        sudo apt update
-        sudo apt install -qy --no-install-recommends linux-modules-extra-$(uname -r)
     - name: Set Up
       run: docker compose --profile debug up --detach --quiet-pull
     - name: Capture Ready
