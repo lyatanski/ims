@@ -138,5 +138,5 @@ See [Tracing](doc/trace.md) for what each of those gives you.
   - [x] ptcpdump
   - [x] webshark (own build: current sharkd with Lua, own UI over Go)
   - [x] `ims.lua` — SIP and Diameter under one filter
-- Testing (compose.yml)
-  - [x] [Doubango](doc/images.md#test)
+- Testing (compose.yml, `test` profile)
+  - [x] [pro2call](doc/images.md#test) — S5/S8 attach, IMS-AKA registration, calls, SMS

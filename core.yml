@@ -446,13 +446,7 @@ configs:
       db = db.getSiblingDB('open5gs')
       plmn = '${MCC}${MNC}';
       l = 15 - plmn.length;
-      // Create the unique imsi index open5gs expects before seeding.
       db.subscribers.createIndex({ imsi: 1 }, { unique: true });
-      // The HSS Cx public-identity lookup queries { $or: [{imsi},{msisdn}] };
-      // without a msisdn index that branch forces a full COLLSCAN of every
-      // subscriber (10000 docs, ~9ms each) and inflates the Cx round-trip
-      // ~90x under a registration burst. Index msisdn so the $or uses an
-      // index scan on both branches.
       db.subscribers.createIndex({ msisdn: 1 });
       for(i = 1; i <= ${SCALE}; i++){
         try { db.subscribers.insertOne(

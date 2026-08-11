@@ -31,6 +31,10 @@ fullnameOverride: ""
 
 test:
   pgwc: core-smf
+  # Subscribers the load generator attaches and registers, each on its own PDN
+  # connection. One is the connectivity check the helm test hook is for; raise
+  # it to put the chain under load.
+  subscribers: 1
 
 podAnnotations: {}
 

@@ -101,7 +101,39 @@ tester - load testing
 [Source](https://github.com/cgrates/cgrates)
 
 ## Test
-Multiple technologies need to be utilized for the test image:
-- [Doubango](https://github.com/lyatanski/doubango) for SIP and RTP implementation
-- GTPv2 implementation. Convinient solution is to use [go-gtp](https://github.com/wmnsk/go-gtp)
-- GTP-U implementation. There are miltiple approaches but probably the Linux kernel module is one simple approach to implement. However this approach has limitation in dedicated bearer implementation which could be problematic. Alternative solution could be utilizing `tun` device and routing the traffic to it. Probably eBPF solution should be considered as it could transparently wrap the IP frames and provide better performance than `tun` device.
+The image is [pro2call](https://github.com/lyatanski/pro2call)'s
+`bindings/examples/ims_test_s5.lua` — one process that is the SGW, the UEs and
+the far end at once, driving every layer the stack under test exposes:
+
+- GTPv2-C over S5/S8, one Create Session per subscriber, and the Delete Session
+  that tears it down.
+- GTP-U as an eBPF datapath attached to the container's interface, with a TFT
+  per flow keyed on the UE's own address. Real G-PDUs on the wire, so dedicated
+  bearers and per-UE filters are expressible — which the kernel `gtp0` device
+  the earlier Go implementation used is not, and a `tun` device only is at the
+  cost of a copy per packet.
+- SIP registration with IMS-AKA: the AUTN verified and CK/IK derived from
+  Milenage, four transport-mode ESP SAs installed through XFRM, and the
+  authenticated REGISTER sent over them.
+- Calls between the registered subscribers, both ends in the same process on
+  one monotonic clock — so setup time decomposes into true one-way segments
+  (post-dial delay, transit each direction, cut-through, release) instead of
+  half a round trip, reported as p50/p95/p99/max.
+- RTP on a sample of the calls, with loss/jitter from the receive stats, the
+  peer's view of the uplink from the RTCP report blocks, and a G.107 MOS
+  estimate off those counters (packet statistics only — not PESQ/POLQA).
+- SMS over IMS (`IMS_SMS=1`), the TPDU/RP layers in a `MESSAGE` body, round
+  tripped against the sent text byte for byte.
+
+Everything above is the pro2call libraries: SIP, SDP, SMS, Diameter, RTP,
+GTP and XFRM as C with SWIG/Lua bindings, so the whole load generator is one
+event loop and no per-subscriber thread or process. That is what makes the
+subscriber count a knob rather than a rewrite — and why the numbers it prints
+are the stack's rather than the tool's.
+
+The image builds the tree from source and bakes it, so a run is reproducible;
+`--build-arg PRO2CALL_REF=<sha>` pins it, which is the difference between a
+performance baseline and an anecdote. Its default `CMD` is the script above,
+but the whole `bindings/examples` directory is on board — `cx_hss.lua`,
+`ipsmgw.lua` and `smsc_stub.lua` stand in for the network around the part
+being measured.

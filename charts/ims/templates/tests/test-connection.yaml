@@ -7,14 +7,20 @@ metadata:
     helm.sh/hook: test
 spec:
   containers:
-  - name: wget
+  - name: test
     image: ghcr.io/lyatanski/test
-    command:
-    - gtp
-    - -pgwc
-    - {{ .Values.test.pgwc }}
+    args:
+    - ims_test_s5.lua
+    env:
+    - name: PGW_IP
+      value: {{ .Values.test.pgwc }}
+    - name: IMS_SUBS
+      value: {{ .Values.test.subscribers | quote }}
     securityContext:
       capabilities:
         add:
+        # NET_ADMIN for the ESP SAs, the transparent UE socket and the TC
+        # hook; BPF to load the GTP-U datapath the user plane rides.
         - NET_ADMIN
+        - BPF
   restartPolicy: Never

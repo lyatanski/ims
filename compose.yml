@@ -16,9 +16,24 @@ x-kamailio: &kamailio
     interval: 5s
     start_period: 5s
 
+# Everything the network sends a UE goes back through the UPF, which wraps it in
+# GTP-U: 20 bytes of outer IPv4 + 8 UDP + 8 GTP. So of the 1500-byte path only
+# 1464 are left for the packet that leaves here, and `mtu 1452` (measured on this
+# stack — 1452 arrives, 1480 does not) is what makes the sender fragment inside
+# that budget instead of handing the UPF a datagram it has to fragment a second
+# time. Without it a G-PDU over the MTU is split, the trailing fragment carries
+# no GTP header, nothing downstream can classify it, and BOTH halves are lost.
+#
+# It shows up on exactly the messages that matter: the terminating INVITE is
+# ~1.8 kB here (5 Record-Route + 6 Via, since a call between two subscribers of
+# one core crosses P-CSCF -> S-CSCF -> I-CSCF -> S-CSCF -> P-CSCF, plus the
+# P-Charging-* set) so it never reaches the callee, while the 786-byte REGISTER
+# 200 OK on the same SA arrives — the UE rings for nothing and the P-CSCF
+# retransmits on timer A. Set on both sidecars: RTP toward a UE crosses the same
+# tunnel, and rtpengine is the one sending it.
 x-route: &route
   image: alpine
-  command: sh -c "ip route replace ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1)"
+  command: sh -c "ip route replace ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1) mtu 1452"
   cap_add:
   - NET_ADMIN
 
@@ -134,21 +149,66 @@ services:
     expose:
     - 6379/tcp
 
+  # pro2call's ims_test_s5.lua (images/test): ${SCALE} subscribers attached over
+  # S5/S8, each registered with IMS-AKA over ESP, then called pairwise — one
+  # process, one event loop, and a summary with the setup-time distribution.
+  # `docker compose --profile test up test` runs it; it exits non-zero if any
+  # subscriber or call failed, which is what CI waits on.
   test:
     profiles:
     - test
     image: ghcr.io/lyatanski/test
-    command: gtp
     environment:
-      K:     ${K}
-      OPC:   ${OPC}
-      PLMN:  ${MCC}${MNC}
-      DIAL:  ${DIAL}
-      SCALE: ${SCALE}
-      REALM: ims.${REALM}
-      IPSEC: /usr/lib/ipsec.so
+      # S5/S8. The generator is the SGW half of it, so it binds GTP-C on its
+      # own address — SGW_IP is left unset and auto-derived from $GTPU_IFACE,
+      # which is also the interface the eBPF GTP-U datapath attaches to. One
+      # network here, so both the S5/S8 and the access side are eth0.
+      PGW_IP:            smf
+      GTPU_IFACE:        eth0
+      GTPU_INNER_IFACE:  eth0
+      # The uplink side of the GTP-U size budget needs no variable here: the
+      # generator gives the route to the P-CSCF — the address the PCO handed
+      # it — an MTU that leaves room for the 36 bytes the datapath adds, so
+      # the kernel fragments an oversized ESP datagram before the TC hook,
+      # where nothing can. GTPU_INNER_MTU overrides the 1464 it uses (0 leaves
+      # routing alone); it is the mirror of the `mtu` on x-route above, and
+      # set_pcscf_mtu in ims_test_s5.lua has the arithmetic and the symptom.
+      # The USIM, shared by the whole range, and the serving PLMN + home domain
+      # the IMPI/IMPU are built from.
+      IMS_K:      ${K}
+      IMS_OPC:    ${OPC}
+      IMS_MCC:    ${MCC}
+      IMS_MNC:    ${MNC}
+      IMS_REALM:  ims.${REALM}
+      # IMSI range: core.yml seeds mongo with <plmn> + the index padded out to
+      # 15 digits, so subscriber 1 is this and the rest follow. The padding
+      # below assumes the 2-digit MNC of .env; a 3-digit one needs one zero
+      # fewer here (and core.yml computes it, so only this line has to move).
+      IMS_IMSI:   ${MCC}${MNC}0000000001
+      IMS_SUBS:   ${SCALE}
+      # The number of a subscriber, derived: core.yml seeds msisdn as $DIAL
+      # followed by the index padded to 9 digits, which is $DIAL followed by
+      # the last 9 digits of the IMSI.
+      IMS_MSISDN_CC:      ${DIAL}
+      IMS_MSISDN_DIGITS:  9
+      # How the callee is addressed. A handset dials a number, and tel: puts
+      # the whole MSISDN -> IMPU -> registered contact chain under test — but
+      # open5gs's HSS associates the number as `tel:<msisdn>` and
+      # `sip:<msisdn>@<realm>` with NO leading '+' (hss_cx_download_user_data),
+      # and the LIR match is exact, while the generator dials E.164 with one.
+      # So numbers only route against the pro2call Cx emulator, which derives
+      # them from the same two variables above:
+      #
+      #     CORE=stub.yml CALL_URI=tel docker compose --profile test up test
+      #
+      # Everywhere else the callee is dialled by the sip IMPU it registered,
+      # which needs no number anywhere — and which is also what the generator
+      # does unconditionally before the revision that added this variable, so
+      # the three settings above are inert until $PRO2CALL_REF carries it.
+      CALL_URI:  ${CALL_URI:-sip}
     cap_add:
-    - NET_ADMIN
+    - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
+    - BPF         # loading the GTP-U datapath
     depends_on:
       icscf:
         condition: service_healthy
