@@ -17,6 +17,7 @@ jobs:
         - freediameter
         - openssl
         - open5gs
+        - webshark
         - cgr-console
         - cgr-engine
         - cgr-loader
@@ -56,7 +57,11 @@ jobs:
         sudo apt update
         sudo apt install -qy --no-install-recommends linux-modules-extra-$(uname -r)
     - name: Set Up
-      run: docker compose --profile test --profile debug up --detach --quiet-pull
+      run: docker compose --profile debug up --detach --quiet-pull
+    - name: Capture Ready
+      run: docker compose --profile debug up --detach --wait pcap
+    - name: Test
+      run: docker compose --profile test --profile debug up --detach test
     - name: Wait
       run: docker compose --profile test --profile debug wait test
     - name: Check
@@ -65,12 +70,16 @@ jobs:
     - name: Logs
       run: docker compose --profile test --profile debug logs
       if: always()
-#    - name: Trace
-#      uses: actions/upload-artifact@v4
-#      with:
-#        name: trace
-#        path: pcap/trace.pcap
-#      if: always()
+    - name: Pcap
+      run: docker compose --profile test --profile debug cp pcap:/pcap/trace.pcapng .
+      if: always()
+    - name: Trace
+      uses: actions/upload-artifact@v4
+      with:
+        name: trace
+        path: trace.pcapng
+        if-no-files-found: error
+      if: always()
     - name: Tear Down
       run: docker compose --profile test --profile debug down --volumes
       if: always()
