@@ -67,6 +67,9 @@ jobs:
     - name: Check
       run: docker compose --profile test --profile debug ps --all
       if: always()
+    - name: Debug
+      run: docker compose --profile test --profile debug logs test
+      if: always()
     - name: Logs
       run: docker compose --profile test --profile debug logs
       if: always()
