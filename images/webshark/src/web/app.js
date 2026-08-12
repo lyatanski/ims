@@ -69,6 +69,11 @@ function height() {
 }
 
 function rowAt(i) {
+  // select() asks for the row before the selected one, so the first row asks for
+  // index -1. There is no page -1 to fetch: the negative skip is dropped by the
+  // server, page 0 comes back as its contents, and the length of it lands in
+  // S.count as -PAGE + length - a negative count draws no rows at all.
+  if (i < 0) return null
   const p = Math.floor(i / PAGE), page = S.pages.get(p)
   if (page === undefined) { fetchPage(p); return null }
   if (typeof page.then === 'function') return null
@@ -652,6 +657,25 @@ async function files() {
   $('#empty').hidden = captures.length > 0
 }
 
+// The row index of a frame number, for the link that carries one: with a filter the
+// two are not the same number, and the only thing that knows the difference is the
+// rows themselves - so the pages it could be in are fetched until it turns up.
+// Frames come in capture order, so a page reaching past the wanted number settles
+// it: the frame is not in the filtered set, and neither is a row for it.
+async function locate(num) {
+  for (let p = 0; ; p++) {
+    const pending = S.pages.get(p)
+    if (pending === undefined) await fetchPage(p)
+    else if (typeof pending.then === 'function') await pending
+    const page = S.pages.get(p)
+    if (!Array.isArray(page)) return -1            // the fetch failed and said so
+    const at = page.findIndex(row => row.n === num)
+    if (at >= 0) return p * PAGE + at
+    if (page.length < PAGE) return -1              // that page was the end of the set
+    if (page[page.length - 1].n > num) return -1    // ...or already past the frame
+  }
+}
+
 async function openCapture(file, want, num, as) {
   note('opening ' + file + ' …')
   let st
@@ -678,9 +702,11 @@ async function openCapture(file, want, num, as) {
   view(as === 'flow' && !$('#mode').hidden ? 'flow' : 'list')
   rewind()
 
-  // frame numbers are row indexes only while nothing is filtered, which is the
-  // case worth restoring from a link
-  if (num && !S.filter) { reveal(num - 1); select(num - 1) }
+  // a frame number is a row index of its own only while nothing is filtered
+  if (num) {
+    const at = S.filter ? await locate(num) : num - 1
+    if (at >= 0) { reveal(at); select(at) }
+  }
 }
 
 $('#back').onclick = () => {

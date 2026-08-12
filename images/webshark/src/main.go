@@ -274,10 +274,18 @@ func (s *server) frames(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	limit := min(atoi(q.Get("limit"), 200), 5000)
+	skip := atoi(q.Get("skip"), 0)
+	// No page begins before the first frame and none holds no frames. Saying so
+	// beats answering with what is left once the parameter is dropped, which is
+	// page 0 - rows the caller then reads as the page it asked for.
+	if skip < 0 || limit < 1 {
+		fail(w, http.StatusBadRequest, "skip/limit?")
+		return
+	}
 	params := map[string]any{"limit": limit}
 	// sharkd validates every numeric parameter as "positive", zero included, so
 	// the first page has to leave `skip` out rather than send 0
-	if skip := atoi(q.Get("skip"), 0); skip > 0 {
+	if skip > 0 {
 		params["skip"] = skip
 	}
 	if filter := q.Get("filter"); filter != "" {
