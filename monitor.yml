@@ -574,8 +574,9 @@ configs:
         sip:  { n: 'SIP',  c: '#73bf69' },  // Gm / Mw
         pfcp: { n: 'PFCP', c: '#f2cc0c' },  // N4 / Sxa
         rtp:  { n: 'RTP',  c: '#ff9830' },  // media
+        ng:   { n: 'NG',   c: '#ffffff' },  // rtpengine control protocol, S-CSCF <-> rtpengine
       };
-      local legend = [{ n: 'Diameter', c: diam }, proto.sip, proto.pfcp, proto.rtp];
+      local legend = [{ n: 'Diameter', c: diam }, proto.sip, proto.pfcp, proto.rtp, proto.ng];
 
       // ri holds Grafana's rate-interval macro, written with a doubled dollar so
       // Compose interpolation leaves exactly one dollar for the compiled jsonnet.
@@ -585,10 +586,10 @@ configs:
       // A node without `e` shows no figure: the I-CSCF and the PCRF hold no state,
       // all they have is Diameter throughput, and that now reads off the arrows.
       local nodes = [
-        { id: 'smf',   t: 'SMF',       c: 'SM sessions',   col: 0, row: 0, bg: core,  e: 'sum(fivegs_smffunction_sm_sessionnbr{job="smf"})' },
+        { id: 'smf',   t: 'SMF',       c: 'SM sessions',   col: 0, row: 0, bg: core,  e: 'sum(fivegs_smffunction_sm_sessionnbr{job="smf"}) or vector(0)' },
         { id: 'pcrf',  t: 'PCRF',                          col: 1, row: 0, bg: core },
         { id: 'icscf', t: 'I-CSCF',                        col: 2, row: 0, bg: cscf },
-        { id: 'hss',   t: 'HSS',       c: 'IMPUs',         col: 3, row: 0, bg: core,  e: 'sum(hss_impu{job="hss"})' },
+        { id: 'hss',   t: 'HSS',                           col: 3, row: 0, bg: core },
         { id: 'upf',   t: 'UPF',       c: 'PFCP sessions', col: 0, row: 1, bg: core,  e: 'sum(fivegs_upffunction_upf_sessionnbr{job="upf"})' },
         { id: 'pcscf', t: 'P-CSCF',    c: 'contacts',      col: 1, row: 1, bg: cscf,  e: 'sum(kamailio_ims_usrloc_pcscf_registered_contacts{job="pcscf"})' },
         { id: 'scscf', t: 'S-CSCF',    c: 'reg IMPUs',     col: 3, row: 1, bg: cscf,  e: 'sum(kamailio_ims_usrloc_scscf_active_impus{job="scscf"})' },
@@ -620,7 +621,7 @@ configs:
         { a: 'icscf', sa: B, b: 'scscf', ta: L, p: proto.sip },
         { a: 'scscf', sa: T, b: 'hss',   ta: B, p: proto.cx },
         { a: 'scscf', sa: R, b: 'ocs',   ta: L, p: proto.ro },
-        { a: 'scscf', sa: B, b: 'rtp',   ta: R, p: proto.rtp },
+        { a: 'scscf', sa: B, b: 'rtp',   ta: R, p: proto.ng },
       ];
       // Edges keyed by source element, as the canvas element model wants them.
       // Direction 'none' keeps them plain lines - the canvas default is 'forward',
