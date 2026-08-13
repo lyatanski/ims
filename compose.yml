@@ -173,6 +173,20 @@ services:
       # where nothing can. GTPU_INNER_MTU overrides the 1464 it uses (0 leaves
       # routing alone); it is the mirror of the `mtu` on x-route above, and
       # set_pcscf_mtu in ims_test_s5.lua has the arithmetic and the symptom.
+      # GTP-C T3-RESPONSE. The generator defaults to 1s, which is more
+      # aggressive than the 3s of TS 29.274 7.6, and at ${SCALE} in the
+      # hundreds that difference is the whole story: the Create Session burst
+      # queues behind a single-threaded SMF that has to get the PCRF's Gx CCR-A
+      # back before it can answer, so a request is still in progress when T3
+      # fires. The retransmission then reaches a transaction the SMF considers
+      # open — it logs `ogs_gtp_xact_update_rx() failed` — and adds work to the
+      # queue that caused it, which is how 900 offered sessions turn into 333
+      # reported as "PGW did not answer message type 32 (after 3 sends)".
+      #
+      # It only shows once the IMS side is fast enough to run concurrently with
+      # the attach burst rather than after it: the same 900 subscribers attach
+      # 900/900 when Cx is slow enough to keep them apart (see PERF-ANALYSIS.md).
+      GTP_T3_MS:  ${GTP_T3_MS:-3000}
       # The USIM, shared by the whole range, and the serving PLMN + home domain
       # the IMPI/IMPU are built from.
       IMS_K:      ${K}
