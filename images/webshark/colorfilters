@@ -1,0 +1,6 @@
+# @<filter name>@<filter string>@[<bg RGB(16-bit)>][<fg RGB(16-bit)>]
+@GT2     @gtpv2   @[49087, 58339, 49344][4718, 10030, 11796] # green
+@diameter@diameter@[54227, 46517, 58853][4718, 10030, 11796] # purple
+@ESP     @esp     @[65535, 40092,     0][4718, 10030, 11796] # orange
+@SIP     @sip&&tcp@[65535, 56797,     0][4718, 10030, 11796] # yellow
+@SIP     @sip&&udp@[61166, 65535,     0][4718, 10030, 11796] # blue

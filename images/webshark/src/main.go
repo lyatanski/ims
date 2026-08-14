@@ -266,7 +266,8 @@ func (s *server) check(w http.ResponseWriter, r *http.Request) {
 }
 
 // frames is the one response the UI cannot use as it stands: see the note at the
-// top. A row is the columns and the frame number, which is all the list draws.
+// top. A row is the columns, the frame number and - when a coloring rule matched
+// the frame - the colours that rule gives it, which is all the list draws.
 func (s *server) frames(w http.ResponseWriter, r *http.Request) {
 	name, ok := s.name(w, r)
 	if !ok {
@@ -300,6 +301,8 @@ func (s *server) frames(w http.ResponseWriter, r *http.Request) {
 	var in []struct {
 		Columns []string `json:"c"`
 		Num     int      `json:"num"`
+		Bg      string   `json:"bg"`
+		Fg      string   `json:"fg"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		fail(w, http.StatusInternalServerError, err)
@@ -309,10 +312,12 @@ func (s *server) frames(w http.ResponseWriter, r *http.Request) {
 	type row struct {
 		Num     int      `json:"n"`
 		Columns []string `json:"c"`
+		Bg string `json:"bg,omitempty"`
+		Fg string `json:"fg,omitempty"`
 	}
 	rows := make([]row, len(in))
 	for i, f := range in {
-		rows[i] = row{f.Num, f.Columns}
+		rows[i] = row{f.Num, f.Columns, f.Bg, f.Fg}
 	}
 	// a short page is the end of the capture, or of the filtered set - which is
 	// the only way to know, since sharkd will not count matches without

@@ -98,6 +98,19 @@ Everything else about it follows from being ours:
   request, so `%uS`/`%uD` are in the column set from the start and marked not
   visible (`images/webshark/preferences`, the global Wireshark preferences file):
   the packet list skips them, the diagram labels its arrow ends with them.
+- **Rows are coloured by reference point.** Wireshark's coloring rules, replaced
+  for this stack (`images/webshark/colorfilters`): cool hues for SIP, warm for
+  Diameter, green for media, grey for the plumbing, and a red or an amber that
+  overrides all of them for a failure or for the challenge and redirect of a
+  registration — so a filtered list, and the diagram over it, reads as the
+  interfaces it crosses. The default set is no use here: it colours SIP and
+  Diameter as the UDP and TCP they arrive in, and its Bad TCP rule paints most of
+  the Cx connection, because a ptcpdump capture holds each packet once per
+  namespace it crossed and TCP analysis reads the copies as retransmissions.
+  `sharkd` reports the colour it gave a frame but not which rule chose it, so the
+  header's legend is the rules themselves, read back off the same file — and
+  clicking one filters the capture down to the frames it colours. Dark mode keeps
+  each rule's hue and little else; the rules are written for a white packet list.
 - **Protected Gm reads as SIP.** Gm is behind IPsec ESP, and the keys of every
   registration are in the capture — so webshark takes them out of it and hands
   them to `sharkd` as ESP SAs when it opens the file ([below](#ipsec--the-keys-are-in-the-capture)).

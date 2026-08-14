@@ -70,7 +70,8 @@ COPY plugins/ /plugins/
 # the install above. Two things are in it: the hidden port columns the
 # sequence-diagram view labels its arrows with, and the ESP preferences that let
 # a protected Gm frame be read as the SIP it holds - see the comments in the file.
-COPY preferences /usr/local/share/wireshark/preferences
+COPY preferences  /usr/local/share/wireshark/preferences
+COPY colorfilters /usr/local/share/wireshark/colorfilters
 
 ENV WIRESHARK_PLUGIN_DIR=/plugins \
     CAPTURES=/captures \

@@ -148,6 +148,7 @@ function draw() {
     el.hidden = false
     el.classList.toggle('sel', i === S.selIdx)
     el.classList.toggle('gap', !row)
+    hue(el, row, i === S.selIdx)
     if (flowing()) arrow(el, row)
     else {
       const cells = el.children
@@ -286,6 +287,25 @@ function view(pick) {
 }
 
 $('#mode').onclick = () => view(flowing() ? 'list' : 'flow')
+
+// ----------------------------------------------------------- coloring rules ---
+
+// Wireshark's coloring rules, which sharkd applies as it dissects: a frame comes
+// back with the colours of the first rule that matched it, and its row is painted
+// with them. The row only carries the pair - what light and dark each make of it
+// is style.css's business.
+//
+// Two rows are left plain. The selected one keeps the selection colour, which has
+// to stay the unmistakable thing on the list; a row whose page is still in flight
+// has no colours to carry yet.
+function hue(el, row, sel) {
+  const on = !!(row && row.bg) && !sel
+  el.classList.toggle('hue', on)
+  if (on) {
+    el.style.setProperty('--rbg', '#' + row.bg)
+    el.style.setProperty('--rfg', '#' + row.fg)
+  }
+}
 
 // -------------------------------------------------------- sequence diagram ---
 

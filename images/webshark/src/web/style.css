@@ -18,12 +18,16 @@
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --pane: color-mix(in srgb, #fff 8%, var(--bg));
   --list: color-mix(in srgb, #000 3%, var(--bg));
+  /* what a coloring rule's own colours are worth in this scheme - see .hue.
+     Light is the rule as configured: its lightness, its chroma, its ink. */
+  --huel: l; --huelh: calc(l - .05); --huec: c; --hueink: 100%;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
   --bg: #16181c; --fg: #dfe2e6; --dim: #8b9098; --line: #2c3038;
   --head: #1e2126; --sel: #3d7ddb; --selfg: #fff; --hit: #4a4526;
   --list: var(--bg);
+  --huel: .26; --huelh: .32; --huec: min(c * 2, .12); --hueink: 0%;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -31,6 +35,7 @@
     --bg: #16181c; --fg: #dfe2e6; --dim: #8b9098; --line: #2c3038;
     --head: #1e2126; --sel: #3d7ddb; --selfg: #fff; --hit: #4a4526;
     --list: var(--bg);
+    --huel: .26; --huelh: .32; --huec: min(c * 2, .12); --hueink: 0%;
     color-scheme: dark;
   }
 }
@@ -210,6 +215,39 @@ body.drop { outline: 3px solid var(--sel); outline-offset: -3px; }
   border-bottom: 1px solid var(--line);
 }
 #flowwarn a { color: inherit; text-decoration: underline; cursor: pointer; }
+
+/* -------------------------------------------------------- coloring rules */
+
+/* A row carries the colours of the rule that matched its frame - sharkd's bg/fg
+   pair, as --rbg/--rfg (see hue() in app.js) - and this is where the two themes
+   part company, through the --hue* tokens at the top of the file.
+
+   Light shows the rule as configured: --huel is the keyword `l`, so the
+   background comes out of oklch() with the lightness, chroma and hue it went in
+   with, and --hueink is 100%, so the text is the rule's own ink.
+
+   Dark cannot. A coloring rule is written for Wireshark's white packet list, so
+   its background is pale and its ink is dark - which over a dark list is a
+   glaring band with unreadable text on it. The hue is the part worth keeping, so
+   dark keeps that and little else: a lightness the list can carry, twice the
+   chroma because a pale colour has hardly any of it and hardly any of it on a
+   dark row is grey, and the theme's own ink over it (--hueink: 0%). Scaling the
+   chroma a rule has rather than setting one is what leaves a rule that chose a
+   grey grey; the cap is for the other end, the rules that are not pale at all -
+   the dark red of a transport error would double into a chroma no display can
+   show.
+
+   A browser too old for relative colour syntax draws no row colours rather than
+   wrong ones: the declaration is invalid, and the row keeps the list's own
+   background - which is what a frame no rule matched gets anyway, its --rbg
+   never having been set. */
+.row.hue, .frow.hue {
+  background: oklch(from var(--rbg) var(--huel) var(--huec) h);
+  color: color-mix(in srgb, var(--rfg) var(--hueink), var(--fg));
+}
+.row.hue:hover, .frow.hue:hover {
+  background: oklch(from var(--rbg) var(--huelh) var(--huec) h);
+}
 
 /* ------------------------------------------------------ detail and bytes */
 
