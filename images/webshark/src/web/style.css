@@ -60,7 +60,7 @@ header {
 #brand { display: flex; align-items: center; }
 #brand svg { width: 18px; height: 18px; fill: var(--fg); }
 #name { font-weight: 600; white-space: nowrap; }
-#filterbar { display: flex; flex: 1; gap: 4px; min-width: 0; }
+#filterbar { display: flex; flex: 1; gap: 4px; min-width: 0; position: relative; }
 #filter {
   flex: 1; min-width: 0; padding: 3px 6px;
   font: 12px var(--mono); color: var(--fg);
@@ -68,6 +68,26 @@ header {
 }
 #filter:focus { outline: 2px solid var(--sel); outline-offset: -1px; }
 #filter.bad { border-color: #d33; background: color-mix(in srgb, #d33 8%, var(--bg)); }
+
+/* the field completions for whatever token the caret is in - positioned off
+   #filterbar rather than #filter itself, since #filterbar is the one with
+   nothing else to size against */
+#complete {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 4;
+  margin: 2px 0 0; padding: 2px; list-style: none;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 3px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / .2);
+  max-height: 240px; overflow: auto;
+}
+#complete li {
+  display: flex; gap: 8px; padding: 3px 6px; border-radius: 2px;
+  font: 12px var(--mono); cursor: pointer; white-space: nowrap;
+}
+#complete li.sel, #complete li:hover { background: var(--sel); color: var(--selfg); }
+#complete li > span:last-child {
+  color: var(--dim); overflow: hidden; text-overflow: ellipsis; font-style: italic;
+}
+#complete li.sel > span:last-child, #complete li:hover > span:last-child { color: inherit; }
 /* pushes count+mode+theme to the right edge even when filterbar (the header's
    only other flexible item) is hidden on the capture list page - so the theme
    button lands in the same place there as once a capture is open */

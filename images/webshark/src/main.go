@@ -11,6 +11,7 @@ package main
 //	GET  /api/frame?f=&num=&prev=       dissection tree and bytes
 //	GET  /api/addresses?f=&filter=      how many addresses the diagram would need
 //	GET  /api/check?f=&filter=          compile a display filter
+//	GET  /api/complete?f=&field=        field names completing that prefix
 //	GET  /api/file?f=                   download a capture
 //	POST /api/file?f=                   upload one (raw body)
 //	POST /api/close?f=                  end that capture's sharkd
@@ -99,6 +100,7 @@ func main() {
 	mux.HandleFunc("GET /api/frame", srv.frame)
 	mux.HandleFunc("GET /api/addresses", srv.addresses)
 	mux.HandleFunc("GET /api/check", srv.check)
+	mux.HandleFunc("GET /api/complete", srv.complete)
 	mux.HandleFunc("GET /api/file", srv.download)
 	mux.HandleFunc("POST /api/file", srv.upload)
 	mux.HandleFunc("POST /api/close", srv.close)
@@ -263,6 +265,14 @@ func (s *server) check(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send(w, map[string]any{"ok": true})
+}
+
+// complete answers with the field names completing the prefix the caret sits
+// in, for the dropdown under the filter box - sharkd's own response shape
+// (`{"field":[{"f","t","n"}, ...]}`), forwarded as-is since it is already what
+// the UI wants to render.
+func (s *server) complete(w http.ResponseWriter, r *http.Request) {
+	s.forward(w, r, "complete", map[string]any{"field": r.URL.Query().Get("field")})
 }
 
 // frames is the one response the UI cannot use as it stands: see the note at the

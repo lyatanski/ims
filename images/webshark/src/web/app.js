@@ -602,6 +602,7 @@ function bytes(scroll) {
 async function filter(text) {
   text = (text || '').trim()
   $('#filter').value = text
+  closeComplete()
   $('#spin').hidden = false
   try {
     if (text) {
@@ -641,6 +642,101 @@ function rewind() {
 
 $('#filterbar').addEventListener('submit', e => { e.preventDefault(); filter($('#filter').value) })
 $('#flowfilter').onclick = () => $('#filter').focus()
+
+// Wireshark's own filter bar checks as you type and offers field names for
+// whatever identifier the caret sits in - the same two sharkd calls filter()
+// makes on submit, just fired live and against a token instead of the line.
+let liveTimer, compAsked = null
+let compItems = [], compIdx = -1
+
+$('#filter').addEventListener('input', () => {
+  clearTimeout(liveTimer)
+  liveTimer = setTimeout(liveCheck, 150)
+})
+
+async function liveCheck() {
+  const text = $('#filter').value
+  if (!text.trim()) { $('#filter').classList.remove('bad'); closeComplete(); return }
+  await validate(text)
+  complete(fieldAt(text, $('#filter').selectionStart))
+}
+
+async function validate(text) {
+  const check = await api('check', { f: S.file, filter: text }).catch(err => ({ ok: false, err: err.message }))
+  if ($('#filter').value === text) $('#filter').classList.toggle('bad', !check.ok)
+}
+
+// the dotted identifier ending at the caret - "sip.st and ip" completes "ip",
+// not the clause already typed before it
+const fieldAt = (text, pos) => (text.slice(0, pos).match(/[\w.-]+$/) || [''])[0]
+
+async function complete(field) {
+  if (!field) { closeComplete(); return }
+  const asked = compAsked = field
+  const res = await api('complete', { f: S.file, field }).catch(() => null)
+  if (!res || asked !== compAsked) return   // the caret moved on while this was out
+  compItems = (res.field || []).slice(0, 20)
+  compIdx = -1
+  const box = $('#complete')
+  box.textContent = ''
+  for (const f of compItems) {
+    const li = document.createElement('li')
+    li._f = f
+    const name = document.createElement('span')
+    name.textContent = f.f
+    const desc = document.createElement('span')
+    desc.textContent = f.n
+    li.append(name, desc)
+    box.appendChild(li)
+  }
+  box.hidden = compItems.length === 0
+}
+
+function closeComplete() {
+  compItems = []; compIdx = -1; compAsked = null
+  $('#complete').hidden = true
+}
+
+function highlight(i) {
+  for (const li of $('#complete').children) li.classList.remove('sel')
+  compIdx = i
+  const li = $('#complete').children[i]
+  li.classList.add('sel')
+  li.scrollIntoView({ block: 'nearest' })
+}
+
+// replaces the token under the caret with the picked field, not the whole
+// filter - there may be a clause typed either side of it already
+function pickComplete(li) {
+  if (!li) return
+  const input = $('#filter'), pos = input.selectionStart
+  const start = pos - fieldAt(input.value, pos).length
+  input.value = input.value.slice(0, start) + li._f.f + input.value.slice(pos)
+  closeComplete()
+  input.focus()
+  input.setSelectionRange(start + li._f.f.length, start + li._f.f.length)
+  validate(input.value)   // not liveCheck() - the caret sits right after a field
+  // name, which would otherwise reopen the dropdown this pick just closed
+}
+
+$('#complete').addEventListener('mousedown', e => e.preventDefault())  // stay focused on #filter
+$('#complete').addEventListener('click', e => pickComplete(e.target.closest('li')))
+$('#filter').addEventListener('blur', closeComplete)
+
+$('#filter').addEventListener('keydown', e => {
+  if ($('#complete').hidden) return
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault()
+    const dir = e.key === 'ArrowDown' ? 1 : -1
+    highlight(compIdx < 0 ? (dir > 0 ? 0 : compItems.length - 1) : (compIdx + dir + compItems.length) % compItems.length)
+  } else if (e.key === 'Tab' || (e.key === 'Enter' && compIdx >= 0)) {
+    e.preventDefault()
+    pickComplete($('#complete').children[compIdx < 0 ? 0 : compIdx])
+  } else if (e.key === 'Escape') {
+    e.stopPropagation()   // close the dropdown, not the whole filter - see the keydown handler below
+    closeComplete()
+  }
+})
 
 // -------------------------------------------------------------------- files ---
 
