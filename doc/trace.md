@@ -64,11 +64,12 @@ ptcpdump's per-packet comments, over the same `pcap/` directory.
 
 <http://localhost:8085>
 
-Built here (`images/webshark`) rather than pulled from `ghcr.io/qxip/webshark`,
-because the published image's own `sharkd -v` says **`without Lua`** — no plugin
-can be loaded into it, and a plugin is what makes a capture answer IMS questions
+Own build ([`webshark`](https://github.com/lyatanski/webshark), pulled prebuilt
+from `ghcr.io/lyatanski/webshark`) rather than `ghcr.io/qxip/webshark`, because
+the published image's own `sharkd -v` says **`without Lua`** — no plugin can be
+loaded into it, and a plugin is what makes a capture answer IMS questions
 instead of packet questions. `sharkd` tracks Wireshark master; the page and the
-server around it are in `images/webshark/src`:
+server around it are in its `src`:
 
 | | |
 |---|---|
@@ -84,6 +85,31 @@ what the old Angular bundle was for.
 
 Everything else about it follows from being ours:
 
+- **The capture list filters on what is in the files.** One box over the
+  directory, and a word in it is matched against the file's name, the protocols in
+  it and when its frames were captured — `sip`, `proto:esp`, `2026-08-14`, `>2h`,
+  `after:9:30`, `-tls`, as many terms as you like and all of them have to hold.
+  Whatever a term matched goes to the front of the Protocols column, marked, so a
+  row says why it is on the list. Neither of the last two facets is something a
+  directory listing has, and neither costs one a dissection:
+  - The **times** are read out of the capture files. A pcapng repeats every block's
+    length at both ends precisely so that a file can be walked backwards, so the
+    first frame is at the head and the last at the tail — two seeks, whatever the
+    file's size. A classic pcap has no such trailer and gets its first frame only;
+    where a capture says nothing at all the file's mtime stands in and the column
+    marks it `~`. This matters more than it sounds: a capture kept since January
+    has this morning's mtime if it was copied in this morning.
+  - The **protocols** are `sharkd`'s protocol-hierarchy tap, the same one
+    Wireshark's Protocol Hierarchy window draws — so `diameter` in the box is the
+    word a display filter takes, and the project's own `ims` layer is in there
+    too. A tap needs a loaded capture, and loading all of a 600 MB one is 76 s of
+    dissection, so the load is bounded to `SCAN_FRAMES` (20 000) frames — about a
+    second on that same file — and what comes back is cached and marked `≈` for
+    having read only the beginning of it. Busiest protocol first, with the layers
+    every capture is carried over last, where they say nothing. Scans run one at a
+    time in a `sharkd` of their own, so scanning a directory cannot evict the
+    capture being read, and a row whose scan has not landed stays on the list
+    dimmed rather than being hidden by a protocol it may yet turn out to have.
 - **The list draws two ways.** The header's `List`/`Flow` button — or `v` — swaps
   the packet list for a sequence diagram: a column per address, an arrow per frame
   from source lifeline to destination, its ports at the ends and the Info column
@@ -96,10 +122,10 @@ Everything else about it follows from being ours:
   whose address did not fit still gets its row, as a line of text.
 - **The arrow ports are hidden columns.** `sharkd` will not add a column on
   request, so `%uS`/`%uD` are in the column set from the start and marked not
-  visible (`images/webshark/preferences`, the global Wireshark preferences file):
+  visible (webshark's `preferences`, the global Wireshark preferences file):
   the packet list skips them, the diagram labels its arrow ends with them.
 - **Rows are coloured by reference point.** Wireshark's coloring rules, replaced
-  for this stack (`images/webshark/colorfilters`): cool hues for SIP, warm for
+  for this stack (webshark's `colorfilters`): cool hues for SIP, warm for
   Diameter, green for media, grey for the plumbing, and a red or an amber that
   overrides all of them for a failure or for the challenge and redirect of a
   registration — so a filtered list, and the diagram over it, reads as the
@@ -114,10 +140,10 @@ Everything else about it follows from being ours:
 - **Protected Gm reads as SIP.** Gm is behind IPsec ESP, and the keys of every
   registration are in the capture — so webshark takes them out of it and hands
   them to `sharkd` as ESP SAs when it opens the file ([below](#ipsec--the-keys-are-in-the-capture)).
-- **`/plugins` is the plugin directory** (`WIRESHARK_PLUGIN_DIR`), mounted by
-  `compose.yml` from `images/webshark/plugins`. Editing a plugin needs no
-  rebuild: one `sharkd` per capture, so the next capture opened — or the same one
-  after `Close` — runs the new code.
+- **`/plugins` is the plugin directory** (`WIRESHARK_PLUGIN_DIR`), baked into the
+  image from webshark's `plugins/` at build time. Mounted instead, as in the dev
+  loop below, editing a plugin needs no rebuild: one `sharkd` per capture, so
+  the next capture opened — or the same one after `Close` — runs the new code.
 - **`tshark` and `dftest` sit next to `sharkd`**, so a plugin and a filter can be
   tried without a browser. The build fails if the example plugin does not load,
   if its fields do not compile into a filter, or if the server cannot serve its
@@ -135,20 +161,21 @@ Everything else about it follows from being ours:
   for `SHARKD_IDLE` (600 s) is closed — each one holds a whole dissected capture
   in memory. `Close` in the UI does it by hand.
 - `.pcapng` files are listed, IPv6 works, and the URL carries the view
-  (`#f=trace.pcapng&q=…&n=11&v=flow`), so a filtered packet — or the diagram it
-  sits in — is a link.
+  (`#f=trace.pcapng&q=…&n=11&v=flow`, and `#s=…` for the capture list's own box),
+  so a filtered packet — or the diagram it sits in, or a shortlist of captures —
+  is a link.
 - The header's theme button cycles **system → light → dark** and remembers the
   choice; left alone, the page follows the system setting.
 
 Working on the UI without rebuilding the image:
 
     docker run --rm -p 8085:8085 -v ./pcap:/captures \
-        -v ./images/webshark/src/web:/web -e WEB=/web \
-        -v ./images/webshark/plugins:/plugins ghcr.io/lyatanski/webshark
+        -v ../webshark/src/web:/web -e WEB=/web \
+        -v ../webshark/plugins:/plugins ghcr.io/lyatanski/webshark
 
 ### ims.lua — one filter across SIP and Diameter
 
-`images/webshark/plugins/ims.lua` is the worked example of a plugin, and it
+webshark's `plugins/ims.lua` is the worked example of a plugin, and it
 solves the problem any cross-protocol view has to work around: nothing on the
 wire relates a SIP dialog to the Diameter session it triggers. The Cx `Session-Id` is minted by the CSCF and never appears in SIP;
 the `Call-ID` never reaches the HSS. What both sides do carry is the subscriber,
@@ -243,7 +270,7 @@ P-CSCF (TS 33.203), so everything the UE sends after it authenticates — every
 re-REGISTER, INVITE, MESSAGE, SUBSCRIBE — is ESP payload, and Wireshark's default
 is to show `ESP (SPI=0x00000101)` and stop. Two things in the image change that.
 
-**The preferences.** `images/webshark/preferences` turns on all three of
+**The preferences.** webshark's `preferences` turns on all three of
 Wireshark's ESP switches, off by default: the NULL-encryption heuristic, the
 keyed decode over the SA table, and the integrity check. The heuristic needs no
 keys at all — it finds the payload by recognising the ESP trailer behind it — and

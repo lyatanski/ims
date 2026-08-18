@@ -17,7 +17,6 @@ jobs:
         - freediameter
         - openssl
         - open5gs
-        - webshark
         - cgr-console
         - cgr-engine
         - cgr-loader

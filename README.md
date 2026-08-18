@@ -138,7 +138,7 @@ See [Tracing](doc/trace.md) for what each of those gives you.
   - [x] Grafana
 - Capture (compose.yml, `debug` profile, [doc](doc/trace.md))
   - [x] ptcpdump
-  - [x] webshark (own build: current sharkd with Lua, own UI over Go)
+  - [x] [webshark](https://github.com/lyatanski/webshark)
   - [x] `ims.lua` — SIP and Diameter under one filter
 - Testing (compose.yml, `test` profile)
   - [x] [pro2call](doc/images.md#test) — S5/S8 attach, IMS-AKA registration, calls, SMS
