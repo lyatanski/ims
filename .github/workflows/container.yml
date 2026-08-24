@@ -23,7 +23,7 @@ jobs:
         #- cgr-ui
         - grafonnet
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Build
       run: >
         docker build -t ghcr.io/${{ github.actor }}/${{ matrix.context }}
@@ -50,7 +50,7 @@ jobs:
     - images
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Set Up
       run: docker compose --profile debug up --detach --quiet-pull
     - name: Capture Ready
@@ -72,7 +72,7 @@ jobs:
       run: docker compose --profile test --profile debug cp pcap:/pcap/trace.pcapng .
       if: always()
     - name: Trace
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: trace
         path: trace.pcapng
