@@ -1,0 +1,27 @@
+logger:
+  level: {{ .root.Values.logger.level }}
+global:
+upf:
+  metrics:
+    server:
+    - address: 0.0.0.0
+      port: {{ .c.ports.metrics.port }}
+  pfcp:
+    server:
+    # See the note in conf/smf.yaml: a wildcard bind makes the node ID loopback.
+    - dev: {{ .root.Values.iface }}
+      advertise: {{ .root.Release.Name }}-upf-pfcp
+    client:
+      smf:
+      - address: {{ .root.Release.Name }}-smf-pfcp
+  gtpu:
+    server:
+    - address: 0.0.0.0
+      # What the SMF puts in the F-TEID it hands the peer GTP-U endpoint, so it
+      # has to be an address that endpoint can reach.
+      advertise: {{ .root.Release.Name }}-upf-gtpu
+  session:
+  - subnet: {{ .root.Values.session.subnet }}
+    gateway: {{ .root.Values.session.gateway }}
+    dnn: {{ .root.Values.session.dnn }}
+    dev: tunue

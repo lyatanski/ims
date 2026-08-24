@@ -1,5 +1,37 @@
 # Kubernetes
 
+Two charts, installed in either order. `ims` is the IMS core plus CoreDNS,
+rtpengine and the state store; `core` is the EPC — HSS, PCRF and the PGW
+control/user plane split — plus MongoDB and a subscriber seed.
+
+    kind create cluster
+    helm install ims  charts/ims
+    helm install core charts/core
+
+Nothing has to be passed in. The CoreDNS address the CSCFs resolve against is
+derived from the cluster's own service CIDR, and both charts default to the same
+PLMN, realms and USIM as [.env](.env) — so `core` seeds a subscriber the `ims`
+test can actually authenticate.
+
+The release names matter: Cx and Rx cross between the two, and each chart names
+the other's Services through `global.core.release` / `ims.release`. Install under
+different names and set those to match.
+
+To check the installation:
+
+    helm test ims --logs
+
+which attaches `test.subscribers` UEs over S5/S8, registers each with IMS-AKA and
+transport-mode ESP, and calls them pairwise — the same load generator the compose
+`test` profile runs. Raise `test.subscribers` to put the chain under load.
+
+`helm test` needs the GTP-U datapath in the test image, which is where the UE's
+user plane comes from. To check the signalling chain on its own — Gm through Cx
+to the HSS and back — an unprotected REGISTER sent straight at the P-CSCF should
+come back as a `401` from the S-CSCF carrying an `AKAv1-MD5` challenge and a
+`Security-Server` header.
+
+
 ## Common Challenges
 Determination of when instance has calls running on it. This is necessary to know when it is safe to terminate instance.
 

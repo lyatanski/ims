@@ -1,0 +1,109 @@
+{{- if .Values.subscribers.enabled }}
+{{- $plmn := printf "%s%s" .Values.mcc .Values.mnc }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-subscribers
+  labels: {{- include "core.labels" (dict "root" $ "name" "subscribers") | nindent 4 }}
+  annotations:
+    # post-install rather than pre-install: mongo has to be up first, and the
+    # script waits for it rather than assuming Helm ordered anything.
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels: {{- include "core.labels" (dict "root" $ "name" "subscribers") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: seed
+        image: {{ .Values.subscribers.image }}
+        command: [bash, -ec]
+        args:
+        - |
+          until mongosh --host {{ .Release.Name }}-mongodb --quiet --eval 'db.runCommand({ping:1})'; do
+            echo "waiting for mongo"; sleep 3
+          done
+          mongosh --host {{ .Release.Name }}-mongodb /seed/subscribers.js
+        volumeMounts:
+        - name: seed
+          mountPath: /seed
+      volumes:
+      - name: seed
+        configMap:
+          name: {{ .Release.Name }}-subscribers
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-subscribers
+  labels: {{- include "core.labels" (dict "root" $ "name" "subscribers") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  subscribers.js: |
+    // The same document shape as the `subscribers` seed in core.yml: IMSI is
+    // the PLMN followed by the index padded out to 15 digits, MSISDN is $dial
+    // followed by the index padded to 9. The load generator derives both the
+    // same way from IMS_IMSI / IMS_MSISDN_CC, so the two only agree as long as
+    // the padding here does.
+    db = db.getSiblingDB('open5gs')
+    const plmn = '{{ $plmn }}'
+    const pad = 15 - plmn.length
+    db.subscribers.createIndex({ imsi: 1 }, { unique: true })
+    db.subscribers.createIndex({ msisdn: 1 })
+    let added = 0
+    for (let i = 1; i <= {{ .Values.subscribers.count }}; i++) {
+      const session = [{
+        name: '{{ .Values.session.dnn }}',
+        type: NumberInt(3),                       // 1:IPv4 2:IPv6 3:IPv4v6
+        qos: {
+          index: NumberInt(9),
+          arp: {
+            priority_level: NumberInt(8),
+            pre_emption_capability: NumberInt(1),
+            pre_emption_vulnerability: NumberInt(2),
+          },
+        },
+        ambr: {
+          downlink: { value: NumberInt(1000000000), unit: NumberInt(0) },
+          uplink:   { value: NumberInt(1000000000), unit: NumberInt(0) },
+        },
+        pcc_rule: [],
+        _id: new ObjectId(),
+      }]
+      try {
+        db.subscribers.insertOne({
+          _id: new ObjectId(),
+          schema_version: NumberInt(1),
+          imsi: plmn + String(i).padStart(pad, '0'),
+          msisdn: ['{{ .Values.subscribers.dial }}' + String(i).padStart(9, '0')],
+          imeisv: [], mme_host: [], mm_realm: [], purge_flag: [],
+          slice: [{ sst: NumberInt(1), default_indicator: true, session: session, _id: new ObjectId() }],
+          security: {
+            k:   '{{ .Values.subscribers.k }}',
+            op:  null,
+            opc: '{{ .Values.subscribers.opc }}',
+            amf: '8000',
+          },
+          ambr: {
+            downlink: { value: NumberInt(1000000000), unit: NumberInt(0) },
+            uplink:   { value: NumberInt(1000000000), unit: NumberInt(0) },
+          },
+          access_restriction_data: 32,
+          network_access_mode: 0,
+          subscriber_status: 0,
+          operator_determined_barring: 0,
+          subscribed_rau_tau_timer: 12,
+          __v: 0,
+        })
+        added++
+      } catch (e) {
+        if (e.code !== 11000) throw e             // ignore duplicates on re-seed
+      }
+    }
+    print(`seeded ${added}, total ${db.subscribers.countDocuments()}`)
+{{- end }}

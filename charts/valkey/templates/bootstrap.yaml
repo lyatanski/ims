@@ -1,3 +1,4 @@
+{{- if gt (int .Values.cluster.primaries) 1 }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -27,4 +28,4 @@ spec:
           done
 
           yes yes | valkey-cli --cluster create ${NODES} --cluster-replicas {{ .Values.cluster.replicas }}
-
+{{- end }}

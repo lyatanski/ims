@@ -1,7 +1,0 @@
-mongodb:
-  enabled: true
-  persistence:
-    enabled: false
-
-port: 3868
-metrics: 9090

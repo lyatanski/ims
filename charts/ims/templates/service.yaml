@@ -1,7 +1,8 @@
 {{- $dot := . -}}
 {{- range tuple "p" "i" "s" }}
 {{- $cscf := . -}}
-{{- with $dot -}}
+{{- with $dot }}
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -19,8 +20,8 @@ spec:
     targetPort: {{ .Values.service.port }}
     protocol: UDP
     name: udp
+  publishNotReadyAddresses: true
   selector: {{- include "ims.selectorLabels" . | nindent 4 }}
     role: {{ $cscf }}cscf
----
 {{- end }}
 {{- end }}

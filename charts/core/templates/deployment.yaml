@@ -1,0 +1,124 @@
+{{- $root := . }}
+{{- range $name, $c := .Values.components }}
+{{- if $c.enabled }}
+{{- $ctx := dict "root" $root "name" $name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "core.name" $ctx }}
+  labels: {{- include "core.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "core.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # The config is mounted with subPath, which kubelet never updates in
+        # place -- without this a `helm upgrade` that changes only the config
+        # leaves every daemon running the old one, silently.
+        checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+        {{- with $root.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels: {{- include "core.labels" $ctx | nindent 8 }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $c.peers }}
+      # freeDiameter validates its TLS credentials during init whether or not
+      # any peer uses TLS, so every Diameter node needs a pair. They are
+      # per-pod and thrown away with it: nothing verifies them, because every
+      # ConnectPeer is No_TLS.
+      initContainers:
+      - name: openssl
+        image: ghcr.io/lyatanski/openssl
+        args:
+        - req
+        - -new
+        - -batch
+        - -x509
+        - -days
+        - "3650"
+        - -nodes
+        - -newkey
+        - rsa:2048
+        - -out
+        - crt.pem
+        - -keyout
+        - key.pem
+        - -subj
+        - /CN={{ $name }}.{{ include "core.realm.epc" $root }}
+        workingDir: /var/diameter
+        volumeMounts:
+        - name: cert
+          mountPath: /var/diameter
+      {{- end }}
+      containers:
+      - name: open5gs
+        image: {{ $root.Values.image.repository }}:{{ $root.Values.image.tag | default $root.Chart.AppVersion }}
+        imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+        args: [{{ $c.daemon | quote }}, "-c", "/etc/open5gs.yaml"]
+        {{- if $c.privileged }}
+        # upfd opens /dev/net/tun and creates its own session device, so it
+        # needs the device node as well as NET_ADMIN -- privileged is what
+        # gets both in a stock containerd. No init container: the previous one
+        # ran `apk add iproute2` at pod start (busybox ip has no `tuntap`),
+        # which put a package mirror on the startup path for a device the
+        # daemon makes for itself.
+        securityContext:
+          privileged: true
+        {{- end }}
+        ports:
+        {{- range $port, $p := $c.ports }}
+        - name: {{ $port }}
+          containerPort: {{ $p.port }}
+          protocol: {{ $p.protocol }}
+        {{- end }}
+        {{- with (index $c.ports "metrics") }}
+        # open5gs serves /metrics as soon as the daemon is up, which is the most
+        # any of these can prove without speaking their own protocol.
+        readinessProbe:
+          httpGet: {path: /metrics, port: metrics}
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: {path: /metrics, port: metrics}
+          periodSeconds: 20
+          failureThreshold: 6
+        {{- end }}
+        {{- with $root.Values.resources }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
+        volumeMounts:
+        - name: conf
+          mountPath: /etc/open5gs.yaml
+          subPath: open5gs.yaml
+        {{- if $c.peers }}
+        - name: conf
+          mountPath: /etc/freeDiameter/diameter.conf
+          subPath: diameter.conf
+        - name: cert
+          mountPath: /var/diameter
+        {{- end }}
+      volumes:
+      - name: conf
+        configMap:
+          name: {{ include "core.name" $ctx }}
+      {{- if $c.peers }}
+      - name: cert
+        emptyDir:
+          sizeLimit: 10Mi
+      {{- end }}
+      {{- with $root.Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

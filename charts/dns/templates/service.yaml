@@ -15,7 +15,9 @@ spec:
     app.kubernetes.io/name: {{ template "coredns.name" . }}
     {{- end }}
   {{- with .Values.service.spec.clusterIP }}
-  clusterIP: {{ . }}
+  {{/* templated so the parent chart can derive it from the cluster rather than
+       have every caller pass the address in on the command line */}}
+  clusterIP: {{ tpl . $ }}
   {{- end }}
   {{- with .Values.service.clusterIPs }}
   clusterIPs: {{- toYaml . | nindent 4 }}

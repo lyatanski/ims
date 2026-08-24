@@ -6,21 +6,52 @@ metadata:
   annotations:
     helm.sh/hook: test
 spec:
+  restartPolicy: Never
   containers:
   - name: test
-    image: ghcr.io/lyatanski/test
-    args:
-    - ims_test_s5.lua
+    image: {{ .Values.test.image }}
+    command: [lua]
+    args: [ims_test_s5.lua]
     env:
-    - name: PGW_IP
-      value: {{ .Values.test.pgwc }}
-    - name: IMS_SUBS
-      value: {{ .Values.test.subscribers | quote }}
+    # S5/S8. The generator is the SGW half of it and binds GTP-C on its own
+    # address, so SGW_IP stays unset and is derived from GTPU_IFACE -- which is
+    # also where the eBPF GTP-U datapath attaches. One pod network, so both the
+    # S5/S8 and the access side are eth0.
+    # Fully qualified: the generator resolves through the net module's own
+    # resolver, which reads the nameserver out of resolv.conf but not the search
+    # list, so a bare Service name comes back NXDOMAIN.
+    - {name: PGW_IP,           value: {{ .Values.global.core.release }}-smf.{{ .Release.Namespace }}.svc.cluster.local}
+    - {name: GTPU_IFACE,       value: eth0}
+    - {name: GTPU_INNER_IFACE, value: eth0}
+    - {name: GTP_T3_MS,        value: {{ .Values.test.t3ms | quote }}}
+    # The USIM, and the serving PLMN and home domain the IMPI/IMPU are built
+    # from. These have to be the pair charts/core seeded into the HSS: get them
+    # wrong and the IMS-AKA challenge fails with nothing else to show for it.
+    - {name: IMS_K,     value: {{ .Values.test.k | quote }}}
+    - {name: IMS_OPC,   value: {{ .Values.test.opc | quote }}}
+    - {name: IMS_MCC,   value: {{ .Values.mcc | quote }}}
+    - {name: IMS_MNC,   value: {{ .Values.mnc | quote }}}
+    - {name: IMS_REALM, value: {{ include "ims.realm.ims" . | quote }}}
+    - {name: IMS_IMSI,  value: {{ tpl .Values.test.imsi . | quote }}}
+    - {name: IMS_SUBS,  value: {{ .Values.test.subscribers | quote }}}
+    - {name: IMS_MSISDN_CC,     value: {{ .Values.test.msisdn.cc | quote }}}
+    - {name: IMS_MSISDN_DIGITS, value: {{ .Values.test.msisdn.digits | quote }}}
+    # Dial the callee by the SIP IMPU it registered. `tel` needs numbers that
+    # open5gs' HSS associates without a leading '+', which it does not do -- see
+    # the CALL_URI note in compose.yml.
+    - {name: CALL_URI, value: sip}
     securityContext:
       capabilities:
         add:
-        # NET_ADMIN for the ESP SAs, the transparent UE socket and the TC
-        # hook; BPF to load the GTP-U datapath the user plane rides.
+        # NET_ADMIN for the ESP SAs and policies, the transparent UE socket and
+        # the TC hook; BPF to load the GTP-U datapath the user plane rides.
         - NET_ADMIN
         - BPF
-  restartPolicy: Never
+        # PERFMON puts the eBPF verifier in privileged mode. Without it the
+        # verifier runs its Spectre passes over the extension-header loop,
+        # decides it needs a speculation barrier after a bpf_skb_load_bytes
+        # call, cannot place one, and aborts the load with EFAULT. Nothing
+        # decapsulates the downlink then, so every REGISTER times out and the
+        # run reports 0 registered -- with no hint that the cause was a
+        # missing capability.
+        - PERFMON

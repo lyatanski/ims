@@ -1,7 +1,8 @@
 {{- $dot := . -}}
 {{- range tuple "proxy" "interrogating" "serving" }}
 {{- $cscf := . -}}
-{{- with $dot -}}
+{{- with $dot }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,30 +10,37 @@ metadata:
   labels: {{- include "ims.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # All replicas of a role share one Diameter identity (`pcscf.ims.<realm>` and
+  # so on, from configmap.yaml). freeDiameter accepts exactly one connection per
+  # identity and answers the second with "Rejecting new connection attempt while
+  # our state machine is in state STATE_OPEN".
+  strategy:
+    type: Recreate
   selector:
     matchLabels: {{- include "ims.selectorLabels" . | nindent 6 }}
       role: {{ trunc 1 $cscf }}cscf
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
-      annotations: {{- toYaml . | nindent 8 }}
-      {{- end }}
+      annotations:
+        # diameter.xml is a subPath mount, which kubelet never updates in place.
+        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       labels: {{- include "ims.labels" . | nindent 8 }}
         role: {{ trunc 1 $cscf }}cscf
     spec:
-      {{- $dns := (lookup "v1" "Service" .Release.Namespace "dns-coredns") | default .Values.dns.service -}}
-      {{- if $dns }}
       dnsPolicy: None
       dnsConfig:
         nameservers:
-        - {{ $dns.spec.clusterIP }}
+        - {{ include "ims.dnsIP" . }}
         searches:
         - {{ .Release.Namespace }}.svc.cluster.local
-      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+      {{- include "ims.waitdb" (dict "root" . "cscf" $cscf) | nindent 6 }}
       {{- if eq "proxy" $cscf }}
       {{- include "ims.ipsec" . | nindent 6 }}
       {{- else if eq "serving" $cscf }}
@@ -52,10 +60,8 @@ spec:
             fieldRef:
               fieldPath: status.podIP
         {{- end }}
-        {{- if eq "interrogating" $cscf }}
         - name: DBURL
-          value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ .Values.db.interrogating }}
-        {{- end }}
+          value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ index .Values.db $cscf }}
         {{- if eq "serving" $cscf }}
         - name: RTPADR
           value: udp:{{ template "rtpengine.name" .Subcharts.rtpengine }}:{{ .Values.rtpengine.service.port }}
@@ -70,14 +76,14 @@ spec:
         - name: mon
           containerPort: 9090
           protocol: TCP
-        #livenessProbe:
-        #  httpGet:
-        #    path: /check
-        #    port: 9090
-        #readinessProbe:
-        #  httpGet:
-        #    path: /check
-        #    port: 9090
+        # /check is `cdp_has_app(...)`
+        readinessProbe:
+          httpGet: {path: /check, port: mon}
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: {path: /metrics, port: mon}
+          periodSeconds: 20
+          failureThreshold: 6
         {{- with .Values.resources }}
         resources: {{- toYaml . | nindent 10 }}
         {{- end }}
@@ -110,6 +116,5 @@ spec:
       {{- with .Values.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
----
 {{- end }}
 {{- end }}

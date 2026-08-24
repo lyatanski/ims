@@ -1,0 +1,31 @@
+{{- $root := . }}
+{{- range $name, $c := .Values.components }}
+{{- if $c.enabled }}
+{{- $ctx := dict "root" $root "name" $name }}
+{{- range $port, $p := $c.ports }}
+{{- if hasKey $p "as" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "core.name" $ctx }}{{ with $p.as }}-{{ . }}{{ end }}
+  labels: {{- include "core.labels" $ctx | nindent 4 }}
+spec:
+  {{- if $p.headless }}
+  clusterIP: None
+  {{- end }}
+  ports:
+  - name: {{ $port }}
+    port: {{ $p.port }}
+    # The container port name, so the two cannot drift: a targetPort naming a
+    # port the pod does not have leaves the endpoint with no port at all.
+    targetPort: {{ $port }}
+    protocol: {{ $p.protocol }}
+  # Diameter and PFCP peers dial each other before either is "ready", so the
+  # endpoint has to exist while the pod is still starting up.
+  publishNotReadyAddresses: true
+  selector: {{- include "core.selectorLabels" $ctx | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

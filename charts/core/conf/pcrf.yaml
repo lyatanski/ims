@@ -1,0 +1,59 @@
+logger:
+  level: {{ .root.Values.logger.level }}
+global:
+db_uri: mongodb://{{ .root.Release.Name }}-mongodb/open5gs
+pcrf:
+  metrics:
+    server:
+    - address: 0.0.0.0
+      port: {{ .c.ports.metrics.port }}
+  freeDiameter: /etc/freeDiameter/diameter.conf
+  session:
+  - name: internet
+    type: 3                 # 1:IPv4, 2:IPv6, 3:IPv4v6
+    ambr:
+      downlink: {value: 1, unit: 3}   # 0:bps 1:Kbps 2:Mbps 3:Gbps 4:Tbps
+      uplink:   {value: 1, unit: 3}
+    qos:
+      index: 9
+      arp:
+        priority_level: 8
+        pre_emption_vulnerability: 1  # 1:Disabled 2:Enabled
+        pre_emption_capability: 1
+  - name: {{ .root.Values.session.dnn }}
+    type: 3
+    ambr:
+      downlink: {value: 1, unit: 3}
+      uplink:   {value: 1, unit: 3}
+    qos:
+      index: 5
+      arp:
+        priority_level: 1
+        pre_emption_vulnerability: 1
+        pre_emption_capability: 1
+    # The dedicated bearer the media phase rides, and the SIP signalling
+    # bearer beside it.
+    pcc_rule:
+    - qos:
+        index: 1
+        arp: {priority_level: 1, pre_emption_vulnerability: 1, pre_emption_capability: 1}
+        mbr:
+          downlink: {value: 82, unit: 1}
+          uplink:   {value: 82, unit: 1}
+        gbr:
+          downlink: {value: 82, unit: 1}
+          uplink:   {value: 82, unit: 1}
+      flow:
+      - {direction: 2, description: "permit out icmp from any to assigned"}
+      - {direction: 1, description: "permit out icmp from any to assigned"}
+      - {direction: 2, description: "permit out udp from 10.200.136.98/32 23455 to assigned 1-65535"}
+      - {direction: 1, description: "permit out udp from 10.200.136.98/32 1-65535 to assigned 50021"}
+    - qos:
+        index: 2
+        arp: {priority_level: 4, pre_emption_vulnerability: 2, pre_emption_capability: 2}
+        mbr:
+          downlink: {value: 802, unit: 1}
+          uplink:   {value: 802, unit: 1}
+        gbr:
+          downlink: {value: 802, unit: 1}
+          uplink:   {value: 802, unit: 1}
