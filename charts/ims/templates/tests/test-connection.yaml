@@ -1,3 +1,8 @@
+# emulates GTP-C and SIP/RTP over GTP-U
+# SIP procedures:
+# - REGISTER
+# - SUBSCRIBE (reg)
+# - INVITE (if at least 2 UEs)
 apiVersion: v1
 kind: Pod
 metadata:
@@ -13,27 +18,12 @@ spec:
     command: [lua]
     args: [ims_test_s5.lua]
     env:
-    # S5/S8. The generator is the SGW half of it and binds GTP-C on its own
-    # address, so SGW_IP stays unset and is derived from GTPU_IFACE -- which is
-    # also where the eBPF GTP-U datapath attaches. One pod network, so both the
-    # S5/S8 and the access side are eth0.
-    # Fully qualified: the generator resolves through the net module's own
-    # resolver, which reads the nameserver out of resolv.conf but not the search
-    # list, so a bare Service name comes back NXDOMAIN.
     - {name: PGW_IP,           value: {{ .Values.global.core.release }}-smf.{{ .Release.Namespace }}.svc.cluster.local}
     - {name: GTPU_IFACE,       value: eth0}
     - {name: GTPU_INNER_IFACE, value: eth0}
-    {{- /* `with`, not a bare reference: an unset value renders `value:` as
-           null, which reaches the generator as an empty string rather than as
-           an absent variable -- and its `or "1000"` fallback does not cover
-           that, so it dies in the binding. Omitting the whole entry lets the
-           generator's default apply. See test.t3ms in values.yaml. */}}
     {{- with .Values.test.t3ms }}
     - {name: GTP_T3_MS,        value: {{ . | quote }}}
     {{- end }}
-    # The USIM, and the serving PLMN and home domain the IMPI/IMPU are built
-    # from. These have to be the pair charts/core seeded into the HSS: get them
-    # wrong and the IMS-AKA challenge fails with nothing else to show for it.
     - {name: IMS_K,     value: {{ .Values.test.k | quote }}}
     - {name: IMS_OPC,   value: {{ .Values.test.opc | quote }}}
     - {name: IMS_MCC,   value: {{ .Values.mcc | quote }}}
@@ -43,9 +33,6 @@ spec:
     - {name: IMS_SUBS,  value: {{ .Values.test.subscribers | quote }}}
     - {name: IMS_MSISDN_CC,     value: {{ .Values.test.msisdn.cc | quote }}}
     - {name: IMS_MSISDN_DIGITS, value: {{ .Values.test.msisdn.digits | quote }}}
-    # Dial the callee by the SIP IMPU it registered. `tel` needs numbers that
-    # open5gs' HSS associates without a leading '+', which it does not do -- see
-    # the CALL_URI note in compose.yml.
     - {name: CALL_URI, value: sip}
     securityContext:
       capabilities:
