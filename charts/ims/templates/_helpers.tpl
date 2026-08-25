@@ -25,16 +25,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Wait for the state store -- and, for the I-CSCF, for what it has to read out of
-it.
-
-db_redis opens its connection at module init and does not retry, and ims_icscf
-loads its S-CSCF list at the same point. The list is written by the S-CSCF's own
-init container (see "ims.register"), and the two pods are created together, so
-without a gate the I-CSCF wins the race about half the time and then answers
-every REGISTER with "600 Busy everywhere - Empty list of S-CSCFs" while the
-entry it wants sits in valkey. Only a restart clears it, which is exactly the
-kind of failure that looks intermittent and isn't.
+Wait redis! db_redis opens its connection at module init and does not retry
 
 Call with (dict "root" $ "cscf" <role>).
 */}}
@@ -70,17 +61,6 @@ S-CSCF register
   - HSET
   - s_cscf:entry::1
   - s_cscf_uri
-  {{/*
-    The S-CSCF's name in the home domain, not its Kubernetes Service name.
-
-    This value is what the I-CSCF relays a REGISTER to, and it has to be a name
-    the CSCFs can resolve -- they run dnsPolicy: None against this release's
-    CoreDNS, which answers the 3gppnetwork.org zone and knows nothing of a bare
-    `ims-scscf`, so that spelling came back "478 Unresolvable destination".
-    It is also what serving.cfg computes for its own SRVURI, i.e. the
-    Server-Name the S-CSCF puts in the SAR and the HSS stores -- so the two
-    have to agree or an MT call is routed to a name that is not this pod.
-  */}}
   - sip:scscf.{{ include "ims.realm.ims" . }}
 {{- end }}
 
@@ -125,17 +105,6 @@ kernel module mount path
 
 {{/*
 The CoreDNS cluster IP, resolved rather than configured.
-
-The CSCFs run `dnsPolicy: None` so that names in the home domain resolve at all,
-and a nameserver in `dnsConfig` has to be a literal address known when the pod
-spec is rendered -- before the Service that would own it exists. So one address
-in the service CIDR has to be picked in advance. Rather than hardcode it and
-make every caller pass a `--set`, take the `kubernetes` Service (always the
-first address of the CIDR, in every cluster) and swap its last octet.
-
-Order matters: an existing Service wins, so an upgrade never moves the address
-out from under the pods still pointing at it. `lookup` returns nothing under
-`helm template`, which is what the literal at the end is for.
 */}}
 {{- define "ims.dnsIP" -}}
 {{- $existing := lookup "v1" "Service" .Release.Namespace (printf "%s-dns" .Release.Name) -}}
