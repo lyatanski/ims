@@ -131,3 +131,31 @@ both need tpl before anything can be appended.
 {{- define "ims.realm.epc" -}}
 {{- tpl .Values.realm.epc . -}}
 {{- end }}
+
+{{/*
+The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
+*/}}
+{{- define "ims.ueroute" -}}
+- name: ueroute
+  image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  securityContext:
+    capabilities:
+      add:
+      - NET_ADMIN
+  command:
+  - sh
+  - -c
+  - |
+    pool={{ .Values.global.ue.subnet }}
+    mtu={{ .Values.global.ue.mtu }}
+
+    while :; do
+      # "default via <gw> dev <dev>" -> "<gw> <dev>"
+      set -- $(ip route | awk '$1 == "default" { print $3, $5; exit }')
+      if [ -n "$1" ]; then
+        ip route replace "$pool" via "$1" dev "$2" mtu "$mtu"
+      fi
+      sleep {{ .Values.reconcile }}
+    done
+{{- end }}

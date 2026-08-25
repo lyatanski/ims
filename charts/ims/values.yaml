@@ -19,6 +19,13 @@ global:
   # value. The CoreDNS rule for the EPC realm rewrites names onto it.
   core:
     release: core
+  ue:
+    subnet: 10.10.0.0/16
+    mtu: 1452
+
+# Seconds between reconciles of the UE route.
+# loop rather than a one-shot because a pod's routing table does not survive rescheduling
+reconcile: 10
 
 # valkey database numbers, one per role.
 db:

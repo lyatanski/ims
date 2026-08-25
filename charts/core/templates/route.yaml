@@ -1,0 +1,109 @@
+{{- if .Values.route.enabled }}
+# A route for the UE pool, on every node.
+#
+# The pool is not part of the cluster's pod CIDR, so no node has any idea where
+# it lives, and both directions of the UE's traffic die on that one fact:
+#
+#   uplink    upfd decapsulates a G-PDU, writes the inner packet to session.dev
+#             and the pod forwards it out of eth0 with the UE's source address.
+#             The node receives it on the pod's veth and rp_filter -- strict on
+#             a stock node -- asks how it would route back to that address. It
+#             would not, so the packet is dropped before it is ever forwarded
+#             (TcpExtIPReversePathFilter in `nstat`), and the P-CSCF never sees
+#             a REGISTER at all.
+#
+#   downlink  the P-CSCF answers a UE and hands the response to its default
+#             gateway, which is the node. The node has no route for the pool
+#             and drops it.
+#
+# One route on the node fixes both: the reverse path for a UE address now
+# resolves to the veth the packet arrived on, and the response has somewhere to
+# go. The pod-side route in the ims chart is about the MTU, not reachability --
+# it cannot substitute for this one, because the node makes its own forwarding
+# decision on the destination address and has to know the pool to make it.
+#
+# `onlink` is not decoration. A CNI that gives each pod a point-to-point veth --
+# ptp, which is what kindnet uses -- leaves the node holding a `scope host`
+# route per pod address, and a gateway resolved through one of those is folded
+# away: the kernel keeps the device, drops the nexthop and treats the whole /16
+# as directly attached, so it ARPs for the *UE* address on the UPF's veth.
+# Nothing answers that -- the address lives past upfd, on session.dev -- the
+# neighbour stays INCOMPLETE and the response is dropped with every counter
+# still at zero. `onlink` says the gateway is reachable on that device without
+# looking, which keeps it in the route, and the node ARPs for the UPF pod
+# instead -- which does answer.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}-route
+  labels: {{- include "core.labels" (dict "root" . "name" "route") | nindent 4 }}
+spec:
+  selector:
+    matchLabels: {{- include "core.selectorLabels" (dict "root" . "name" "route") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "core.labels" (dict "root" . "name" "route") | nindent 8 }}
+    spec:
+      # The route belongs to the node's namespace, not the pod's.
+      hostNetwork: true
+      # ...which costs the cluster resolver unless it is asked for by name, and
+      # the UPF is discovered by name below.
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Every node, whatever it is otherwise reserved for: one without this
+      # route black-holes the pool for any UPF-facing pod that lands on it.
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: route
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+        command:
+        - sh
+        - -c
+        - |
+          # Fully qualified: a hostNetwork pod gets the cluster search list, but
+          # spelling it out costs nothing and survives a resolver that does not.
+          upf={{ .Release.Name }}-upf-gtpu.{{ .Release.Namespace }}.svc.cluster.local
+          pool={{ .Values.session.subnet }}
+
+          while :; do
+            # The headless Service resolves to the UPF pod itself. It has to:
+            # a cluster IP is a load balancer, not a host, and nothing can be
+            # routed through one.
+            addr=$(getent ahostsv4 "$upf" 2>/dev/null | awk '{print $1; exit}')
+            if [ -n "$addr" ]; then
+              # Ask the kernel how it would reach the UPF and reuse the answer,
+              # rather than assuming a topology: a pod on this node resolves to
+              # a bare device, one on another node to that node's address.
+              r=$(ip route get "$addr" 2>/dev/null | head -1)
+              dev=$(echo "$r" | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+              via=$(echo "$r" | sed -n 's/.* via \([^ ]*\).*/\1/p')
+              case "$r" in
+              "local "*)
+                # session.dev is already in this namespace -- a hostNetwork UPF
+                # -- and brought its own connected route with it.
+                ;;
+              *" via "*)
+                ip route replace "$pool" via "$via" dev "$dev"
+                ;;
+              *" dev "*)
+                ip route replace "$pool" via "$addr" dev "$dev" onlink
+                ;;
+              esac
+            fi
+            sleep {{ .Values.reconcile }}
+          done
+        {{- with .Values.resources }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

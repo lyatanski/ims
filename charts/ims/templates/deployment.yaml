@@ -97,6 +97,9 @@ spec:
             add:
             - NET_ADMIN
         {{- end }}
+      {{- if and (eq "proxy" $cscf) .Values.global.ue.subnet }}
+      {{- include "ims.ueroute" . | nindent 6 }}
+      {{- end }}
       volumes:
       - name: diameter
         configMap:

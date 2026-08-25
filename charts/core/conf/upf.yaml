@@ -21,4 +21,4 @@ upf:
   - subnet: {{ .root.Values.session.subnet }}
     gateway: {{ .root.Values.session.gateway }}
     dnn: {{ .root.Values.session.dnn }}
-    dev: tunue
+    dev: {{ .root.Values.session.dev }}

@@ -91,3 +91,37 @@ freeDiameter:
   {{- end }}
   {{- end }}
 {{- end }}
+
+{{/*
+The UE pool's prefix length, for turning session.gateway into an address.
+*/}}
+{{- define "core.session.prefixlen" -}}
+{{- .Values.session.subnet | splitList "/" | last -}}
+{{- end }}
+
+{{/*
+The UPF's TUN device, addressed and up.
+
+Call with (dict "root" $ "name" <component>).
+*/}}
+{{- define "core.tun" -}}
+- name: tun
+  image: {{ .root.Values.image.repository }}:{{ .root.Values.image.tag | default .root.Chart.AppVersion }}
+  imagePullPolicy: {{ .root.Values.image.pullPolicy }}
+  securityContext:
+    capabilities:
+      add:
+      - NET_ADMIN
+  command:
+  - sh
+  - -c
+  - |
+    # Both calls are idempotent -- `addr add` fails with EEXIST once the
+    # address is set, `link set up` is a no-op on a device already up -- so
+    # there is nothing to test for first and nothing to undo.
+    while :; do
+      ip addr add {{ .root.Values.session.gateway }}/{{ include "core.session.prefixlen" .root }} dev {{ .root.Values.session.dev }} 2>/dev/null
+      ip link set {{ .root.Values.session.dev }} up 2>/dev/null
+      sleep {{ .root.Values.reconcile }}
+    done
+{{- end }}

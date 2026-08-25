@@ -62,6 +62,12 @@ session:
   subnet: 10.10.0.0/16
   gateway: 10.10.0.1
   dnn: ims
+  dev: tunue
+
+route:
+  enabled: true
+
+reconcile: 10
 
 components:
   hss:
@@ -101,6 +107,7 @@ components:
     daemon: upfd
     # The UPF owns a TUN device and the GTP-U datapath.
     privileged: true
+    tun: true
     ports:
       gtpu:    {port: 2152, protocol: UDP, as: gtpu, headless: true}
       pfcp:    {port: 8805, protocol: UDP, as: pfcp, headless: true}

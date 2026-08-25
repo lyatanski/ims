@@ -64,6 +64,9 @@ spec:
           mountPath: /etc/freeDiameter/diameter.conf
           subPath: diameter.conf
         {{- end }}
+      {{- if $c.tun }}
+      {{- include "core.tun" $ctx | nindent 6 }}
+      {{- end }}
       volumes:
       - name: conf
         configMap:
