@@ -125,3 +125,22 @@ Call with (dict "root" $ "name" <component>).
       sleep {{ .root.Values.reconcile }}
     done
 {{- end }}
+
+{{/*
+Hold `smfd` until the P-CSCF name resolves.
+
+Call with (dict "root" $ "name" <component>).
+*/}}
+{{- define "core.waitims" -}}
+- name: wait-pcscf
+  image: {{ .root.Values.image.repository }}:{{ .root.Values.image.tag | default .root.Chart.AppVersion }}
+  imagePullPolicy: {{ .root.Values.image.pullPolicy }}
+  command:
+  - sh
+  - -ec
+  - |
+    until getent ahostsv4 {{ .root.Values.ims.release }}-pcscf >/dev/null 2>&1; do
+      echo "waiting for {{ .root.Values.ims.release }}-pcscf to resolve"
+      sleep 2
+    done
+{{- end }}

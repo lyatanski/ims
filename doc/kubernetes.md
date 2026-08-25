@@ -5,8 +5,33 @@ rtpengine and the state store; `core` is the EPC — HSS, PCRF and the PGW
 control/user plane split — plus MongoDB and a subscriber seed.
 
     kind create cluster
-    helm install ims  charts/ims
     helm install core charts/core
+    helm install ims  charts/ims --wait
+
+`--wait` belongs on whichever goes in second, and there is only one of the two it
+can usefully sit on. A CSCF is Ready when `cdp_has_app(...)` says its Diameter
+peer is established, so waiting for `ims` waits for Cx and Rx — which proves the
+HSS and PCRF are *serving*, not merely running. Waiting for `core` proves much
+less: an open5gs daemon answers /metrics, and is therefore Ready, the moment it
+starts.
+
+That asymmetry matters because the dependency runs both ways and only one
+direction is self-healing:
+
+- **IMS needs the EPC**, and retries until it has it. cdp reconnects on Tc,
+  which is 30 seconds unless `diameter.xml` says otherwise, so a CSCF started
+  against a missing HSS peers on its own — just not instantly. Offer traffic
+  inside that window and the I-CSCF answers a REGISTER from a Cx it does not
+  have: `480 Temporarily Unavailable - Diameter Cx interface failed`, 0 of N
+  registered, every pod Running. The Services publish not-ready addresses
+  deliberately, so readiness does not hold that traffic back — waiting does.
+
+- **The EPC needs the P-CSCF's name**, once, and never retries. open5gs resolves
+  `smf.p-cscf` while parsing its configuration and keeps the addresses; a miss is
+  logged and skipped, leaving `smfd` Ready with no P-CSCF to put in the PCO. The
+  UE attaches and has nowhere to send REGISTER, and nothing anywhere restarts.
+  So `smfd` is held in an init container until the name resolves, which is what
+  makes the order above safe — and what makes the reverse order safe too.
 
 Nothing has to be passed in. The CoreDNS address the CSCFs resolve against is
 derived from the cluster's own service CIDR, and both charts default to the same

@@ -93,6 +93,9 @@ components:
   smf:
     enabled: true
     daemon: smfd
+    # Hold the daemon until the `ims` release's P-CSCF Service resolves, because
+    # open5gs resolves it once and tolerates a miss silently
+    pcscf: true
     ports:
       gtpc:     {port: 2123, protocol: UDP, as: "", headless: true}
       diameter: {port: 3868, protocol: TCP, as: gx}

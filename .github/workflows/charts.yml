@@ -42,11 +42,11 @@ jobs:
     - name: Create KinD Cluster
       uses: helm/kind-action@v1
 
-    - name: Install IMS
-      run: helm install ims oci://ghcr.io/${{ github.actor }}/ims
-
     - name: Install Open5GS
-      run: helm install core oci://ghcr.io/${{ github.actor }}/core --wait --timeout 5m
+      run: helm install core oci://ghcr.io/${{ github.actor }}/core
+
+    - name: Install IMS
+      run: helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m
 
     - name: Test
       run: helm test ims --logs --timeout 10m
