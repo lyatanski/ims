@@ -8,7 +8,6 @@ upf:
       port: {{ .c.ports.metrics.port }}
   pfcp:
     server:
-    # See the note in conf/smf.yaml: a wildcard bind makes the node ID loopback.
     - dev: {{ .root.Values.iface }}
       advertise: {{ .root.Release.Name }}-upf-pfcp
     client:
@@ -17,8 +16,6 @@ upf:
   gtpu:
     server:
     - address: 0.0.0.0
-      # What the SMF puts in the F-TEID it hands the peer GTP-U endpoint, so it
-      # has to be an address that endpoint can reach.
       advertise: {{ .root.Release.Name }}-upf-gtpu
   session:
   - subnet: {{ .root.Values.session.subnet }}

@@ -9,8 +9,6 @@ metadata:
   name: {{ include "core.name" $ctx }}
   labels: {{- include "core.labels" $ctx | nindent 4 }}
 data:
-  # Kept as real YAML under conf/ rather than inlined here, so each daemon's
-  # configuration can be read and diffed against upstream's own examples.
   open5gs.yaml: |
     {{- tpl ($root.Files.Get (printf "conf/%s.yaml" $name)) (dict "root" $root "name" $name "c" $c) | nindent 4 }}
   {{- if and $c.peers (eq $root.Values.diameter.mode "file") }}

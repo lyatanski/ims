@@ -15,9 +15,6 @@ spec:
   template:
     metadata:
       annotations:
-        # The config is mounted with subPath, which kubelet never updates in
-        # place -- without this a `helm upgrade` that changes only the config
-        # leaves every daemon running the old one, silently.
         checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
         {{- with $root.Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -33,12 +30,6 @@ spec:
         imagePullPolicy: {{ $root.Values.image.pullPolicy }}
         args: [{{ $c.daemon | quote }}, "-c", "/etc/open5gs.yaml"]
         {{- if $c.privileged }}
-        # upfd opens /dev/net/tun and creates its own session device, so it
-        # needs the device node as well as NET_ADMIN -- privileged is what
-        # gets both in a stock containerd. No init container: the previous one
-        # ran `apk add iproute2` at pod start (busybox ip has no `tuntap`),
-        # which put a package mirror on the startup path for a device the
-        # daemon makes for itself.
         securityContext:
           privileged: true
         {{- end }}

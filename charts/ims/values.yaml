@@ -46,6 +46,7 @@ test:
   # connection. One is the connectivity check the helm test hook is for; raise
   # it to put the chain under load.
   subscribers: 1
+  t3ms: 3000
   k: "3919F39741B626604B4BACE23ACFB094"
   opc: "177FAD988A964A3AD0421B4693257056"
   imsi: "{{ .Values.mcc }}{{ .Values.mnc }}0000000001"

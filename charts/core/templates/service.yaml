@@ -17,8 +17,6 @@ spec:
   ports:
   - name: {{ $port }}
     port: {{ $p.port }}
-    # The container port name, so the two cannot drift: a targetPort naming a
-    # port the pod does not have leaves the endpoint with no port at all.
     targetPort: {{ $port }}
     protocol: {{ $p.protocol }}
   # Diameter and PFCP peers dial each other before either is "ready", so the
