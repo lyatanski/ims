@@ -82,6 +82,36 @@ services:
     ports:
     - 3000:3000
 
+  pcap:
+    profiles:
+    - debug
+    command: -i any -U -w /pcap/trace.pcap not tcp port 443 and not tcp port 22
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine
+        RUN apk add tcpdump
+        ENTRYPOINT ["tcpdump"]
+    network_mode: host
+    cap_add:
+    - NET_RAW   # the capture socket, and nothing else
+    healthcheck:
+      test: test -s /pcap/trace.pcap
+      retries: 10
+      interval: 1s
+    volumes:
+    - pcap:/pcap
+
+  # Wireshark in the browser
+  webshark:
+    profiles:
+    - debug
+    image: ghcr.io/lyatanski/webshark
+    volumes:
+    - pcap:/captures
+    ports:
+    - 8085:8085
+
 
 configs:
   fluent-bit.conf:
@@ -988,3 +1018,4 @@ configs:
           labels: {cscf: scscf}
 volumes:
   dash:
+  pcap:

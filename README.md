@@ -136,8 +136,8 @@ See [Tracing](doc/trace.md) for what each of those gives you.
   - [x] Prometheus
   - [ ] Alertmanager
   - [x] Grafana
-- Capture (compose.yml, `debug` profile, [doc](doc/trace.md))
-  - [x] ptcpdump
+- Capture (monitor.yml, `debug` profile, [doc](doc/trace.md))
+  - [x] tcpdump
   - [x] [webshark](https://github.com/lyatanski/webshark)
   - [x] `ims.lua` — SIP and Diameter under one filter
 - Testing (compose.yml, `test` profile)

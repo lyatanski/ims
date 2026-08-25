@@ -69,13 +69,13 @@ jobs:
       run: docker compose --profile test --profile debug logs
       if: always()
     - name: Pcap
-      run: docker compose --profile test --profile debug cp pcap:/pcap/trace.pcapng .
+      run: docker compose --profile test --profile debug cp pcap:/pcap/trace.pcap .
       if: always()
     - name: Trace
       uses: actions/upload-artifact@v7
       with:
         name: trace
-        path: trace.pcapng
+        path: trace.pcap
         if-no-files-found: error
       if: always()
     - name: Tear Down
