@@ -24,7 +24,7 @@ imagePullSecrets: []
 logger:
   level: info
 
-# freeDiameter AppServThreads.
+# freeDiameter AppServThreads. `file` mode only -- see diameter.mode.
 workers: 16
 
 # freeDiameter Tc, the peer reconnect interval, in seconds.
@@ -32,6 +32,10 @@ tcTimer: 5
 
 # LoadExtension dbg_msg_dumps, which prints every Diameter message.
 debug: false
+
+diameter:
+  mode: file
+  blackhole: 169.254.0.1
 
 mongodb:
   enabled: true
@@ -122,10 +126,8 @@ components:
       diameter: {port: 3868, protocol: TCP, as: gx}
       pfcp:     {port: 8805, protocol: UDP,  as: pfcp, headless: true}
       metrics:  {port: 9090, protocol: TCP,  as: metrics}
-    # Gx, and the one peer in this chart that has to be dialled rather than
-    # merely accepted -- so it is the one that needs ConnectTo.
     peers:
-    - {node: pcrf, realm: epc, connect: true}
+    - {node: pcrf, realm: epc, connect: true, address: ""}
     # SBI is the 5G service-based interface. This is an EPC deployment (Gx over
     # Diameter), so it stays off; setting a port turns it on and adds the NRF
     # client to the config.

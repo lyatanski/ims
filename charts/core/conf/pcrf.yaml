@@ -7,53 +7,61 @@ pcrf:
     server:
     - address: 0.0.0.0
       port: {{ .c.ports.metrics.port }}
-  freeDiameter: /etc/freeDiameter/diameter.conf
-  session:
-  - name: internet
-    type: 3                 # 1:IPv4, 2:IPv6, 3:IPv4v6
-    ambr:
-      downlink: {value: 1, unit: 3}   # 0:bps 1:Kbps 2:Mbps 3:Gbps 4:Tbps
-      uplink:   {value: 1, unit: 3}
-    qos:
-      index: 9
-      arp:
-        priority_level: 8
-        pre_emption_vulnerability: 1  # 1:Disabled 2:Enabled
-        pre_emption_capability: 1
-  - name: {{ .root.Values.session.dnn }}
-    type: 3
-    ambr:
-      downlink: {value: 1, unit: 3}
-      uplink:   {value: 1, unit: 3}
-    qos:
-      index: 5
-      arp:
-        priority_level: 1
-        pre_emption_vulnerability: 1
-        pre_emption_capability: 1
-    # The dedicated bearer the media phase rides, and the SIP signalling
-    # bearer beside it.
-    pcc_rule:
-    - qos:
-        index: 1
-        arp: {priority_level: 1, pre_emption_vulnerability: 1, pre_emption_capability: 1}
-        mbr:
-          downlink: {value: 82, unit: 1}
-          uplink:   {value: 82, unit: 1}
-        gbr:
-          downlink: {value: 82, unit: 1}
-          uplink:   {value: 82, unit: 1}
-      flow:
-      - {direction: 2, description: "permit out icmp from any to assigned"}
-      - {direction: 1, description: "permit out icmp from any to assigned"}
-      - {direction: 2, description: "permit out udp from 10.200.136.98/32 23455 to assigned 1-65535"}
-      - {direction: 1, description: "permit out udp from 10.200.136.98/32 1-65535 to assigned 50021"}
-    - qos:
-        index: 2
-        arp: {priority_level: 4, pre_emption_vulnerability: 2, pre_emption_capability: 2}
-        mbr:
-          downlink: {value: 802, unit: 1}
-          uplink:   {value: 802, unit: 1}
-        gbr:
-          downlink: {value: 802, unit: 1}
-          uplink:   {value: 802, unit: 1}
+  {{- include "core.diameter" . | nindent 2 }}
+  policy:
+    {{- /* toString, because `--set mnc=260` reaches here as an int64 and
+           printf "%s" on one renders `%!s(int64=260)` rather than failing.
+           mcc/mnc are quoted in values.yaml for the same reason -- a leading
+           zero does not survive --set at all, so keep using a values file. */ -}}
+    {{- $plmn := printf "%s%s" (toString .root.Values.mcc) (toString .root.Values.mnc) }}
+    {{- $pad := int (sub 15 (len $plmn)) }}
+    {{- if lt $pad 1 }}{{ fail (printf "mcc+mnc is %q, %d digits -- leaves no room for a subscriber index inside a 15-digit IMSI" $plmn (len $plmn)) }}{{ end }}
+  - supi_range:
+    - {{ $plmn }}{{ repeat $pad "0" }}-{{ $plmn }}{{ repeat $pad "9" }}
+    session:
+    - name: internet
+      type: 3                 # 1:IPv4, 2:IPv6, 3:IPv4v6
+      ambr:
+        downlink: {value: 1, unit: 3}   # 0:bps 1:Kbps 2:Mbps 3:Gbps 4:Tbps
+        uplink:   {value: 1, unit: 3}
+      qos:
+        index: 9
+        arp:
+          priority_level: 8
+          pre_emption_vulnerability: 1  # 1:Disabled 2:Enabled
+          pre_emption_capability: 1
+    - name: {{ .root.Values.session.dnn }}
+      type: 3
+      ambr:
+        downlink: {value: 1, unit: 3}
+        uplink:   {value: 1, unit: 3}
+      qos:
+        index: 5
+        arp:
+          priority_level: 1
+          pre_emption_vulnerability: 1
+          pre_emption_capability: 1
+      pcc_rule:
+      - qos:
+          index: 1
+          arp: {priority_level: 1, pre_emption_vulnerability: 1, pre_emption_capability: 1}
+          mbr:
+            downlink: {value: 82, unit: 1}
+            uplink:   {value: 82, unit: 1}
+          gbr:
+            downlink: {value: 82, unit: 1}
+            uplink:   {value: 82, unit: 1}
+        flow:
+        - {direction: 2, description: "permit out icmp from any to assigned"}
+        - {direction: 1, description: "permit out icmp from any to assigned"}
+        - {direction: 2, description: "permit out udp from 10.200.136.98/32 23455 to assigned 1-65535"}
+        - {direction: 1, description: "permit out udp from 10.200.136.98/32 1-65535 to assigned 50021"}
+      - qos:
+          index: 2
+          arp: {priority_level: 4, pre_emption_vulnerability: 2, pre_emption_capability: 2}
+          mbr:
+            downlink: {value: 802, unit: 1}
+            uplink:   {value: 802, unit: 1}
+          gbr:
+            downlink: {value: 802, unit: 1}
+            uplink:   {value: 802, unit: 1}

@@ -40,18 +40,46 @@ interpolate `domain`, so both need tpl. Called with the root context.
 {{- end }}
 
 {{/*
-freeDiameter's own config file, rather than open5gs' inline `freeDiameter:` map.
+The dictionary extensions, in load order -- dict_dcca declares a dependency on
+dict_nasreq and freeDiameter refuses to start if it is loaded first, so this is
+an order and not a set. Shared by both Diameter config forms so the two cannot
+drift; each renders it in its own syntax.
 
-The inline form silently drops what this deployment needs: open5gs v2.8.0 logs
-`unknown key no_sctp` and `unknown key addr` and carries on, so TLS stayed
-enabled and every CER from a CSCF came back as a CEA with no applications in it
--- which kamailio's cdp reports as "Total count of applications is 0" and then
-fails `cdp_has_app()` forever. Nothing in either log says "TLS". The file form is
-also what compose.yml uses, so the two deployments now configure Diameter the
-same way.
+Call with the root context.
+*/}}
+{{- define "core.diameter.extensions" -}}
+dict_rfc5777
+dict_mip6i
+dict_nasreq
+dict_nas_mipv6
+dict_dcca
+dict_dcca_3gpp
+{{- end }}
 
-Credentials are mandatory even though every peer is No_TLS: freeDiameter
-validates its TLS setup during init regardless of whether any peer uses it.
+{{/*
+Either form of the Diameter configuration, keyed off .Values.diameter.mode.
+This emits the whole `freeDiameter:` key so that the two forms -- a path on the
+same line, or a mapping under it -- are indented in one place rather than in
+each conf/<node>.yaml.
+
+Call with (dict "root" $ "name" <component> "c" <component values>).
+*/}}
+{{- define "core.diameter" -}}
+{{- if eq .root.Values.diameter.mode "file" -}}
+freeDiameter: /etc/freeDiameter/diameter.conf
+{{- else if eq .root.Values.diameter.mode "inline" -}}
+{{- include "core.diameter.inline" . }}
+{{- else -}}
+{{- fail (printf "diameter.mode must be \"file\" or \"inline\", got %q" .root.Values.diameter.mode) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+freeDiameter's own config file, handed to the daemon by path.
+
+This is the form with no gaps: freeDiameter's own parser reads it, so anything
+its grammar accepts is available here. See .Values.diameter.mode for what
+choosing the inline form instead gives up.
 
 Call with (dict "root" $ "name" <component> "c" <component values>).
 */}}
@@ -59,31 +87,61 @@ Call with (dict "root" $ "name" <component> "c" <component values>).
 Identity = "{{ .name }}.{{ include "core.realm.epc" .root }}";
 No_SCTP;
 AppServThreads = {{ .root.Values.workers }};
-{{/* Tc is the reconnect interval, 30s by default. The SMF and the PCRF both
-      list each other, so the first connection is settled by the RFC 6733 5.6.4
-      election -- and every round it loses costs a full Tc. Until it settles the
-      SMF answers Create Session with "No Gx Diameter Peer", which reaches the
-      UE as cause 100. */ -}}
+SecPort = 0;
 TcTimer = {{ .root.Values.tcTimer }};
-TLS_Cred = "/var/diameter/crt.pem", "/var/diameter/key.pem";
-TLS_CA = "/var/diameter/crt.pem";
 
 {{ if .root.Values.debug }}LoadExtension = "/opt/lib/freeDiameter/dbg_msg_dumps.fdx" : "0x4444";
 {{ end -}}
-LoadExtension = "/opt/lib/freeDiameter/dict_rfc5777.fdx";
-LoadExtension = "/opt/lib/freeDiameter/dict_mip6i.fdx";
-LoadExtension = "/opt/lib/freeDiameter/dict_nasreq.fdx";
-LoadExtension = "/opt/lib/freeDiameter/dict_nas_mipv6.fdx";
-LoadExtension = "/opt/lib/freeDiameter/dict_dcca.fdx";
-LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
+{{- range (include "core.diameter.extensions" .root | splitList "\n") }}
+LoadExtension = "/opt/lib/freeDiameter/{{ . }}.fdx";
+{{- end }}
 {{ range .c.peers }}
 {{- $peer := printf "%s.%s" .node (tpl (index $.root.Values.realm .realm) $.root) -}}
-{{- /*
-  ConnectTo pins the transport address, because the peer's Diameter identity is
-  a name in the home domain and only the IMS CoreDNS answers those -- which this
-  pod does not use. Without it the dial-out never resolves; the accept direction
-  works either way, which is why most of these are listed at all.
-*/}}
 ConnectPeer = "{{ $peer }}" { No_TLS; {{ if .connect }}ConnectTo = "{{ $.root.Release.Name }}-{{ .node }}"; {{ end }}};
 {{ end -}}
+{{- end }}
+
+{{/*
+The same configuration as open5gs' inline `freeDiameter:` mapping.
+
+Call with (dict "root" $ "name" <component> "c" <component values>).
+*/}}
+{{- define "core.diameter.inline" -}}
+freeDiameter:
+  identity: {{ .name }}.{{ include "core.realm.epc" .root }}
+  realm: {{ include "core.realm.epc" .root }}
+  listen_on: 0.0.0.0
+  port: {{ .c.ports.diameter.port }}
+  tc_timer: {{ .root.Values.tcTimer }}
+  load_extension:
+  {{- if .root.Values.debug }}
+  {{/* The second LoadExtension argument is a conf file path everywhere else,
+        but dbg_msg_dumps runs strtoul over it instead, so the mask survives
+        the trip through diam_config_apply()'s fopen() probe unchanged. */ -}}
+  - module: /opt/lib/freeDiameter/dbg_msg_dumps.fdx
+    conf: "0x4444"
+  {{- end }}
+  {{- range (include "core.diameter.extensions" .root | splitList "\n") }}
+  - module: /opt/lib/freeDiameter/{{ . }}.fdx
+  {{- end }}
+  connect:
+  {{- range .c.peers }}
+  {{- $peer := printf "%s.%s" .node (tpl (index $.root.Values.realm .realm) $.root) }}
+  {{- /*
+    Every address here is read with getaddrinfo(AI_NUMERICHOST), so a Service
+    name is not resolved late -- it fails init and aborts the daemon. A peer
+    this pod only ever accepts from is pointed at diameter.blackhole, which
+    registers the identity without naming anything reachable.
+  */}}
+  {{- if .connect }}
+  {{- if not .address }}
+  {{- fail (printf "components.%s.peers[%s].address is required when diameter.mode is inline: open5gs reads it with getaddrinfo(AI_NUMERICHOST) and aborts on a Service name, so it has to be a literal IP" $.name .node) }}
+  {{- end }}
+  - identity: {{ $peer }}
+    address: {{ .address }}
+  {{- else }}
+  - identity: {{ $peer }}
+    address: {{ $.root.Values.diameter.blackhole }}
+  {{- end }}
+  {{- end }}
 {{- end }}

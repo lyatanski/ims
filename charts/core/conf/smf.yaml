@@ -15,14 +15,9 @@ smf:
       nrf:
       - uri: http://{{ $.root.Release.Name }}-nrf:{{ . }}
 {{- end }}
-  freeDiameter: /etc/freeDiameter/diameter.conf
+  {{- include "core.diameter" . | nindent 2 }}
   pfcp:
     server:
-    # `dev` rather than 0.0.0.0, and an explicit `advertise`: the PFCP node ID
-    # is an *address* carried inside the protocol, and binding the wildcard
-    # leaves open5gs to pick one -- it picks loopback, so the peer associates
-    # with 127.0.0.1, misses the first heartbeat and tears the association
-    # down again in a loop. compose.yml binds it the same way.
     - dev: {{ .root.Values.iface }}
       advertise: {{ .root.Release.Name }}-smf-pfcp
     client:
@@ -34,8 +29,6 @@ smf:
   gtpu:
     server:
     - address: 0.0.0.0
-      # CUPS: the user plane is the UPF's, so the F-TEID the SMF hands the peer
-      # has to name the UPF and not itself.
       advertise: {{ .root.Release.Name }}-upf-gtpu
   session:
   - subnet: {{ .root.Values.session.subnet }}

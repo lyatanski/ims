@@ -1,5 +1,7 @@
 {{- if .Values.subscribers.enabled }}
-{{- $plmn := printf "%s%s" .Values.mcc .Values.mnc }}
+{{- /* toString: see the note in conf/pcrf.yaml. The PCRF derives its
+       supi_range from this same expression, so the two have to agree. */ -}}
+{{- $plmn := printf "%s%s" (toString .Values.mcc) (toString .Values.mnc) }}
 apiVersion: batch/v1
 kind: Job
 metadata:

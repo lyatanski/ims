@@ -7,4 +7,4 @@ hss:
     server:
     - address: 0.0.0.0
       port: {{ .c.ports.metrics.port }}
-  freeDiameter: /etc/freeDiameter/diameter.conf
+  {{- include "core.diameter" . | nindent 2 }}
