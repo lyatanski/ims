@@ -223,23 +223,6 @@ services:
     cap_add:
     - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
     - BPF         # loading the GTP-U datapath
-    # The datapath is written to pass the *unprivileged* verifier — it reads
-    # every variable-offset header with load_bytes rather than pointer math,
-    # which is what the comment in gtp/u/bpf/gtpu_kern.c is about. That is not
-    # enough on its own: without CAP_PERFMON the verifier also walks the
-    # speculative side of each branch and sanitises stack writes for Spectre
-    # v4, and on the extension-header loop (gtpu_kern.c:251) it decides it
-    # needs a speculation barrier after a bpf_skb_load_bytes *call*. It cannot
-    # place one there, so it aborts the load with its own
-    #
-    #   verifier bug: speculation barrier after jump instruction ...
-    #
-    # and EFAULT, on kernels carrying that Spectre-v1 nospec fallback. Nothing
-    # decapsulates the downlink then, so every REGISTER times out and the run
-    # reports 0 registered. CAP_PERFMON puts the verifier in privileged mode,
-    # where neither pass runs. It only relaxes the loader here in the test
-    # harness — the datapath itself still avoids the constructs that need it.
-    - PERFMON     # privileged verifier: skip the Spectre passes (see above)
     depends_on:
       icscf:
         condition: service_healthy

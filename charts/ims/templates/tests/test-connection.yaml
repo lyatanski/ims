@@ -54,11 +54,3 @@ spec:
         # the TC hook; BPF to load the GTP-U datapath the user plane rides.
         - NET_ADMIN
         - BPF
-        # PERFMON puts the eBPF verifier in privileged mode. Without it the
-        # verifier runs its Spectre passes over the extension-header loop,
-        # decides it needs a speculation barrier after a bpf_skb_load_bytes
-        # call, cannot place one, and aborts the load with EFAULT. Nothing
-        # decapsulates the downlink then, so every REGISTER times out and the
-        # run reports 0 registered -- with no hint that the cause was a
-        # missing capability.
-        - PERFMON
