@@ -42,27 +42,15 @@ mongodb:
   persistence:
     enabled: false
   auth:
-    # open5gs takes its credentials from `db_uri` in the config file and has no
-    # way to pick up a generated Secret, so the bitnami default of auth.enabled
-    # true left the HSS unable to read a single subscriber -- it connects fine
-    # and then every query comes back "requires authentication". compose runs
-    # mongo without auth for the same reason; matching it keeps the two
-    # deployments comparable.
     enabled: false
 
-# The HSS has no subscribers until something writes them. This mirrors the
-# `subscribers` seed in core.yml so that a chart install is testable on its own.
+# provision HSS subscribers
 subscribers:
   enabled: true
   count: 1
-  # The USIM shared by the whole range. The load generator must be given the
-  # same pair -- see `test.k` / `test.opc` in charts/ims/values.yaml.
   k: "3919F39741B626604B4BACE23ACFB094"
   opc: "177FAD988A964A3AD0421B4693257056"
-  # MSISDN country code; a number is this plus the last 9 digits of the IMSI.
   dial: "359"
-  # Anything with mongosh on it. Defaults to the image the subchart already
-  # pulls, so the seed costs no extra layer.
   image: docker.io/bitnami/mongodb:latest
 
 # The pod's interface. PFCP binds to it by name so that the node ID it
@@ -75,32 +63,13 @@ session:
   gateway: 10.10.0.1
   dnn: ims
 
-# One entry per open5gs daemon.
-#
-# `ports` is both the container's port list and, where an entry carries `as`,
-# the Services in front of it: `as: ""` names the Service after the component
-# (core-smf), any other value appends it (core-smf-gx). A port with no `as` is
-# opened on the container but gets no Service. The map keys are the port
-# *names*, which is what a Service's targetPort resolves against -- so there is
-# only one place to change and no way for the two to drift apart.
-#
-# `headless` is the rule rather than the exception here, because almost every
-# 3GPP reference point identifies its peer by *address*, not by name: GTP-U by
-# tunnel endpoint, GTP-C and PFCP by node address carried inside the protocol.
-# Behind a cluster IP the peer answers from its pod address instead of the VIP
-# it was addressed as, and open5gs ends up reporting node IDs like 127.0.0.1
-# and tearing the association down on a missed heartbeat. Only metrics (plain
-# HTTP) and Diameter (TCP, and the identity is in the CER) tolerate a VIP.
 components:
   hss:
     enabled: true
     daemon: hssd
     ports:
       diameter: {port: 3868, protocol: TCP, as: ""}
-      metrics:  {port: 9090, protocol: TCP,  as: metrics}
-    # Cx. Both are dialled by the other end, so these are really the accept
-    # list -- freeDiameter refuses a CER from an Origin-Host it has never heard
-    # of. `realm` picks which of .Values.realm the node sits in.
+      metrics:  {port: 9090, protocol: TCP, as: metrics}
     peers:
     - {node: icscf, realm: ims}
     - {node: scscf, realm: ims}
@@ -110,8 +79,7 @@ components:
     daemon: pcrfd
     ports:
       diameter: {port: 3868, protocol: TCP, as: ""}
-      metrics:  {port: 9090, protocol: TCP,  as: metrics}
-    # Gx from the SMF and Rx from the P-CSCF; both dial in.
+      metrics:  {port: 9090, protocol: TCP, as: metrics}
     peers:
     - {node: smf,   realm: epc}
     - {node: pcscf, realm: ims}
@@ -120,17 +88,12 @@ components:
     enabled: true
     daemon: smfd
     ports:
-      # Headless: the load generator is the SGW half of S5/S8 and dials the
-      # SMF's own address, which must not be NAT'd behind a cluster IP.
-      gtpc:     {port: 2123, protocol: UDP,  as: "", headless: true}
+      gtpc:     {port: 2123, protocol: UDP, as: "", headless: true}
       diameter: {port: 3868, protocol: TCP, as: gx}
-      pfcp:     {port: 8805, protocol: UDP,  as: pfcp, headless: true}
-      metrics:  {port: 9090, protocol: TCP,  as: metrics}
+      pfcp:     {port: 8805, protocol: UDP, as: pfcp, headless: true}
+      metrics:  {port: 9090, protocol: TCP, as: metrics}
     peers:
     - {node: pcrf, realm: epc, connect: true, address: ""}
-    # SBI is the 5G service-based interface. This is an EPC deployment (Gx over
-    # Diameter), so it stays off; setting a port turns it on and adds the NRF
-    # client to the config.
     sbi: ""
 
   upf:
@@ -139,11 +102,6 @@ components:
     # The UPF owns a TUN device and the GTP-U datapath.
     privileged: true
     ports:
-      # Headless. This name is what the UPF advertises in the F-TEID, so it has
-      # to be the pod's own address: a GTP-U tunnel endpoint is identified by
-      # its IP, and the peer datapath builds the outer header at the TC layer --
-      # after netfilter, so a Service VIP never gets DNAT'd and the G-PDU goes
-      # nowhere. Same reason core-smf and ims-pcscf are headless.
       gtpu:    {port: 2152, protocol: UDP, as: gtpu, headless: true}
       pfcp:    {port: 8805, protocol: UDP, as: pfcp, headless: true}
       metrics: {port: 9090, protocol: TCP, as: metrics}

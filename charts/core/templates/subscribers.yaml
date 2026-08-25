@@ -8,8 +8,7 @@ metadata:
   name: {{ .Release.Name }}-subscribers
   labels: {{- include "core.labels" (dict "root" $ "name" "subscribers") | nindent 4 }}
   annotations:
-    # post-install rather than pre-install: mongo has to be up first, and the
-    # script waits for it rather than assuming Helm ordered anything.
+    # post-install: mongo has to be up first
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
@@ -47,11 +46,6 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation
 data:
   subscribers.js: |
-    // The same document shape as the `subscribers` seed in core.yml: IMSI is
-    // the PLMN followed by the index padded out to 15 digits, MSISDN is $dial
-    // followed by the index padded to 9. The load generator derives both the
-    // same way from IMS_IMSI / IMS_MSISDN_CC, so the two only agree as long as
-    // the padding here does.
     db = db.getSiblingDB('open5gs')
     const plmn = '{{ $plmn }}'
     const pad = 15 - plmn.length
