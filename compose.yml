@@ -223,6 +223,7 @@ services:
     cap_add:
     - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
     - BPF         # loading the GTP-U datapath
+    - PERFMON     # privileged verifier: skip the Spectre passes
     depends_on:
       icscf:
         condition: service_healthy

@@ -54,3 +54,4 @@ spec:
         # the TC hook; BPF to load the GTP-U datapath the user plane rides.
         - NET_ADMIN
         - BPF
+        - PERFMON
