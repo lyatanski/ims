@@ -1,0 +1,34 @@
+services:
+  dra:
+    image: ghcr.io/lyatanski/freediameter
+    configs:
+    - source: dra.conf
+      target: /etc/freeDiameter/dra.conf
+    volumes:
+    - cert-dra:/var/dra
+    expose:
+    - 3868/tcp
+    depends_on:
+      cert-dra:
+        condition: service_completed_successfully
+
+  cert-dra:
+    image: ghcr.io/lyatanski/openssl
+    command: req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=dra.epc
+    working_dir: /var/dra
+    volumes:
+    - cert-dra:/var/dra
+
+configs:
+  dra.conf:
+    content: |
+      Identity = "dra.epc";
+      No_SCTP;
+      TLS_Cred = "/var/dra/crt.pem", "/var/dra/key.pem";
+      TLS_CA = "/var/dra/crt.pem";
+
+      LoadExtension = "dbg_msg_dumps.fdx" : "0x8888";
+      ConnectPeer = "hss.epc.${REALM}" { No_TLS; };
+
+volumes:
+  cert-dra:

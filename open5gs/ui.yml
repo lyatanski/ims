@@ -1,0 +1,32 @@
+# open5gs's own subscriber web UI on :9999, behind the `ui` profile. Needs
+# mongo.yml — it edits the same store the seed job fills.
+#
+# The build context is this directory rather than the repo root: the inline
+# Dockerfile clones open5gs from git and copies nothing in, so the context is
+# never read and there is no reason to ship the whole tree to the daemon.
+
+services:
+  ui:
+    profiles:
+    - ui
+    working_dir: /open5gs/webui
+    command: npm run dev
+    environment:
+      DB_URI: mongodb://mongo/open5gs
+      HOSTNAME: 0.0.0.0
+    ports:
+    - 9999:9999
+    depends_on:
+      subscribers:
+        condition: service_completed_successfully
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine AS build
+        RUN apk add git
+        RUN git clone https://github.com/open5gs/open5gs
+
+        FROM alpine
+        RUN apk add nodejs npm
+        COPY --from=build /open5gs/webui /open5gs/webui
+        RUN cd /open5gs/webui && npm ci
