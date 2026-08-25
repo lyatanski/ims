@@ -277,6 +277,8 @@ configs:
 networks:
   default:
     enable_ipv6: true
+    driver_opts:
+      com.docker.network.bridge.name: ims0
     ipam:
       config:
       - subnet: ${NETv4}

@@ -17,8 +17,9 @@ different question.
 ## tcpdump
 
 One capture for the whole stack, in `monitor.yml` alongside the metrics it puts
-packets behind. `-i any` binds to no interface, so it sees veths that do not
-exist yet and depends on none of the stack being up.
+packets behind. It binds to `ims0` — the compose bridge, whose name `compose.yml`
+pins so the service can address it — and so holds every frame between containers
+exactly once, and nothing that is not on the stack's own network.
 
     docker compose --profile debug up -d pcap
     wireshark pcap/trace.pcap
@@ -28,41 +29,31 @@ out of a running capture; nothing has to be stopped first.
 
     docker compose cp pcap:/pcap/trace.pcap .
 
-Two things are filtered out, because the capture attaches before the stack and
-would otherwise be mostly neither: the registry traffic of `up` pulling images,
-which was 270317 frames of a 342646-frame run against ~3700 of signalling, and
-whatever shell is driving the host. Everything the stack itself does is kept.
+Expect infrastructure to dominate it: one run of the `test` profile held 20101
+frames, of which ~1500 were signalling and the rest was redis, cadvisor, loki and
+the scrapes.
 
 ### Which container did this frame come from?
 
-There are no container names in the file — that was ptcpdump's job. Every frame
-does carry the index of the veth it was seen on (`-i any` writes LINUX_SLL2), and
-bridged traffic is seen twice: leaving the sender as `sll.pkttype == 3`, arriving
-at the receiver as `4`. So one filter both deduplicates and attributes:
+Both ends of it, by MAC: a bridge capture is real Ethernet and the addresses are
+the containers' own.
 
-    sll.pkttype == 3
+    docker compose ps -q | xargs docker inspect \
+      -f '{{.Name}} {{range .NetworkSettings.Networks}}{{.MacAddress}} {{.IPAddress}}{{end}}'
 
-Leave it off and UDP counts double — 815 SIP frames for 410 messages in one run —
-while Wireshark reads every delivered TCP segment as a retransmission of the sent
-one and declines to dissect it: 12329 flagged, 3 with the filter on.
+### Why the bridge works, and what binding to it costs
 
-`tcpdump` prints `?` rather than the index's name, since it resolves against the
-namespace reading the file rather than the one that captured it. Turn indices
-into names from the running stack, before tearing it down:
+A socket on a bridge device sees forwarded frames only while that device is in
+promiscuous mode — the kernel passes a copy up to the bridge itself only then.
+`tcpdump` sets it and ptcpdump did not, which is the whole of the old claim that
+a bound socket "sees almost nothing". Measured over one test run: **25 frames**
+with `-p`, every one of them ARP or ICMPv6 and not a single SIP, Diameter or ESP
+packet, against **3814** with promiscuous mode left on.
 
-    for c in $(docker compose ps -q); do
-      printf '%s\t%s\n' \
-        "$(docker run --rm --network container:$c alpine cat /sys/class/net/eth0/iflink)" \
-        "$(docker inspect -f '{{.Name}}' $c)"
-    done | sort -n
-
-That reads the index from inside each namespace with a container of our own,
-rather than `docker exec` — half the images here are distroless and have no `cat`
-to exec. Two caveats. An index lives exactly as long as its veth, so recreate a
-container and the table is stale; it is only meaningful against a capture from
-the same run. And a service sharing another's namespace shares its index —
-`trace` reads as `ocs` — while the ones in the host's namespace have no veth of
-their own at all.
+The cost is that one capture covers one bridge. `CORE=priv.yml` puts S5/S8 and
+SGi on networks of their own, so it overrides the service back to `-i any`, which
+sees every bridge — and the host too, hence the filter it carries there, and each
+frame twice: leaving the sender as `sll.pkttype == 3`, arriving as `4`.
 
 ## webshark
 

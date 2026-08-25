@@ -85,7 +85,7 @@ services:
   pcap:
     profiles:
     - debug
-    command: -i any -U -w /pcap/trace.pcap not tcp port 443 and not tcp port 22
+    command: -i ims0 -U -w /pcap/trace.pcap
     build:
       context: .
       dockerfile_inline: |
