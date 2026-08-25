@@ -1,10 +1,3 @@
-# open5gs's own subscriber web UI on :9999, behind the `ui` profile. Needs
-# mongo.yml — it edits the same store the seed job fills.
-#
-# The build context is this directory rather than the repo root: the inline
-# Dockerfile clones open5gs from git and copies nothing in, so the context is
-# never read and there is no reason to ship the whole tree to the daemon.
-
 services:
   ui:
     profiles:

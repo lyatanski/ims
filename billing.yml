@@ -123,13 +123,7 @@ configs:
               "sessions_conns": ["*localhost"],
               // v0.11 dev replaced the scalar "listen"/"listen_net" pair with
               // this array, and an unknown key in a known section is dropped
-              // in silence — so the old spelling left the built-in default
-              // 127.0.0.1:3868 standing. The engine then logs
-              // `<DiameterAgent> Start listening on <127.0.0.1:3868>` and the
-              // S-CSCF's Ro peer gets `Connection refused` forever, because
-              // nothing off the loopback can reach it. An empty host binds
-              // [::]:3868 dual-stack, which is what the CSCFs need: scscf.xml
-              // resolves ocs.${REALM} to both an A and a AAAA.
+              // in silence
               "listeners": [
                   { "address": ":3868", "network": "tcp" },
               ],
