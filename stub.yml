@@ -5,7 +5,7 @@ include:
 
 services:
   hss:
-    image: ghcr.io/lyatanski/test
+    image: ghcr.io/lyatanski/pro2call
     command: cx_hss.lua
     environment:
       HSS_REALM:    ${REALM}

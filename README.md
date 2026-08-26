@@ -47,7 +47,7 @@ As the setup loads and uses kernel module, best to test in VM
 
     docker compose --profile test up -d
 
-For always up to date commands, check out [CI](.github/workflows/compose.yml) configuration
+For always up to date commands, check out [CI](.github/workflows/container.yml) configuration
 
 To swap the HSS (and the mongo / subscriber-seed / DRA machinery behind it) for the
 [pro2call](../pro2call) Cx emulator — no provisioning, any IMSI, so load lands on the
