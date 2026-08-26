@@ -132,7 +132,7 @@ services:
   test:
     profiles:
     - test
-    image: ghcr.io/lyatanski/test
+    image: ghcr.io/lyatanski/pro2call
     environment:
       PGW_IP:            smf
       GTPU_IFACE:        eth0

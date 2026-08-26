@@ -11,7 +11,6 @@ jobs:
     strategy:
       matrix:
         context:
-        - test
         - kamailio
         - rtpengine
         - freediameter
