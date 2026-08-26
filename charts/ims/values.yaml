@@ -48,7 +48,7 @@ fullnameOverride: ""
 workers: 4
 
 test:
-  image: ghcr.io/lyatanski/test:latest
+  image: ghcr.io/lyatanski/pro2call:latest
   # Subscribers the load generator attaches and registers, each on its own PDN
   # connection. One is the connectivity check the helm test hook is for; raise
   # it to put the chain under load.
