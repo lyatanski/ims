@@ -1,16 +1,19 @@
 name: charts
 on:
-  schedule:
-  - cron: '0 1 * * SUN'
-  push:
+  workflow_run:
+    workflows: [container]
+    types: [completed]
 permissions: write-all
 
 jobs:
   charts:
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
 
     steps:
     - uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
     - name: Lint
       run: |
