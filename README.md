@@ -91,6 +91,8 @@ See [Tracing](doc/trace.md) for what each of those gives you.
 - IMS
   - [TS 23.228](https://www.etsi.org/deliver/etsi_ts/123200_123299/123228/18.07.00_60/ts_123228v180700p.pdf)
   - [TS 24.229](https://www.etsi.org/deliver/etsi_ts/124200_124299/124229/18.06.00_60/ts_124229v180600p.pdf)
+  - Restoration [TS 23.380](https://www.etsi.org/deliver/etsi_ts/123300_123399/123380/18.02.00_60/ts_123380v180200p.pdf)
+  - KPI [TS 32.454](https://www.etsi.org/deliver/etsi_ts/132400_132499/132454/18.00.00_60/ts_132454v180000p.pdf)
 - Diameter Cx / SBA N70 [TS 29.562](https://www.etsi.org/deliver/etsi_ts/129500_129599/129562/18.06.00_60/ts_129562v180600p.pdf)
   - [TS 29.228](https://www.etsi.org/deliver/etsi_ts/129200_129299/129228/18.00.00_60/ts_129228v180000p.pdf)
   - [TS 29.229](https://www.etsi.org/deliver/etsi_ts/129200_129299/129229/18.01.00_60/ts_129229v180100p.pdf)
