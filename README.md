@@ -47,11 +47,41 @@ As the setup loads and uses kernel module, best to test in VM
 
     docker compose --profile test up -d
 
-For always up to date commands, check out [CI](.github/workflows/compose.yml) configuration
+For always up to date commands, check out [CI](.github/workflows/container.yml) configuration
+
+To swap the HSS (and the mongo / subscriber-seed / DRA machinery behind it) for the
+[pro2call](../pro2call) Cx emulator — no provisioning, any IMSI, so load lands on the
+CSCF chain instead — point `$CORE` at [stub.yml](stub.yml)
+
+    CORE=stub.yml docker compose up -d --remove-orphans
 
 To observe the packets
 
     wireshark -i any --display-filter 'gtpv2 or sip or diameter.cmd.code != 280'
+
+To capture instead, with the container and process behind every packet recorded
+in the file, and to browse the result without leaving the browser
+
+    docker compose --profile debug up -d pcap webshark
+    docker compose stop pcap
+
+webshark carries a Lua plugin that relates SIP to Diameter by subscriber, so one
+display filter covers a registration and the Cx exchange behind it
+
+    ims.id == "001010000000001"
+
+and, because the plugin learns each subscriber's IMPI/IMPU binding out of the
+registration, the same frames come back under any of that subscriber's names —
+`ims.impi == "001010000000001"` and `ims.impu == "359000000001"` alike
+
+and its `Flow` button draws that filtered set as Wireshark's flow graph — the
+whole registration as one sequence diagram, UE to HSS. Rows are coloured by the
+reference point they are on, Gm and Mw through Cx, Rx, Gx and Ro, with a failure
+in red over the top of it. Gm is included even though
+IPsec protects it: the ESP keys of every registration are in the capture, so
+webshark takes them out of it and reads the protected traffic as the SIP it is.
+
+See [Tracing](doc/trace.md) for what each of those gives you.
 
 
 ## Specifications
@@ -106,5 +136,9 @@ To observe the packets
   - [x] Prometheus
   - [ ] Alertmanager
   - [x] Grafana
-- Testing (compose.yml)
-  - [x] [Doubango](doc/images.md#test)
+- Capture (monitor.yml, `debug` profile, [doc](doc/trace.md))
+  - [x] tcpdump
+  - [x] [webshark](https://github.com/lyatanski/webshark)
+  - [x] `ims.lua` — SIP and Diameter under one filter
+- Testing (compose.yml, `test` profile)
+  - [x] [pro2call](doc/images.md#test) — S5/S8 attach, IMS-AKA registration, calls, SMS

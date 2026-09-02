@@ -137,6 +137,12 @@ Reused: I-CSCF and S-CSCF Diameter counters.
 
 - Percentage KPIs show *No data* when idle (no traffic in the selected range)
   rather than a misleading `0%`.
+- The windowed Diameter round-trip
+  (`rate(…_replies_response_time) / rate(…_replies_received)`) is `0/0` — i.e.
+  `NaN` — while a leg is idle. A time series simply breaks the line there, but a
+  single-value chip prints `NaN`, so the architecture canvas filters the
+  denominator (`… / (rate(…_replies_received) > 0)`) to drop the sample and falls
+  back with `or` to the module's own lifetime `…_avg_response_time`.
 - Session KPIs are measured at the **S-CSCF**, consistent with TS 32.454's
   S-CSCF-centric session counters. Both originating and terminating directions
   are captured (`dir` label).

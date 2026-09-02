@@ -1,0 +1,18 @@
+include:
+- open5gs/pcrf.yml
+- open5gs/smf.yml
+- open5gs/upf.yml
+
+services:
+  hss:
+    image: ghcr.io/lyatanski/pro2call
+    command: cx_hss.lua
+    environment:
+      HSS_REALM:    ${REALM}
+      HSS_SCSCF:    sip:scscf.ims.${REALM}
+      IMS_K:        ${K}
+      IMS_OPC:      ${OPC}
+      HSS_STATS_MS: ${HSS_STATS_MS:-5000}
+    expose:
+    - 3868/tcp
+    restart: unless-stopped

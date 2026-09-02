@@ -1,0 +1,71 @@
+Store the tunnel parameters whatever port the UE registered from.
+
+ipsec_create() only hands the ipsec_t it just built to the contact when the
+REGISTER's Via sent-by port is 5060. Nothing requires a UE to source its
+initial, unprotected REGISTER from 5060 — RFC 3261 does not, and TS 33.203 only
+fixes the ports for the protected messages — so a UE that puts its own port in
+the Via keeps whatever save_pending() stored from the Security-Client header.
+That struct has the UE's spi_uc/spi_us but zero for spi_pc/spi_ps/port_pc/
+port_ps, because those are only chosen later, by acquire_spi() here.
+
+The tunnel is still created correctly (create_ipsec_tunnel() uses the local `s`),
+but the contact ends up describing it wrongly, and destroy_ipsec_tunnel() at
+expiry reads the contact. It removes the two outbound SAs, whose keys come from
+the UE's own SPIs, and silently fails to remove the two inbound ones, which are
+keyed by spi_pc/spi_ps == 0. Half the tunnel is left installed in the kernel on
+every ended registration.
+
+Storing is not conditional on anything: at this point create_ipsec_tunnel() has
+already succeeded, so the contact should describe what was created. Dropping the
+guard also stops req_sec_params->data.ipsec from being freed on the cleanup path
+in this case, which is right — it is now owned by the contact.
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index 974dce0..8904799 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -955,27 +955,26 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 		goto cleanup;
+ 	}
+ 
+-	if(ci.via_port == SIP_PORT) {
+-		if(req_sec_params != NULL) {
+-			ipsec_t *old_ipsec = pcontact->security_temp->data.ipsec;
+-			pcontact->security_temp->data.ipsec = s;
+-			// s is now owned by the contact (freed at contact expiry by
+-			// free_security()); do not free it on the cleanup path
+-			ipsec_swapped = 1;
+-			// free the ipsec_t we just replaced on the contact - it was
+-			// stored by save_pending() (or a prior ipsec_create()) and was
+-			// previously orphaned on every registration
+-			if(old_ipsec && old_ipsec != s) {
+-				free_ipsec_data(old_ipsec);
+-			}
+-		}
+-		// Update temp security parameters
+-		if(ul.update_temp_security(d, pcontact->security_temp->type,
+-				   pcontact->security_temp, pcontact)
+-				!= 0) {
+-			LM_ERR("Error updating temp security\n");
++	if(req_sec_params != NULL) {
++		ipsec_t *old_ipsec = pcontact->security_temp->data.ipsec;
++		pcontact->security_temp->data.ipsec = s;
++		// s is now owned by the contact (freed at contact expiry by
++		// free_security()); do not free it on the cleanup path
++		ipsec_swapped = 1;
++		// free the ipsec_t we just replaced on the contact - it was
++		// stored by save_pending() (or a prior ipsec_create()) and was
++		// previously orphaned on every registration
++		if(old_ipsec && old_ipsec != s) {
++			free_ipsec_data(old_ipsec);
+ 		}
+ 	}
++	// Update temp security parameters
++	if(ul.update_temp_security(
++			   d, pcontact->security_temp->type, pcontact->security_temp,
++			   pcontact)
++			!= 0) {
++		LM_ERR("Error updating temp security\n");
++	}
+ 
+ 	if(ul.update_pcontact(d, &ci, pcontact) != 0) {
+ 		LM_ERR("Error updating contact\n");

@@ -1,8 +1,15 @@
 replicaCount: 2
 
-redis:
-  criss: 0
-  cross: 1
+# Each replica owns one valkey database -- `db.offset + <ordinal>`
+db:
+  offset: 8
+
+# rtpengine log level: 7 is debug, 6 info
+logLevel: 6
+
+media:
+  portMin: 30000
+  portMax: 40000
 
 image:
   repository: ghcr.io/lyatanski/rtpengine

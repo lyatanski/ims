@@ -1,0 +1,88 @@
+{{- $root := . }}
+{{- range $name, $c := .Values.components }}
+{{- if $c.enabled }}
+{{- $ctx := dict "root" $root "name" $name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "core.name" $ctx }}
+  labels: {{- include "core.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "core.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+        {{- with $root.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels: {{- include "core.labels" $ctx | nindent 8 }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $c.pcscf }}
+      initContainers:
+      {{- include "core.waitims" $ctx | nindent 6 }}
+      {{- end }}
+      containers:
+      - name: open5gs
+        image: {{ $root.Values.image.repository }}:{{ $root.Values.image.tag | default $root.Chart.AppVersion }}
+        imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+        args: [{{ $c.daemon | quote }}, "-c", "/etc/open5gs.yaml"]
+        {{- if $c.privileged }}
+        securityContext:
+          privileged: true
+        {{- end }}
+        ports:
+        {{- range $port, $p := $c.ports }}
+        - name: {{ $port }}
+          containerPort: {{ $p.port }}
+          protocol: {{ $p.protocol }}
+        {{- end }}
+        {{- with (index $c.ports "metrics") }}
+        # open5gs serves /metrics as soon as the daemon is up, which is the most
+        # any of these can prove without speaking their own protocol.
+        readinessProbe:
+          httpGet: {path: /metrics, port: metrics}
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: {path: /metrics, port: metrics}
+          periodSeconds: 20
+          failureThreshold: 6
+        {{- end }}
+        {{- with $root.Values.resources }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
+        volumeMounts:
+        - name: conf
+          mountPath: /etc/open5gs.yaml
+          subPath: open5gs.yaml
+        {{- if and $c.peers (eq $root.Values.diameter.mode "file") }}
+        # file mode only. In inline mode the Diameter configuration is part of
+        # open5gs.yaml above and there is no second file to mount.
+        - name: conf
+          mountPath: /etc/freeDiameter/diameter.conf
+          subPath: diameter.conf
+        {{- end }}
+      {{- if $c.tun }}
+      {{- include "core.tun" $ctx | nindent 6 }}
+      {{- end }}
+      volumes:
+      - name: conf
+        configMap:
+          name: {{ include "core.name" $ctx }}
+      {{- with $root.Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

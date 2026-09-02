@@ -5,35 +5,27 @@ metadata:
   labels: {{- include "rtpengine.labels" . | nindent 4 }}
 data:
   rtpengine.conf: |
-    [{{ include "rtpengine.name" . }}-0]
-    log-level = 7
+    {{- $n := int .Values.replicaCount }}
+    {{- $valkey := printf "%s:%v" (include "valkey.name" .Subcharts.valkey) .Values.valkey.ports.valkey }}
+    {{- $off := int .Values.db.offset }}
+    {{- if gt (add $off $n) 16 }}
+      {{- fail (printf "rtpengine: db.offset (%d) + replicaCount (%d) exceeds valkey's 16 databases" $off $n) }}
+    {{- end }}
+    {{- range $i := until $n }}
+    {{- $own := add $off $i }}
+    [{{ include "rtpengine.name" $ }}-{{ $i }}]
+    log-level = {{ $.Values.logLevel }}
     table = -1
-    listen-http = 0.0.0.0:{{ .Values.monitor.port }}
-    listen-ng = 0.0.0.0:{{ .Values.service.port }}
+    listen-http = 0.0.0.0:{{ $.Values.monitor.port }}
+    listen-ng = 0.0.0.0:{{ $.Values.service.port }}
     interface = any
     timeout = 60
     silent-timeout = 3600
     tos = 184
-    port-min = 30000
-    port-max = 40000
+    port-min = {{ $.Values.media.portMin }}
+    port-max = {{ $.Values.media.portMax }}
     no-redis-required = true
-    redis-write = {{ template "valkey.name" .Subcharts.valkey }}:{{ .Values.valkey.ports.valkey }}/{{ .Values.redis.criss }}
-    redis-subscribe = {{ template "valkey.name" .Subcharts.valkey }}:{{ .Values.valkey.ports.valkey }}/{{ .Values.redis.cross }}
+    redis-write = {{ $valkey }}/{{ $i }}
+    redis-subscribe = {{ $valkey }}/{{ mod (add1 $i) $n }}
     redis-resolve-on-reconnect = true
-
-    [{{ include "rtpengine.name" . }}-1]
-    log-level = 7
-    table = -1
-    listen-http = 0.0.0.0:{{ .Values.monitor.port }}
-    listen-ng = 0.0.0.0:{{ .Values.service.port }}
-    interface = any
-    timeout = 60
-    silent-timeout = 3600
-    tos = 184
-    port-min = 30000
-    port-max = 40000
-    no-redis-required = true
-    redis-write = {{ template "valkey.name" .Subcharts.valkey }}:{{ .Values.valkey.ports.valkey }}/{{ .Values.redis.cross }}
-    redis-subscribe = {{ template "valkey.name" .Subcharts.valkey }}:{{ .Values.valkey.ports.valkey }}/{{ .Values.redis.criss }}
-    redis-resolve-on-reconnect = true
-
+    {{ end }}

@@ -121,8 +121,12 @@ configs:
           "diameter_agent": {
               "enabled": true,
               "sessions_conns": ["*localhost"],
-              "listen": ":3868",
-              "listen_net": "tcp",
+              // v0.11 dev replaced the scalar "listen"/"listen_net" pair with
+              // this array, and an unknown key in a known section is dropped
+              // in silence
+              "listeners": [
+                  { "address": ":3868", "network": "tcp" },
+              ],
               "origin_host": "ocs.${REALM}",
               "origin_realm": "${REALM}",
               "request_processors": [

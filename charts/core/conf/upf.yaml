@@ -1,0 +1,24 @@
+logger:
+  level: {{ .root.Values.logger.level }}
+global:
+upf:
+  metrics:
+    server:
+    - address: 0.0.0.0
+      port: {{ .c.ports.metrics.port }}
+  pfcp:
+    server:
+    - dev: {{ .root.Values.iface }}
+      advertise: {{ .root.Release.Name }}-upf-pfcp
+    client:
+      smf:
+      - address: {{ .root.Release.Name }}-smf-pfcp
+  gtpu:
+    server:
+    - address: 0.0.0.0
+      advertise: {{ .root.Release.Name }}-upf-gtpu
+  session:
+  - subnet: {{ .root.Values.session.subnet }}
+    gateway: {{ .root.Values.session.gateway }}
+    dnn: {{ .root.Values.session.dnn }}
+    dev: {{ .root.Values.session.dev }}

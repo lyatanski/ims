@@ -1,5 +1,5 @@
 include:
-- core.yml
+- ${CORE:-core.yml}   # CORE=stub.yml swaps the HSS for the pro2call Cx stub
 - billing.yml
 - monitor.yml
 
@@ -16,6 +16,12 @@ x-kamailio: &kamailio
     interval: 5s
     start_period: 5s
 
+x-route: &route
+  image: alpine
+  command: sh -c "ip route replace ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1) mtu 1450"
+  cap_add:
+  - NET_ADMIN
+
 services:
   pcscf:
     << : *kamailio
@@ -30,7 +36,7 @@ services:
     cap_add:
     - NET_ADMIN
     networks:
-      default:
+      default:            # Mw
         ipv4_address: ${IPSEC}
     depends_on:
       kmod:
@@ -85,13 +91,13 @@ services:
       interval: 5s
       start_period: 5s
 
-  # as UE IPs will not be in the setup IP range, they need special attention
-  route:
-    image: alpine
-    command: sh -c "ip route add ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u)"
+  route-sip:
+    << : *route
     network_mode: service:pcscf
-    cap_add:
-    - NET_ADMIN
+
+  route-rtp:
+    << : *route
+    network_mode: service:rtpengine
 
   kmod:
     image: alpine
@@ -126,36 +132,31 @@ services:
   test:
     profiles:
     - test
-    image: ghcr.io/lyatanski/test
-    command: gtp
+    image: ghcr.io/lyatanski/pro2call
     environment:
-      K:     ${K}
-      OPC:   ${OPC}
-      PLMN:  ${MCC}${MNC}
-      DIAL:  ${DIAL}
-      SCALE: ${SCALE}
-      REALM: ims.${REALM}
-      IPSEC: /usr/lib/ipsec.so
+      PGW_IP:            smf
+      GTPU_IFACE:        eth0
+      GTPU_INNER_IFACE:  eth0
+      GTP_T3_MS:  ${GTP_T3_MS:-3000}
+      IMS_K:      ${K}
+      IMS_OPC:    ${OPC}
+      IMS_MCC:    ${MCC}
+      IMS_MNC:    ${MNC}
+      IMS_REALM:  ims.${REALM}
+      IMS_IMSI:   ${MCC}${MNC}0000000001
+      IMS_SUBS:   ${SCALE}
+      IMS_MSISDN_CC:      ${DIAL}
+      IMS_MSISDN_DIGITS:  9
+      CALL_URI:  ${CALL_URI:-sip}
     cap_add:
-    - NET_ADMIN
+    - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
+    - BPF         # loading the GTP-U datapath
+    - PERFMON     # privileged verifier: skip the Spectre passes
     depends_on:
       icscf:
         condition: service_healthy
       scscf:
         condition: service_healthy
-
-#  pcap:
-#    profiles:
-#    - debug
-#    network_mode: host
-#    command: tcpdump -i any -w /pcap/trace.pcap
-#    volumes:
-#    - ./pcap:/pcap
-#    build:
-#      context: .
-#      dockerfile_inline: |
-#        FROM alpine
-#        RUN apk add tcpdump
 
 
 configs:
@@ -167,7 +168,7 @@ configs:
           Realm="ims.${REALM}"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
-          Workers="1"
+          Workers="4"
       >
               <Peer FQDN="pcrf.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
               <Auth id="16777236" vendor="10415"/> <!-- Rx 3GPP -->
@@ -183,7 +184,7 @@ configs:
           Realm="ims.${REALM}"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
-          Workers="1"
+          Workers="4"
       >
               <Peer FQDN="hss.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
               <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
@@ -199,7 +200,7 @@ configs:
           Realm="ims.${REALM}"
           Vendor_Id="10415"
           Product_Name="CDiameterPeer"
-          Workers="1"
+          Workers="4"
       >
               <Peer FQDN="hss.epc.${REALM}" Realm="epc.${REALM}" port="3868"/>
               <Peer FQDN="ocs.${REALM}" Realm="${REALM}" port="3868"/>
@@ -276,7 +277,10 @@ configs:
 networks:
   default:
     enable_ipv6: true
+    driver_opts:
+      com.docker.network.bridge.name: ims0
     ipam:
       config:
       - subnet: ${NETv4}
       - subnet: ${NETv6}
+

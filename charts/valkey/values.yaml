@@ -1,11 +1,24 @@
 image:
   repository: docker.io/valkey/valkey
   tag: 9-alpine
+  # The statefulset reads this; without it the rendered imagePullPolicy was the
+  # empty string.
+  pullPolicy: IfNotPresent
+
+# Same: `toYaml .Values.resources` rendered `resources: null` when the key was
+# simply absent from this file.
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+imagePullSecrets: []
 
 ports:
   valkey: 6379
   bus: 16379
 
 cluster:
-  primaries: 3
-  replicas: 1
+  primaries: 1
+  replicas: 0

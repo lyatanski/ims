@@ -1,0 +1,19 @@
+{{- $root := . }}
+{{- range $name, $c := .Values.components }}
+{{- if $c.enabled }}
+{{- $ctx := dict "root" $root "name" $name }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "core.name" $ctx }}
+  labels: {{- include "core.labels" $ctx | nindent 4 }}
+data:
+  open5gs.yaml: |
+    {{- tpl ($root.Files.Get (printf "conf/%s.yaml" $name)) (dict "root" $root "name" $name "c" $c) | nindent 4 }}
+  {{- if and $c.peers (eq $root.Values.diameter.mode "file") }}
+  diameter.conf: |
+    {{- include "core.diameter.conf" (dict "root" $root "name" $name "c" $c) | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

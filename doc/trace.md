@@ -1,53 +1,65 @@
 # Tracing
 
-Tracing IMS (IP Multimedia Subsystem) traffic can be achieved using several approaches, each with distinct advantages and limitations.
+Two ways to see IMS signalling, both wired up in this repo, each answering a
+different question.
 
-## [tcpdump](https://www.tcpdump.org/)
-**Overview:**
-`tcpdump` provides the most complete view of network activity by capturing all packets on an interface.
+| | question it answers | scope | run it with |
+|---|---|---|---|
+| [tcpdump](#tcpdump) | what was on the wire — SIP, Diameter, GTP, DNS, TCP, IPsec | all traffic | `--profile debug` |
+| [webshark](#webshark) | which frames belong to one subscriber, whatever the protocol | any capture | `--profile debug` |
 
-**Pros:**
-- Captures all traffic types (SIP, Diameter, DNS, TCP handshakes, etc.).
-- Independent of application logic or protocol implementation.
+    docker compose --profile test --profile debug up -d
 
-**Cons:**
-- Requires one capture per container, adding complexity in multi-container environments.
-- In Docker Compose setups, a single `tcpdump` for the entire network is possible but may produce prohibitively large capture files.
-- Combining multiple container captures into a single call flow trace can be cumbersome.
-- Real-time observation is not straightforward.
+|  | |
+|---|---|
+| webshark | <http://localhost:8085> |
 
+## tcpdump
 
-## [siptrace](https://kamailio.org/docs/modules/devel/modules/siptrace.html) (Kamailio module)
-**Overview:**
-The Kamailio `siptrace` module enables SIP message tracing and supports exporting data to HEP-compatible collectors such as [Homer](https://github.com/sipcapture/homer).
+One capture for the whole stack, in `monitor.yml` alongside the metrics it puts
+packets behind. It binds to `ims0` — the compose bridge, whose name `compose.yml`
+pins so the service can address it — and so holds every frame between containers
+exactly once, and nothing that is not on the stack's own network.
 
-**Pros:**
-- Integrates easily with HEP-based monitoring tools.
-- Offers flexible storage and retrieval options for SIP traces.
+    docker compose --profile debug up -d pcap
+    wireshark pcap/trace.pcap
 
-**Cons:**
-- Primarily supports SIP
+`-U` is set, so the file is valid up to its last frame at every moment. Copy it
+out of a running capture; nothing has to be stopped first.
 
-## [captagent](https://github.com/sipcapture/captagent)
-**Overview:**
-`captagent` acts as a HEP-compatible packet capture agent that can forward captured SIP and Diameter messages to tools like Homer.
+    docker compose cp pcap:/pcap/trace.pcap .
 
-**Pros:**
-- HEP-compatible and integrates seamlessly with Homer.
-- Supports multiple protocols (SIP, Diameter, etc.).
-- Serves as a middle ground between full network capture (`tcpdump`) and application-level tracing (`siptrace`).
+Expect infrastructure to dominate it: one run of the `test` profile held 20101
+frames, of which ~1500 were signalling and the rest was redis, cadvisor, loki and
+the scrapes.
 
-**Cons:**
-- Typically requires an additional container per monitored container
+### Which container did this frame come from?
 
+Both ends of it, by MAC: a bridge capture is real Ethernet and the addresses are
+the containers' own.
 
-## custom eBPF powered HEP Agent?
+    docker compose ps -q | xargs docker inspect \
+      -f '{{.Name}} {{range .NetworkSettings.Networks}}{{.MacAddress}} {{.IPAddress}}{{end}}'
 
+### Why the bridge works, and what binding to it costs
 
-## Summary Comparison
+A socket on a bridge device sees forwarded frames only while that device is in
+promiscuous mode — the kernel passes a copy up to the bridge itself only then.
+`tcpdump` sets it and ptcpdump did not, which is the whole of the old claim that
+a bound socket "sees almost nothing". Measured over one test run: **25 frames**
+with `-p`, every one of them ARP or ICMPv6 and not a single SIP, Diameter or ESP
+packet, against **3814** with promiscuous mode left on.
 
-| Tool | Scope | HEP-Compatible | Protocols | Deployment Overhead | Notes |
-|------|--------|----------------|------------|----------------------|--------|
-| **tcpdump** | All network traffic | No | All | High | Comprehensive but large and complex captures |
-| **siptrace** | SIP-level | Yes | SIP | Low–Medium | Tight Kamailio integration |
-| **captagent** | Selected protocols | Yes | SIP, Diameter | Medium | Balanced approach, integrates with Homer |
+The cost is that one capture covers one bridge. `CORE=priv.yml` puts S5/S8 and
+SGi on networks of their own, so it overrides the service back to `-i any`, which
+sees every bridge — and the host too, hence the filter it carries there, and each
+frame twice: leaving the sender as `sll.pkttype == 3`, arriving as `4`.
+
+## webshark
+
+Wireshark in the browser — `sharkd` behind a web UI, so the real dissectors over
+the same `pcap/` directory.
+
+    docker compose --profile debug up -d pcap webshark
+
+<http://localhost:8085>

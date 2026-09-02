@@ -1,0 +1,45 @@
+logger:
+  level: {{ .root.Values.logger.level }}
+global:
+smf:
+  metrics:
+    server:
+    - address: 0.0.0.0
+      port: {{ .c.ports.metrics.port }}
+{{- with .c.sbi }}
+  sbi:
+    server:
+    - address: 0.0.0.0
+      port: {{ . }}
+    client:
+      nrf:
+      - uri: http://{{ $.root.Release.Name }}-nrf:{{ . }}
+{{- end }}
+  {{- include "core.diameter" . | nindent 2 }}
+  pfcp:
+    server:
+    - dev: {{ .root.Values.iface }}
+      advertise: {{ .root.Release.Name }}-smf-pfcp
+    client:
+      upf:
+      - address: {{ .root.Release.Name }}-upf-pfcp
+  gtpc:
+    server:
+    - address: 0.0.0.0
+  gtpu:
+    server:
+    - address: 0.0.0.0
+      advertise: {{ .root.Release.Name }}-upf-gtpu
+  session:
+  - subnet: {{ .root.Values.session.subnet }}
+    gateway: {{ .root.Values.session.gateway }}
+    dnn: {{ .root.Values.session.dnn }}
+  dns:
+  - 8.8.8.8
+  # What the UE gets in the PCO, and therefore where it sends REGISTER. The
+  # P-CSCF Service is headless, so this resolves to the pod address the UE has
+  # to reach directly -- a cluster IP would break the IPsec SA.
+  p-cscf:
+  - {{ .root.Values.ims.release }}-pcscf
+  ctf:
+    enabled: no

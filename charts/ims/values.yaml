@@ -1,16 +1,33 @@
-# Default values for ims.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
-
-# PLMN = MNC + MCC;
+# PLMN = MCC + MNC.
 mcc: "001"
 mnc: "01"
 
-# convinience variable for doman/realm
-# should not be necessary to be configured explicitly
-# the default shoud suffice in most cases
+# Home domain. The default is the 3GPP form; it should not need overriding.
 domain: mnc{{ .Values.mnc }}.mcc{{ .Values.mcc }}.3gppnetwork.org
 
+# Diameter realms.
+realm:
+  ims: ims.{{ tpl .Values.domain . }}
+  epc: epc.{{ tpl .Values.domain . }}
+
+# Under `global` because Helm passes that -- and only that -- down to the
+# subcharts, and the CoreDNS zone below is rendered by the dns subchart with its
+# own context. Anything the zone templates need has to live here.
+global:
+  # Helm release name of the `core` chart. Its Service names are prefixed with
+  # it, and one release cannot look into another at render time, so it is a
+  # value. The CoreDNS rule for the EPC realm rewrites names onto it.
+  core:
+    release: core
+  ue:
+    subnet: 10.10.0.0/16
+    mtu: 1452
+
+# Seconds between reconciles of the UE route.
+# loop rather than a one-shot because a pod's routing table does not survive rescheduling
+reconcile: 10
+
+# valkey database numbers, one per role.
 db:
   proxy: 2
   interrogating: 3
@@ -18,19 +35,31 @@ db:
 
 replicaCount: 1
 
-# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
   repository: ghcr.io/lyatanski/kamailio
   tag: latest
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
-# This is to override the chart name.
 nameOverride: ""
 fullnameOverride: ""
 
+# Diameter worker threads per CSCF
+workers: 4
+
 test:
-  pgwc: core-smf
+  image: ghcr.io/lyatanski/pro2call:latest
+  # Subscribers the load generator attaches and registers, each on its own PDN
+  # connection. One is the connectivity check the helm test hook is for; raise
+  # it to put the chain under load.
+  subscribers: 1
+  t3ms: 3000
+  k: "3919F39741B626604B4BACE23ACFB094"
+  opc: "177FAD988A964A3AD0421B4693257056"
+  imsi: "{{ .Values.mcc }}{{ .Values.mnc }}0000000001"
+  msisdn:
+    cc: "359"
+    digits: 9
 
 podAnnotations: {}
 
@@ -38,42 +67,42 @@ service:
   port: 5060
 
 resources: {}
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
 
 autoscaling:
   enabled: false
   minReplicas: 1
   maxReplicas: 100
   targetCPUUtilizationPercentage: 80
-  # targetMemoryUtilizationPercentage: 80
 
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}
+
+dra:
+  enabled: false
 
 dns:
   service:
     spec:
-      clusterIP: 10.233.0.69
+      clusterIP: '{{ include "ims.dnsIP" . }}'
   zones:
   - zone: 3gppnetwork.org
     plugins:
     - name: template
+      parameters: IN ANY
+      configBlock: |-
+        match "(^|[.])(?P<name>[^.]*)\.epc\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
+        answer "{{`{{ .Name }}`}} 30 IN CNAME {{ .Values.global.core.release }}-{{`{{ .Group.name }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
+        fallthrough
+    - name: template
       parameters: IN SRV
       configBlock: |-
         match "(?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
-        answer "{{`{{ .Name }}`}} 1D SRV 0 0 5060 {{ .Release.Name }}-{{`{{ or .Group.name \"icscf\" }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
+        answer "{{`{{ .Name }}`}} 30 SRV 0 0 5060 {{ .Release.Name }}-{{`{{ or .Group.name \"icscf\" }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
         fallthrough
     - name: template
       parameters: IN ANY
       configBlock: |-
         match "(^|[.])(?P<name>[^.]*).*\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
-        answer "{{`{{ .Name }}`}} 1D IN CNAME {{ .Release.Name }}-{{`{{ .Group.name }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
+        answer "{{`{{ .Name }}`}} 30 IN CNAME {{ .Release.Name }}-{{`{{ .Group.name }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
         fallthrough

@@ -1,0 +1,64 @@
+services:
+  upf:
+    image: ghcr.io/lyatanski/open5gs
+    command: upfd -c /etc/upf/open5gs.yaml
+    configs:
+    - source: upf.yaml
+      target: /etc/upf/open5gs.yaml
+    expose:
+    - 8805/udp
+    - 2152/udp
+    devices:
+    - /dev/net/tun
+    cap_add:
+    - NET_ADMIN
+    restart: unless-stopped
+    depends_on:
+      smf:
+        condition: service_started
+
+  upftun:
+    image: alpine
+    command:
+    - sh
+    - -c
+    - |
+      sleep 3
+      ip addr add ${UEGW}/16 dev tunue;
+      ip link set tunue up
+    network_mode: service:upf
+    cap_add:
+    - NET_ADMIN
+    restart: on-failure
+
+configs:
+  upf.yaml:
+    content: |
+      logger:
+        level: error          # info floods the single event loop under load
+        file:
+          path: /var/log/upf.log
+      global:
+        max:
+          ue: 16384           # session/UE context pool; sized for high create rate
+      upf:
+        metrics:
+          server:
+          - address: 0.0.0.0
+            port: 9091
+        pfcp:
+          server:
+          - dev: eth0
+            advertise: upf
+          client:
+            smf:
+            - address: smf
+        gtpu:
+          server:
+          - address: 0.0.0.0
+            advertise: upf
+        session:
+        - subnet: ${UENET}
+          gateway: ${UEGW}
+          dnn: ims
+          dev: tunue

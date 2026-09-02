@@ -1,0 +1,124 @@
+# PLMN = MCC + MNC. Subscriber IMSIs and both Diameter realms derive from it.
+mcc: "001"
+mnc: "01"
+
+# Home domain. The default is the 3GPP form and should not need overriding.
+domain: mnc{{ .Values.mnc }}.mcc{{ .Values.mcc }}.3gppnetwork.org
+
+realm:
+  epc: epc.{{ tpl .Values.domain . }}
+  ims: ims.{{ tpl .Values.domain . }}
+
+# Helm release name of the `ims` chart. Service names are prefixed with it and
+# nothing is discoverable across releases at render time, so it is a value.
+ims:
+  release: ims
+
+image:
+  repository: ghcr.io/lyatanski/open5gs
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+logger:
+  level: info
+
+# freeDiameter AppServThreads. `file` mode only -- see diameter.mode.
+workers: 16
+
+# freeDiameter Tc, the peer reconnect interval, in seconds.
+tcTimer: 5
+
+# LoadExtension dbg_msg_dumps, which prints every Diameter message.
+debug: false
+
+diameter:
+  mode: file
+  blackhole: 169.254.0.1
+
+mongodb:
+  enabled: true
+  persistence:
+    enabled: false
+  auth:
+    enabled: false
+
+# provision HSS subscribers
+subscribers:
+  enabled: true
+  count: 1
+  k: "3919F39741B626604B4BACE23ACFB094"
+  opc: "177FAD988A964A3AD0421B4693257056"
+  dial: "359"
+  image: docker.io/bitnami/mongodb:latest
+
+# The pod's interface. PFCP binds to it by name so that the node ID it
+# advertises is the pod address rather than whatever a wildcard bind picks.
+iface: eth0
+
+# The UE address pool: handed out by the SMF, routed by the UPF.
+session:
+  subnet: 10.10.0.0/16
+  gateway: 10.10.0.1
+  dnn: ims
+  dev: tunue
+
+route:
+  enabled: true
+
+reconcile: 10
+
+components:
+  hss:
+    enabled: true
+    daemon: hssd
+    ports:
+      diameter: {port: 3868, protocol: TCP, as: ""}
+      metrics:  {port: 9090, protocol: TCP, as: metrics}
+    peers:
+    - {node: icscf, realm: ims}
+    - {node: scscf, realm: ims}
+
+  pcrf:
+    enabled: true
+    daemon: pcrfd
+    ports:
+      diameter: {port: 3868, protocol: TCP, as: ""}
+      metrics:  {port: 9090, protocol: TCP, as: metrics}
+    peers:
+    - {node: smf,   realm: epc}
+    - {node: pcscf, realm: ims}
+
+  smf:
+    enabled: true
+    daemon: smfd
+    # Hold the daemon until the `ims` release's P-CSCF Service resolves, because
+    # open5gs resolves it once and tolerates a miss silently
+    pcscf: true
+    ports:
+      gtpc:     {port: 2123, protocol: UDP, as: "", headless: true}
+      diameter: {port: 3868, protocol: TCP, as: gx}
+      pfcp:     {port: 8805, protocol: UDP, as: pfcp, headless: true}
+      metrics:  {port: 9090, protocol: TCP, as: metrics}
+    peers:
+    - {node: pcrf, realm: epc, connect: true, address: ""}
+    sbi: ""
+
+  upf:
+    enabled: true
+    daemon: upfd
+    # The UPF owns a TUN device and the GTP-U datapath.
+    privileged: true
+    tun: true
+    ports:
+      gtpu:    {port: 2152, protocol: UDP, as: gtpu, headless: true}
+      pfcp:    {port: 8805, protocol: UDP, as: pfcp, headless: true}
+      metrics: {port: 9090, protocol: TCP, as: metrics}
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}

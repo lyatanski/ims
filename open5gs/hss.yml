@@ -1,0 +1,169 @@
+services:
+  hss:
+    image: ghcr.io/lyatanski/open5gs
+    command: hssd -c /etc/hss/open5gs.yaml
+    configs:
+    - source: hss.yaml
+      target: /etc/hss/open5gs.yaml
+    - source: hss.diameter
+      target: /etc/hss/diameter.conf
+    volumes:
+    - cert-hss:/var/hss
+    expose:
+    - 3868/tcp
+    depends_on:
+      cert-hss:
+        condition: service_completed_successfully
+      subscribers:
+        condition: service_completed_successfully
+
+  cert-hss:
+    image: ghcr.io/lyatanski/openssl
+    command: req -new -batch -x509 -days 3650 -nodes -newkey rsa:1024 -out crt.pem -keyout key.pem -subj /CN=hss.epc.${REALM}
+    working_dir: /var/hss
+    volumes:
+    - cert-hss:/var/hss
+
+  mongo:
+    image: mongo
+    command: --bind_ip 0.0.0.0
+    #healthcheck:
+    #  test: mongosh --quiet --eval db.runCommand("ping").ok
+    #  interval: 5s
+    #  timeout: 5s
+    #  retries: 10
+    tmpfs:
+    - /data/configdb
+    - /data/db
+    expose:
+    - 27017/udp
+    - 27017/tcp
+
+  subscribers:
+    image: mongo
+    entrypoint: mongosh --host mongo --file /opt/subscribers.js
+    configs:
+    - source: subscribers
+      target: /opt/subscribers.js
+    tmpfs:
+    - /data/configdb
+    - /data/db
+    depends_on:
+      mongo:
+        condition: service_started
+    restart: on-failure
+
+configs:
+  hss.yaml:
+    content: |
+      db_uri: mongodb://mongo/open5gs
+      hss:
+        freeDiameter: /etc/hss/diameter.conf
+          #identity: hss.epc.${REALM}
+          #load_extension:
+          #- module: /opt/lib/freeDiameter/dbg_msg_dumps.fdx
+          #  conf: 0x4444
+          #- module: /opt/lib/freeDiameter/dict_rfc5777.fdx
+          #- module: /opt/lib/freeDiameter/dict_mip6i.fdx
+          #- module: /opt/lib/freeDiameter/dict_nasreq.fdx
+          #- module: /opt/lib/freeDiameter/dict_nas_mipv6.fdx
+          #- module: /opt/lib/freeDiameter/dict_dcca.fdx
+          #- module: /opt/lib/freeDiameter/dict_dcca_3gpp.fdx
+        metrics:
+          server:
+          - address: 0.0.0.0
+            port: 9090
+        sms_over_ims: "sip:smsc.epc.${REALM}"
+      logger:
+        level: error          # info floods the single event loop under load
+        file:
+          path: /var/log/hss.log
+      global:
+        max:
+          ue: 16384           # subscriber/auth context pool
+
+  hss.diameter:
+    content: |
+      Identity = "hss.epc.${REALM}";
+      No_SCTP;
+      AppServThreads = 16;
+      TLS_Cred = "/var/hss/crt.pem", "/var/hss/key.pem";
+      TLS_CA = "/var/hss/crt.pem";
+
+      LoadExtension = "/opt/lib/freeDiameter/dbg_msg_dumps.fdx" : "0x4444";
+      LoadExtension = "/opt/lib/freeDiameter/dict_rfc5777.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_mip6i.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_nasreq.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_nas_mipv6.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_dcca.fdx";
+      LoadExtension = "/opt/lib/freeDiameter/dict_dcca_3gpp.fdx";
+
+      ConnectPeer = "icscf.ims.${REALM}" { No_TLS; };
+      ConnectPeer = "scscf.ims.${REALM}" { No_TLS; };
+
+  subscribers:
+    content: |
+      db = db.getSiblingDB('open5gs')
+      plmn = '${MCC}${MNC}';
+      l = 15 - plmn.length;
+      db.subscribers.createIndex({ imsi: 1 }, { unique: true });
+      db.subscribers.createIndex({ msisdn: 1 });
+      for(i = 1; i <= ${SCALE}; i++){
+        try { db.subscribers.insertOne(
+        {
+            _id: new ObjectId(),
+            schema_version: NumberInt(1),
+            imsi: `$${plmn}$${String(i).padStart(l, "0")}`,
+            msisdn: ['${DIAL}'+'000000000'.substring(`$${i}`.length)+`$${i}`],
+            imeisv: [],
+            mme_host: [],
+            mm_realm: [],
+            purge_flag: [],
+            slice:[
+            {
+                sst: NumberInt(1),
+                default_indicator: true,
+                session: [
+                {
+                    name : 'internet',
+                    type : NumberInt(3),
+                    qos : {
+                        index: NumberInt(9),
+                        arp: {
+                            priority_level : NumberInt(8),
+                            pre_emption_capability: NumberInt(1),
+                            pre_emption_vulnerability: NumberInt(2)
+                        }
+                    },
+                    ambr: {
+                        downlink: { value: NumberInt(1000000000), unit: NumberInt(0) },
+                        uplink: { value: NumberInt(1000000000), unit: NumberInt(0) }
+                    },
+                    pcc_rule: [],
+                    _id: new ObjectId(),
+                }],
+                _id: new ObjectId(),
+            }],
+            security:
+            {
+                k : '${K}',
+                op : null,
+                opc : '${OPC}',
+                amf : '8000',
+            },
+            ambr :
+            {
+                downlink : { value: NumberInt(1000000000), unit: NumberInt(0)},
+                uplink : { value: NumberInt(1000000000), unit: NumberInt(0)}
+            },
+            access_restriction_data: 32,
+            network_access_mode: 0,
+            subscriber_status: 0,
+            operator_determined_barring: 0,
+            subscribed_rau_tau_timer: 12,
+            __v: 0
+        }) } catch (e) { if (e.code !== 11000) throw e }  // ignore dup on re-seed
+      }
+
+volumes:
+  cert-hss:

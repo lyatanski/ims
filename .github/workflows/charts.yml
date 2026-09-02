@@ -1,28 +1,31 @@
 name: charts
 on:
-  schedule:
-  - cron: '0 1 * * SUN'
-  push:
+  workflow_run:
+    workflows: [container]
+    types: [completed]
 permissions: write-all
 
 jobs:
   charts:
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-    - name: Update dependencies HSS
-      run: helm dependency update charts/hss
+    - name: Lint
+      run: |
+        helm dependency update charts/core
+        helm dependency update charts/rtpengine
+        helm dependency update charts/ims
+        helm lint charts/core charts/ims
 
-    - name: Package Open5GS
-      run: helm package --dependency-update charts/core
-
-    - name: Update dependencies RTPengine
-      run: helm dependency update charts/rtpengine
-
-    - name: Package IMS
-      run: helm package --dependency-update charts/ims
+    - name: Package
+      run: |
+        helm package --dependency-update charts/core
+        helm package --dependency-update charts/ims
 
     - name: Log in
       run: helm registry login --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} oci://ghcr.io/
@@ -42,11 +45,18 @@ jobs:
     - name: Create KinD Cluster
       uses: helm/kind-action@v1
 
-    - name: Install IMS
-      run: helm install --set dns.service.spec.clusterIP=$(kubectl cluster-info dump | sed -n 's/.*--service-cluster-ip-range=\([0-9]\+\.[0-9]\+\.[0-9]\+\.\).*/\169/p' | sort -u) ims oci://ghcr.io/${{ github.actor }}/ims
-
     - name: Install Open5GS
       run: helm install core oci://ghcr.io/${{ github.actor }}/core
 
-    - name: Check
-      run: kubectl get all
+    - name: Install IMS
+      run: helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m
+
+    - name: Test
+      run: helm test ims --logs --timeout 10m
+
+    - name: Debug
+      if: always()
+      run: |
+        kubectl get pods,svc
+        kubectl describe pod -l app.kubernetes.io/instance=ims
+        for d in $(kubectl get deploy -o name); do echo "== $d"; kubectl logs $d --tail=100; done

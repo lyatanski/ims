@@ -14,3 +14,4 @@ dependencies:
 - name: dra
   version: "*"
   repository: file://../dra
+  condition: dra.enabled

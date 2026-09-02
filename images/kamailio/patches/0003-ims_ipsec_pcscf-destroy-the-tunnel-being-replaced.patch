@@ -1,0 +1,77 @@
+Destroy the previous tunnel when a re-registration replaces it.
+
+update_contact_ipsec_params() only reuses the contact's existing SPI/port pair
+when ipsec_reuse_server_port is on AND the new CK/IK match the stored ones.
+A re-registration challenged with a fresh AKA vector fails that test, so
+acquire_spi() hands out a new pair and create_ipsec_tunnel() installs a second
+tunnel. Nothing removes the first one: ipsec_create() replaces the contact's
+ipsec_t and frees the struct, but the kernel state it described stays, and its
+pair is never released back to the pool.
+
+What survives is specifically the old inbound SAs and the old policies. The
+outbound SAs are keyed by dst=UE plus the UE's own spi_uc/spi_us, which a UE
+that keeps its Security-Client SPIs across re-registrations does not change, so
+the new tunnel simply overwrites those states. The inbound ones are keyed by the
+P-CSCF's spi_pc/spi_ps, which just changed — so they are a distinct pair of
+states that nothing refers to any more. At contact expiry destroy_ipsec_tunnel()
+tears down whatever the contact currently points at, and the orphan is left
+installed for good. Every re-challenge therefore leaks two SAs, four policies
+and one slot out of ipsec_max_connections.
+
+The teardown has to happen before create_ipsec_tunnel(), not after: as above the
+two tunnels share the UE's SPIs, so removing the old one afterwards would delete
+the outbound states the new one had just installed. Guarded on the stored
+parameters being a real, different tunnel — a first registration has the
+placeholder ipsec_t from save_pending(), whose spi_pc/spi_ps/port_pc/port_ps are
+all zero, and destroying that would remove the outbound SAs by the UE's SPIs
+while leaving nothing else to clean up.
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index 8904799..861f101 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -862,6 +862,7 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 	security_t *req_sec_params = NULL;
+ 	ipsec_t *s = NULL;
+ 	ipsec_t *old_s = NULL;
++	ipsec_t *old_ipsec = NULL;
+ 	// set to 1 once req_sec_params->data.ipsec is handed to the contact (initial
+ 	// registration); if it stays 0 that ipsec_t was only used to build the
+ 	// tunnel and must be freed before returning, otherwise it leaks
+@@ -949,6 +950,28 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 		goto cleanup;
+ 	}
+ 
++	// If the contact already had a tunnel and update_contact_ipsec_params()
++	// did not reuse its parameters - a re-registration whose CK/IK changed
++	// takes a fresh pair from acquire_spi() - that tunnel is still installed in
++	// the kernel and its port pair is still marked used. Tear it down here,
++	// before the replacement is created: the old and the new one share the UE's
++	// SPIs, so their outbound SAs are the same kernel states and removing them
++	// afterwards would take the new tunnel's with them.
++	old_ipsec = pcontact->security_temp->data.ipsec;
++	if(old_ipsec && old_ipsec != s && old_ipsec->spi_pc && old_ipsec->spi_ps
++			&& old_ipsec->port_pc && old_ipsec->port_ps
++			&& (old_ipsec->spi_pc != s->spi_pc
++					|| old_ipsec->spi_ps != s->spi_ps
++					|| old_ipsec->port_pc != s->port_pc
++					|| old_ipsec->port_ps != s->port_ps)) {
++		LM_DBG("Replacing tunnel on contact [%.*s]: destroying the previous one "
++			   "(client port %d, server port %d, spi_pc %u, spi_ps %u)\n",
++				ci.aor.len, ci.aor.s, old_ipsec->port_pc, old_ipsec->port_ps,
++				old_ipsec->spi_pc, old_ipsec->spi_ps);
++		destroy_ipsec_tunnel(
++				ci.received_host, old_ipsec, pcontact->contact_port);
++	}
++
+ 	fun_ret_c = create_ipsec_tunnel(&req->rcv.src_ip, s);
+ 	if(fun_ret_c != 0) {
+ 		LM_ERR("IPSEC tunnel creation failed.\n");
+@@ -956,7 +979,7 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 	}
+ 
+ 	if(req_sec_params != NULL) {
+-		ipsec_t *old_ipsec = pcontact->security_temp->data.ipsec;
++		old_ipsec = pcontact->security_temp->data.ipsec;
+ 		pcontact->security_temp->data.ipsec = s;
+ 		// s is now owned by the contact (freed at contact expiry by
+ 		// free_security()); do not free it on the cleanup path
