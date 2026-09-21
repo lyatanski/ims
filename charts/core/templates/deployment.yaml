@@ -54,7 +54,11 @@ spec:
           periodSeconds: 20
           failureThreshold: 6
         {{- end }}
-        {{- with $root.Values.resources }}
+        # Per-component: the SMF and UPF pre-allocate session pools sized by
+        # `global.max.ue` and idle in the hundreds of MiB, while hssd and pcrfd
+        # idle in the tens. `components.<name>.resources` wins; `resources` is
+        # the shared fallback.
+        {{- with ($c.resources | default $root.Values.resources) }}
         resources: {{- toYaml . | nindent 10 }}
         {{- end }}
         volumeMounts:

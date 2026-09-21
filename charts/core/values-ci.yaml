@@ -1,0 +1,55 @@
+# Requests only, shrunk to fit a single-node test cluster.
+#
+# The defaults in values.yaml are the measured steady-state demand of one
+# capacity unit -- ~200 registrations/s -- and across both charts they add up
+# to 5.8 cores of requests. A KinD node on a GitHub `ubuntu-latest` runner has
+# 4 vCPU, so the default install leaves pods Pending and `--wait` times out.
+#
+# Only `requests` are touched. Limits stay at the measured envelope, because a
+# limit does not affect scheduling and lowering one would OOM-kill a pod whose
+# idle working set is already larger (the SMF idles at ~448 MiB of `maxUe`
+# pool, the P-CSCF at ~316 MiB of shm and forked IPsec receivers).
+#
+# Use for CI and for a laptop cluster running the `test.subscribers: 1`
+# connectivity check. Do not use to carry load.
+
+# The P-CSCF list the SMF puts in the PCO, and with charts/ims/values-ci.yaml's
+# Gm attachment on it has to be the address on gm0 rather than the `ims-pcscf`
+# Service the chart defaults to: ims_ipsec_pcscf binds the protected ports on
+# that interface, and a protected REGISTER arriving on the pod address instead
+# has no SA to match. It is dropped, and the symptom is a registration that
+# gets its 401 and then goes quiet.
+#
+# A literal, because this file installs before the `ims` release exists to be
+# asked for the address. It is safe to fix here and nowhere else: host-local
+# allocates upward from `rangeStart`, and the P-CSCF is the only pod attaching
+# to that network, so on a fresh cluster it is always .10. Move that range and
+# this moves with it.
+#
+# kind.sh does not depend on the guess -- it installs `ims` first, reads the
+# address off the pod, and passes it with --set, which wins over this file.
+ims:
+  pcscf:
+  - 10.20.0.10
+components:
+  hss:
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 2, memory: 256Mi}
+  pcrf:
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 1500m, memory: 256Mi}
+  smf:
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 2500m, memory: 1Gi}
+  upf:
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 2, memory: 768Mi}
+
+mongodb:
+  resources:
+    requests: {cpu: 100m, memory: 192Mi}
+    limits: {cpu: 1500m, memory: 1Gi}

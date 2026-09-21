@@ -7,6 +7,11 @@ sequenceDiagram
     P-CSCF->>UE1: SIP 100 - Trying
     P-CSCF->>S-CSCF: SIP - INVITE
     S-CSCF->>P-CSCF: SIP 100 - Trying
+    opt Request-URI is a number (tel URI, or sip;user=phone)
+        Note over S-CSCF: TS 24.229 5.4.3.2<br>A tel URI carries a number and no host, so nothing can route it as it stands.<br>A number dialled in a local form -- behind an international prefix (00...) or a<br>national trunk prefix -- is first normalised into +E.164 against the served user's<br>dial plan; one in neither form is left exactly as dialled, which is what a short<br>code needs. The S-CSCF then translates it into a SIP URI by ENUM (RFC 6116):<br>the digits are reversed into a name under the operator's ENUM tree, and the<br>NAPTR found there carries the regexp that rewrites the number into the URI.<br>The tree answers only for the ranges this network serves, so a miss means the<br>number is not an IMS number: it leaves through the trunk (the BGCF role,<br>TS 23.228 4.3.4) if one is configured, and is answered 404 if not.
+        S-CSCF->>DNS: DNS - NAPTR 1.0.0.0.0.0.0.0.9.5.3.e164.mnc01.mcc001.3gppnetwork.org
+        DNS->>S-CSCF: DNS - NAPTR E2U+sip, rewriting +359000000001 into sip:359000000001@ims.mnc01.mcc001.3gppnetwork.org
+    end
     S-CSCF->>OCS: Diameter - initial orig Credit-Control-Request (CCR)
     OCS->>S-CSCF: Diameter - initial orig Credit-Control-Answer (CCA)
     Note over S-CSCF: TS 23.228 5.5.2<br>The Serving-CSCF handling session origination performs an analysis of the destination address<br>and forwards the request to the Interrogating-CSCF for the terminating user.<br>It could be local I-CSCF, if a subscriber of the same operator, or<br>I-CSCF entry point of other operator.

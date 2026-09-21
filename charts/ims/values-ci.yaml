@@ -1,0 +1,116 @@
+# The single-node profile: a KinD cluster, for the GitHub Actions chart test
+# and for a laptop running the `test.subscribers: 1` connectivity check.
+#
+# It is no longer a no-Multus profile. Both callers stand Multus up first --
+# `./kind.sh prepare` does it for either -- because turning the attachments off
+# was not free: it is exactly the DNAT-free path they exist to provide that
+# stopped being covered, and that path is the one thing about this chart a
+# Service cannot be substituted for.
+#
+# Two things below are what a single node costs, and neither changes the code
+# path under test:
+#
+#   - `bridge` rather than the `macvlan` values.yaml proposes. A macvlan child
+#     cannot talk to its own parent's host, and here the UE sits behind the
+#     node, so macvlan can never carry this test. `isGateway` puts .1 on the
+#     node and it routes. The chart writes `config` out verbatim either way.
+#   - `host-local` rather than whereabouts, which is one more operator to
+#     install and whose reconciler is not what is under test.
+#
+# The `null`s are load-bearing and are the trap in writing a `config` of a
+# different plugin type to the chart's: Helm merges maps rather than replacing
+# them, so changing `type` does not take the old type's keys with it. Without
+# them the rendered config carries macvlan's `master` and `mode` beside the
+# bridge settings and whereabouts' `range` beside host-local's `subnet`. Both
+# plugins ignore what they do not recognise, so it would work while reading as
+# though values.yaml were still in force.
+gm:
+  enabled: true
+  config:
+    cniVersion: 0.3.1
+    type: bridge
+    bridge: gm0
+    isGateway: true
+    master: null
+    mode: null
+    ipam:
+      type: host-local
+      subnet: 10.20.0.0/24
+      gateway: 10.20.0.1
+      # host-local allocates upward from here, and the P-CSCF is the only pod
+      # on this network, so on a fresh cluster it is always .10. That is what
+      # charts/core/values-ci.yaml pins the PCO to -- moving this range moves
+      # the address, and the two have to be changed together.
+      rangeStart: 10.20.0.10
+      rangeEnd: 10.20.0.250
+      range: null
+
+global:
+  ue:
+    # The Gm network's router rather than the pod's own default route. With the
+    # attachment on those stop being the same thing: the UE pool is reached
+    # through 10.20.0.1, while the default route still points at the primary
+    # CNI. See the `ueroute` sidecar.
+    via: 10.20.0.1
+
+# Requests only, shrunk to fit a single-node test cluster -- the companion to
+# charts/core/values-ci.yaml, which carries the reasoning.
+cscf:
+  proxy:
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 2, memory: 1Gi}
+  interrogating:
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 1, memory: 384Mi}
+  serving:
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 2, memory: 768Mi}
+
+rtpengine:
+  media:
+    # Restated in full because Helm replaces lists rather than merging them:
+    # `internal` gains the bridge network, and `external` has to be written out
+    # again beside it or it vanishes, taking the `outgoing` and `incoming`
+    # templates that name it with it.
+    #
+    # No `null`s needed here, for that same reason -- a replaced list brings
+    # nothing of values.yaml's macvlan entry with it.
+    interfaces:
+    - name: internal
+      address: media0
+      network:
+        enabled: true
+        name: media
+        config:
+          cniVersion: 0.3.1
+          type: bridge
+          bridge: media0
+          isGateway: true
+          ipam:
+            type: host-local
+            subnet: 10.30.0.0/24
+            gateway: 10.30.0.1
+            rangeStart: 10.30.0.10
+            rangeEnd: 10.30.0.250
+            # The return path for media: rtpengine answers on this interface
+            # and the UE is out through the UPF, not the primary CNI.
+            routes:
+            - dst: 10.10.0.0/16
+              gw: 10.30.0.1
+    - name: external
+      alias: internal
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 2, memory: 512Mi}
+  valkey:
+    resources:
+      requests: {cpu: 50m, memory: 32Mi}
+      limits: {cpu: 1, memory: 256Mi}
+
+dns:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 1, memory: 256Mi}

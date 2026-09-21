@@ -13,6 +13,32 @@ realm:
 # nothing is discoverable across releases at render time, so it is a value.
 ims:
   release: ims
+  # How many Diameter identities to accept per CSCF role. Each CSCF replica
+  # presents its own Origin-Host -- `<release>-<role>-<ordinal>.ims.<realm>` --
+  # and freeDiameter accepts an identity only if a `ConnectPeer` line names it;
+  # an unnamed one is refused with DIAMETER_UNKNOWN_PEER. (The wildcard
+  # alternative, the acl_wl extension, matches the name and then refuses it
+  # anyway unless the connection is TLS-protected, and SecPort is 0 here.)
+  #
+  # Entries whose pods do not exist cost nothing beyond a failed connect every
+  # TcTimer, so this is a ceiling rather than a count -- but it is read at
+  # startup, so raising it later means restarting the HSS and the PCRF. Set it
+  # once, above any replica count the IMS side is likely to reach.
+  replicas: 4
+  # What goes in the PCO as the P-CSCF list, and therefore where the UE sends
+  # REGISTER. Empty derives it from the P-CSCF's headless Service, which
+  # publishes pod addresses -- correct only while Gm rides the primary CNI.
+  #
+  # With the ims chart's `gm` attachment on (its default), the address the UE
+  # must reach is the one Multus gave the Gm interface, and that is in no field
+  # Kubernetes can project and no name this Service resolves to: Endpoints
+  # carry the primary CNI's address and nothing else. So it is named here, as
+  # literal addresses, one per P-CSCF.
+  #
+  # Nothing checks it. Point it at the wrong interface and the UE registers
+  # over the one the attachment exists to replace -- which works, so the only
+  # symptom is that the DNAT-free path is silently not being used.
+  pcscf: []
 
 image:
   repository: ghcr.io/lyatanski/open5gs
@@ -21,11 +47,24 @@ image:
 
 imagePullSecrets: []
 
+# `error`, not `info`: open5gs writes its log from inside the single event loop
+# that also serves Diameter, PFCP and GTP-C, so at `info` the daemon spends a
+# serious fraction of that one thread formatting lines under load. The compose
+# stack has been on `error` for the same reason (open5gs/*.yml), and the
+# resource figures below were measured at this level -- raise it for debugging
+# and expect to need more CPU than `resources` reserves.
 logger:
-  level: info
+  level: error
 
 # freeDiameter AppServThreads. `file` mode only -- see diameter.mode.
 workers: 16
+
+# open5gs `global.max.ue`: the subscriber/session/auth context pool, allocated
+# up front. It is the single biggest term in the SMF's and UPF's memory --
+# ~448 MiB of the SMF's idle working set at 16384 -- so it and `resources`
+# below have to move together. It is also a hard ceiling: the daemon refuses
+# work past it, so it bounds concurrent sessions per pod.
+maxUe: 16384
 
 # freeDiameter Tc, the peer reconnect interval, in seconds.
 tcTimer: 5
@@ -43,6 +82,15 @@ mongodb:
     enabled: false
   auth:
     enabled: false
+  # Every Cx MAR and every Gx CCR-A reads a subscriber, so mongo is on the
+  # registration path and cost 1.9 CPU-ms per registration -- more than the
+  # I-CSCF. Measured 0.41 cores p95 and a ~310 MiB working set that barely
+  # moves with subscriber count (WiredTiger sizes its cache from the limit,
+  # not from the data). This replaces the chart's `resourcesPreset: small`,
+  # whose 768Mi limit sits under the observed peak plus headroom.
+  resources:
+    requests: {cpu: 500m, memory: 512Mi}
+    limits: {cpu: 1500m, memory: 1Gi}
 
 # provision HSS subscribers
 subscribers:
@@ -52,6 +100,14 @@ subscribers:
   opc: "177FAD988A964A3AD0421B4693257056"
   dial: "359"
   image: docker.io/bitnami/mongodb:latest
+  # mongosh is a Node runtime: it peaks at ~160 MiB evaluating `print(1+1)`,
+  # before it has inserted a single subscriber. The sidecar default would
+  # OOM-kill the Job on every install, so it gets its own figure. The insert
+  # loop is one round trip per subscriber, so raising `count` costs wall clock
+  # rather than memory.
+  resources:
+    requests: {cpu: 100m, memory: 192Mi}
+    limits: {cpu: 1, memory: 512Mi}
 
 # The pod's interface. PFCP binds to it by name so that the node ID it
 # advertises is the pod address rather than whatever a wildcard bind picks.
@@ -66,12 +122,27 @@ session:
 
 route:
   enabled: true
+  # A DaemonSet: this is reserved on every node in the cluster, so it gets its
+  # own figure rather than inheriting the UPF-sized default above. It runs one
+  # `ip route` per `reconcile` seconds and sleeps in between.
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {memory: 64Mi}
 
 reconcile: 10
 
 components:
   hss:
     enabled: true
+    # hssd. The hottest single process in the registration path -- every
+    # REGISTER costs a UAR and a MAR, and 3.9 CPU-ms of it lands here. It is
+    # also the one component with a demonstrated ceiling: 0.955 cores was the
+    # highest single second in a 366 s saturation window, with 55 threads
+    # loaded, so the useful work serialises on one event loop and a limit
+    # above ~1 core buys throughput only via replicas.
+    resources:
+      requests: {cpu: 1, memory: 96Mi}
+      limits: {cpu: 2, memory: 256Mi}
     daemon: hssd
     ports:
       diameter: {port: 3868, protocol: TCP, as: ""}
@@ -82,6 +153,12 @@ components:
 
   pcrf:
     enabled: true
+    # pcrfd. One Gx CCR-A per attach and an Rx AAR per call leg. Cheap and
+    # nearly flat in memory -- 1 KiB per session -- because the Gx session
+    # itself lives in the pool `maxUe` already reserved.
+    resources:
+      requests: {cpu: 500m, memory: 64Mi}
+      limits: {cpu: 1500m, memory: 256Mi}
     daemon: pcrfd
     ports:
       diameter: {port: 3868, protocol: TCP, as: ""}
@@ -92,6 +169,13 @@ components:
 
   smf:
     enabled: true
+    # smfd. Second hottest, and the memory is dominated by the `maxUe` pool
+    # rather than by load: 448 MiB idle at 16384, growing only ~40 KiB per
+    # session on top. Peaked at 1.21 cores, so unlike hssd it does get some
+    # parallelism, but not much -- treat ~1 core as its working figure.
+    resources:
+      requests: {cpu: 1, memory: 640Mi}
+      limits: {cpu: 2500m, memory: 1Gi}
     daemon: smfd
     # Hold the daemon until the `ims` release's P-CSCF Service resolves, because
     # open5gs resolves it once and tolerates a miss silently
@@ -107,6 +191,12 @@ components:
 
   upf:
     enabled: true
+    # upfd. Forwards every G-PDU, so its CPU follows media rather than
+    # signalling -- 0.31 cores p95 registering, 0.59 with 199 concurrent RTP
+    # calls through it. Memory again mostly the `maxUe` pool.
+    resources:
+      requests: {cpu: 500m, memory: 448Mi}
+      limits: {cpu: 2, memory: 768Mi}
     daemon: upfd
     # The UPF owns a TUN device and the GTP-U datapath.
     privileged: true
@@ -116,7 +206,27 @@ components:
       pfcp:    {port: 8805, protocol: UDP, as: pfcp, headless: true}
       metrics: {port: 9090, protocol: TCP, as: metrics}
 
+# Fallback for a component that names no `resources` of its own. Every
+# component below names one, so this only applies to something added later.
+#
+# All four figures were measured at `logger.level: error` and
+# `maxUe: 16384`; both appear above and both move the numbers, so changing
+# either means re-measuring. See SIZING.md for the runs.
+#
+# CPU limits sit well above the requests on purpose: these are single
+# event-loop daemons, and CFS throttling stalls one to the end of its 100 ms
+# period rather than slowing it down -- which turns a CPU spike into expired
+# Diameter and GTP-C timers, not into latency. The limit guards a runaway.
 resources: {}
+
+# The tun sidecar, the wait-pcscf init container and the subscriber seed Job:
+# constant work, unrelated to subscriber count, so reasoned rather than
+# measured. Set at all because an unset request is BestEffort -- first to be
+# evicted, and invisible to the scheduler.
+sidecar:
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {memory: 64Mi}
 
 nodeSelector: {}
 tolerations: []

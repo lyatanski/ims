@@ -19,8 +19,18 @@ Storing is not conditional on anything: at this point create_ipsec_tunnel() has
 already succeeded, so the contact should describe what was created. Dropping the
 guard also stops req_sec_params->data.ipsec from being freed on the cleanup path
 in this case, which is right — it is now owned by the contact.
+
+ipsec_forward() reads the same struct, so the damage is not only at teardown.
+For a request to the UE it takes src_port from port_pc == 0, and grep_sock_info()
+skips the port comparison altogether when it is passed 0 — so the request goes
+out of whichever protected socket happens to be first in the list, the one
+belonging to the first UE that registered. No outbound policy matches that
+source port, and the kernel emits the packet unencrypted: every reg-event NOTIFY
+and every terminating INVITE reaches the UE in the clear, on a port it is not
+listening on.
+
 diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
-index 974dce0..8904799 100644
+index 4339052..bba05a2 100644
 --- a/src/modules/ims_ipsec_pcscf/cmd.c
 +++ b/src/modules/ims_ipsec_pcscf/cmd.c
 @@ -955,27 +955,26 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
@@ -67,5 +77,5 @@ index 974dce0..8904799 100644
 +		LM_ERR("Error updating temp security\n");
 +	}
  
- 	if(ul.update_pcontact(d, &ci, pcontact) != 0) {
- 		LM_ERR("Error updating contact\n");
+ 	ci.reg_state = pcontact->reg_state;
+ 

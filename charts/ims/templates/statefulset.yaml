@@ -2,34 +2,39 @@
 {{- range tuple "proxy" "interrogating" "serving" }}
 {{- $cscf := . -}}
 {{- with $dot }}
+{{- $dereg := and .Values.drain.deregister (eq "serving" $cscf) }}
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ .Release.Name }}-{{ trunc 1 $cscf }}cscf
   labels: {{- include "ims.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  # All replicas of a role share one Diameter identity (`pcscf.ims.<realm>` and
-  # so on, from configmap.yaml). freeDiameter accepts exactly one connection per
-  # identity and answers the second with "Rejecting new connection attempt while
-  # our state machine is in state STATE_OPEN".
-  strategy:
-    type: Recreate
+  serviceName: {{ .Release.Name }}-{{ trunc 1 $cscf }}cscf
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels: {{- include "ims.selectorLabels" . | nindent 6 }}
       role: {{ trunc 1 $cscf }}cscf
   template:
     metadata:
       annotations:
-        # diameter.xml is a subPath mount, which kubelet never updates in place.
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if and (eq "proxy" $cscf) .Values.gm.enabled }}
+        k8s.v1.cni.cncf.io/networks: {{ include "ims.networks" . | quote }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels: {{- include "ims.labels" . | nindent 8 }}
         role: {{ trunc 1 $cscf }}cscf
     spec:
+      # The hook's worst case, plus head-room: the de-registration phase is
+      # capped at `budget` by drain.sh, then it lingers. Overrunning this would
+      # have the kubelet SIGKILL the pod mid-drain and lose the linger too.
+      terminationGracePeriodSeconds: {{ add .Values.drain.linger .Values.drain.grace (ternary .Values.drain.budget 0 $dereg) }}
       dnsPolicy: None
       dnsConfig:
         nameservers:
@@ -40,11 +45,10 @@ spec:
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+      {{- include "ims.identity" . | nindent 6 }}
       {{- include "ims.waitdb" (dict "root" . "cscf" $cscf) | nindent 6 }}
       {{- if eq "proxy" $cscf }}
       {{- include "ims.ipsec" . | nindent 6 }}
-      {{- else if eq "serving" $cscf }}
-      {{- include "ims.register" . | nindent 6 }}
       {{- end }}
       containers:
       - name: cscf
@@ -55,16 +59,57 @@ spec:
         - name: REALM
           value: {{ tpl .Values.domain . }}
         {{- if eq "proxy" $cscf }}
+        {{- if .Values.gm.enabled }}
+        # Not the address itself: with Gm on a secondary interface it comes
+        # from that network's IPAM at pod creation, so start.sh reads it off
+        # the device and exports IPSEC from what it finds.
+        - name: GMDEV
+          value: {{ .Values.gm.interface | quote }}
+        {{- else }}
         - name: IPSEC
           valueFrom:
             fieldRef:
               fieldPath: status.podIP
         {{- end }}
+        {{- end }}
         - name: DBURL
           value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ index .Values.db $cscf }}
+        # drain.sh reads these with ${VAR:-default}, so an unset value renders
+        # empty and still falls back rather than becoming a literal "".
+        - name: DRAIN_DEREGISTER
+          value: {{ ternary "1" "0" $dereg | quote }}
+        - name: DRAIN_LINGER
+          value: {{ .Values.drain.linger | quote }}
+        {{- if $dereg }}
+        - name: DRAIN_RATE
+          value: {{ .Values.drain.rate | quote }}
+        - name: DRAIN_BUDGET
+          value: {{ .Values.drain.budget | quote }}
+        {{- end }}
         {{- if eq "serving" $cscf }}
+        - name: DRAIN_UNPUBLISH
+          value: {{ ternary "1" "0" .Values.drain.unpublish | quote }}
+        - name: REGSRV
+          value: {{ include "ims.regsrv" . | quote }}
         - name: RTPADR
           value: udp:{{ template "rtpengine.name" .Subcharts.rtpengine }}:{{ .Values.rtpengine.service.port }}
+        {{- with .Values.enum }}
+        # The ENUM tree, left out entirely when unset -- an empty value would
+        # still count as defined in the cfg and take the module with it. Same
+        # for the trunk below, whose define is what enables the breakout.
+        - name: ENUM
+          value: {{ tpl . $ | quote }}
+        {{- end }}
+        {{- with .Values.trunk }}
+        - name: TRUNK
+          value: {{ tpl . $ | quote }}
+        {{- end }}
+        {{- range $k, $v := .Values.dialplan }}
+        {{- with $v }}
+        - name: E164{{ upper $k }}
+          value: {{ tpl (toString .) $ | quote }}
+        {{- end }}
+        {{- end }}
         {{- end }}
         ports:
         - name: tcp
@@ -84,11 +129,19 @@ spec:
           httpGet: {path: /metrics, port: mon}
           periodSeconds: 20
           failureThreshold: 6
-        {{- with .Values.resources }}
+        # Invoked through `sh` rather than relying on the mode bit surviving
+        # git and COPY. On the S-CSCF this de-registers first; on the other two
+        # roles it is only the linger, which is all they have to hand over.
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "/etc/cscf/drain.sh"]
+        # Per-role, because the three roles are not the same size
+        {{- with dig $cscf "resources" (.Values.resources | default dict) (.Values.cscf | default dict) }}
         resources: {{- toYaml . | nindent 10 }}
         {{- end }}
         volumeMounts:
-        - name: diameter
+        - name: identity
           mountPath: /etc/cscf/diameter.xml
           subPath: diameter.xml
         {{- if eq "proxy" $cscf }}
@@ -107,6 +160,8 @@ spec:
           items:
           - key: {{ $cscf }}.xml
             path: diameter.xml
+      - name: identity
+        emptyDir: {}
       {{- if eq "proxy" $cscf }}
       {{- include "ims.kmod" . | nindent 6 }}
       {{- end }}
