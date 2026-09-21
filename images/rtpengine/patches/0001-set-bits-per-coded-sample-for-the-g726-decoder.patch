@@ -32,9 +32,9 @@ they did not expect (G.722 forces it back to 8).
 diff --git a/lib/avc.c b/lib/avc.c
 --- a/lib/avc.c
 +++ b/lib/avc.c
-@@ -70,6 +70,12 @@ const char *avc_decoder_init(decoder_t *dec, const str *extra_opts) {
- 	DEF_CH_LAYOUT(&dec->avc.avcctx->CH_LAYOUT, dec->in_format.channels);
+@@ -55,6 +55,12 @@ const char *avc_decoder_init(decoder_t *dec, const str *extra_opts) {
  	dec->avc.avcctx->sample_rate = dec->in_format.clockrate;
+ 	dec->avc.avcctx->time_base = (AVRational){1, dec->in_format.time_base ?: dec->in_format.clockrate};
  
 +	// FFmpeg's G.726 decoder takes the ADPCM code width from this field and
 +	// refuses to open without it. Unlike the encoder, it will not work the
@@ -42,6 +42,6 @@ diff --git a/lib/avc.c b/lib/avc.c
 +	if (dec->def->avcodec_id == AV_CODEC_ID_ADPCM_G726)
 +		dec->avc.avcctx->bits_per_coded_sample = dec->def->bits_per_sample;
 +
- 	if (dec->def->set_dec_options)
- 		dec->def->set_dec_options(dec, extra_opts);
- 
+ 	dec->avc.avcctx->width = dec->in_format.width;
+ 	dec->avc.avcctx->height = dec->in_format.height;
+ 	//dec->avc.avcctx->pix_fmt = dec->in_format.pix_fmt;

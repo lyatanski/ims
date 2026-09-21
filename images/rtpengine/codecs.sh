@@ -29,6 +29,14 @@ rtpengine=${1:?usage: codecs.sh <path to rtpengine>}
 # The decode-only entries are not shortcomings of this image: no encoder exists
 # for EVRC, QCELP or ATRAC in ffmpeg or anywhere else that could be shipped.
 #
+# H264, VP8 and VP9 are decode-only for a different reason, and a deliberate
+# one.  Upstream grew video transcoding in the MT#65420 series, and ffmpeg's
+# native decoders for all three come along for free -- but every encoder is an
+# external library (libx264, libvpx), and this is an IMS audio media relay:
+# neither compose.yml nor the chart offers a video stream to transcode.  Adding
+# x264-dev and libvpx-dev to the media stage promotes all three to `fully
+# supported (video)` if that ever changes.
+#
 # Neither are the five that "lack RTP definition".  MP3, PCM-U8, AC-3, E-AC-3
 # and Vorbis transcode both ways here; they simply have no static payload type
 # or default clock rate to fall back on, so an SDP has to name them.  No library
@@ -40,38 +48,41 @@ rtpengine=${1:?usage: codecs.sh <path to rtpengine>}
 # and it works without rebuilding this.
 expected() {
 	cat <<-'TABLE'
-	AMR                fully supported
-	AMR-WB             fully supported
+	AMR                fully supported (audio)
+	AMR-WB             fully supported (audio)
 	ATRAC-X            supported for decoding only
 	ATRAC3             supported for decoding only
-	CN                 fully supported
+	CN                 fully supported (audio)
 	EVRC               supported for decoding only
 	EVRC0              supported for decoding only
 	EVRC1              supported for decoding only
 	EVS                not supported
-	G722               fully supported
-	G723               fully supported
-	G726-16            fully supported
-	G726-24            fully supported
-	G726-32            fully supported
-	G726-40            fully supported
-	G729               fully supported
-	G729a              fully supported
-	GSM                fully supported
-	L16                fully supported
+	G722               fully supported (audio)
+	G723               fully supported (audio)
+	G726-16            fully supported (audio)
+	G726-24            fully supported (audio)
+	G726-32            fully supported (audio)
+	G726-40            fully supported (audio)
+	G729               fully supported (audio)
+	G729a              fully supported (audio)
+	GSM                fully supported (audio)
+	H264               supported for decoding only
+	L16                fully supported (audio)
 	MP3                codec supported but lacks RTP definition
 	PCM-U8             codec supported but lacks RTP definition
-	PCMA               fully supported
-	PCMU               fully supported
+	PCMA               fully supported (audio)
+	PCMU               fully supported (audio)
 	QCELP              supported for decoding only
-	X-L16              fully supported
+	VP8                supported for decoding only
+	VP9                supported for decoding only
+	X-L16              fully supported (audio)
 	ac3                codec supported but lacks RTP definition
 	eac3               codec supported but lacks RTP definition
-	iLBC               fully supported
-	opus               fully supported
-	red                fully supported
-	speex              fully supported
-	telephone-event    fully supported
+	iLBC               fully supported (audio)
+	opus               fully supported (audio)
+	red                fully supported (audio)
+	speex              fully supported (audio)
+	telephone-event    fully supported (audio)
 	vorbis             codec supported but lacks RTP definition
 	TABLE
 }
@@ -86,6 +97,8 @@ sed 's/^/    /' "$work/have"
 
 awk -F'\t' '
 	function grade(s) {
+		if (s == "fully supported (audio)")                  return 3
+		if (s == "fully supported (video)")                  return 3
 		if (s == "fully supported")                          return 3
 		if (s == "codec supported but lacks RTP definition") return 2
 		if (s == "supported for encoding only")              return 1

@@ -112,7 +112,7 @@ deb_ignored() {
 	libsystemd-dev|systemd|systemd-dev) ;;
 	# Provided by the source-built ffmpeg and bcg729; Alpine's would only be
 	# dead weight in the build stage.
-	libav*-dev|libswresample-dev|libpostproc-dev|libbcg729-dev) ;;
+	libav*-dev|libswscale-dev|libswresample-dev|libpostproc-dev|libbcg729-dev) ;;
 	*) return 1 ;;
 	esac
 }
