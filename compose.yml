@@ -18,9 +18,10 @@ x-kamailio: &kamailio
 
 x-route: &route
   image: alpine
-  command: sh -c "ip route replace ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1) mtu 1450"
+  command: sh -c "gw=$$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1); test -n \"$$gw\" && ip route replace ${UENET} via $$gw mtu 1450"
   cap_add:
   - NET_ADMIN
+  restart: on-failure
 
 services:
   pcscf:
