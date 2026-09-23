@@ -1,0 +1,65 @@
+Decide a re-registration from the contact, not from the Via port.
+
+The third and last place ipsec_create() asks which port the REGISTER came from.
+Upstream 812df26470 already added the test that answers the question it is
+really asking - the contact's ipsec_t still has port_pc/port_ps zero, which is
+true exactly until the first ipsec_create() fills them in - but left the port
+comparison in front of it as an ||, where it can only widen the first-
+registration branch, never narrow it.
+
+The sent-by port of a protected re-REGISTER is port_uc, and port_uc is the UE's
+own choice, announced in its Security-Client header: nothing stops a UE picking
+5060 for it, and a UE that does - or one that simply leaves its listening port
+in the Via - takes the first-registration branch on every re-registration, on a
+contact that already carries a complete tunnel.
+
+The two branches differ in exactly two things. The first is old_s, which the
+re-registration branch sets and this one does not, and which is the only way
+update_contact_ipsec_params() ever reuses an installed tunnel. Without it the
+CK/IK comparison has nothing to compare against and acquire_spi() hands out a
+fresh SPI/port pair even when the vector did not change, so
+ipsec_reuse_server_port - on by default - never fires for that UE. Patch 0003
+then correctly tears the old tunnel down immediately before building the new
+one, which means a registration refresh that should have been a no-op leaves
+the UE with no tunnel for the width of that teardown, and names new protected
+ports in the Security-Server of every 401.
+
+The second is what happens to a re-REGISTER that carries no Security-Client.
+The re-registration branch rejects it, and patch 0005 turns that into a 401
+re-offering the tunnel that is installed. This branch instead takes
+s = pcontact->security_temp->data.ipsec - the contact's own struct - and
+update_contact_ipsec_params() overwrites s->ck.s and s->ik.s with fresh shm
+allocations without freeing what was there, then acquire_spi() overwrites
+spi_pc/spi_ps/port_pc/port_ps in place. The installed tunnel's parameters are
+now gone: patch 0003's guard is old_ipsec != s, false here, so nothing destroys
+it, and destroy_ipsec_tunnel() at expiry reads the values that replaced it.
+Eight SAs, eight policies and a slot out of ipsec_max_connections stay in the
+kernel for good, plus the CK and IK buffers.
+
+Dropping the port term leaves the condition that was already the correct one. A
+first registration still takes the first-registration branch whatever port it
+came from, because its contact holds the placeholder ipsec_t save_pending()
+built from the Security-Client header, with the P-CSCF ports still zero.
+
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index c5224dc..75cd78d 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -913,10 +913,13 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 	// Parse security parameters from the REGISTER request and get some data for the new tunnels
+ 	req_sec_params = cscf_get_security(req);
+ 
+-	// Update contacts only for initial registration, for re-registration the existing contacts shouldn't be updated.
+-	if(ci.via_port == SIP_PORT
+-			|| (pcontact->security_temp->data.ipsec->port_ps == 0
+-					&& pcontact->security_temp->data.ipsec->port_pc == 0)) {
++	// Whether a tunnel has to be built from scratch is a property of the
++	// contact, not of the port the REGISTER was sent from: until the first
++	// ipsec_create() fills it in, the contact carries the placeholder ipsec_t
++	// save_pending() built out of the Security-Client header, whose P-CSCF
++	// ports are still zero. That test alone decides it.
++	if(pcontact->security_temp->data.ipsec->port_ps == 0
++			&& pcontact->security_temp->data.ipsec->port_pc == 0) {
+ 		LM_DBG("Registration for contact with AOR [%.*s], VIA [%d://%.*s:%d], "
+ 			   "received_host [%d://%.*s:%d]\n",
+ 				ci.aor.len, ci.aor.s, ci.via_prot, ci.via_host.len,
