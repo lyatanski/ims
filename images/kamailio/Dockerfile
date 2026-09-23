@@ -23,8 +23,15 @@ RUN apk --no-cache upgrade \
         mariadb-dev \
     && ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/
 RUN git clone --depth=1 https://github.com/kamailio/kamailio.git
-#COPY patches/ /patches/
-#RUN git -C /kamailio apply --verbose /patches/*.patch
+# Carried until upstream takes them — each patch header says what it fixes and
+# why, and the cscf/ configs use what they add (0007's scscf_reload_interval
+# is a parse error without it). One at a time, not one `git apply` over the
+# glob: that validates every hunk against the unpatched tree, and 0003 edits a
+# region 0002 has already rewritten. `|| exit 1` fails the build when one stops
+# applying: a silently unpatched image leaks an IPsec tunnel per ended
+# registration.
+COPY patches/ /patches/
+RUN for p in /patches/*.patch; do echo "== $p"; git -C /kamailio apply --verbose "$p" || exit 1; done
 RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
         -D MODULE_GROUP_NAME="" \
         -D INCLUDE_MODULES="xlog debugger \
