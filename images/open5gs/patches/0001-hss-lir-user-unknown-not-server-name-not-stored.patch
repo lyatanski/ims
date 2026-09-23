@@ -1,0 +1,80 @@
+Answer an LIR for an identity the HSS does not have with
+DIAMETER_ERROR_USER_UNKNOWN instead of SERVER_NAME_NOT_STORED.
+
+hss_ogs_diam_cx_lir_cb() looks the public identity up with
+hss_cx_get_server_name() and, on NULL, answers Experimental-Result-Code 2004
+(DIAMETER_SUCCESS_SERVER_NAME_NOT_STORED). That single code is standing in for
+two quite different outcomes -- an identity the HSS has never heard of, and one
+it holds but that nobody has registered -- and it is the wrong code for either.
+TS 29.229 6.2 lists 2004 among the *success* codes and TS 29.228 6.1.4 does not
+name it as an LIA result at all; the two it does name are
+DIAMETER_ERROR_USER_UNKNOWN (5001) for an unknown identity and
+DIAMETER_ERROR_IDENTITY_NOT_REGISTERED (5003) for a known but unregistered one.
+
+What this costs is visible at the I-CSCF. ims_icscf's LIA handler maps 5001 to
+604 "Does Not Exist Anywhere", 5003 to 480 and 2003 to a successful
+unregistered-service selection, and has nothing for 2004, so it takes its
+default branch:
+
+    SIP/2.0 500 Forbidden - HSS responded with unknown Experimental Result Code
+
+A call to a number this HSS does not have therefore comes back to the UE as a
+server error, which reads as a fault in the core rather than as the correct
+"no such subscriber". Measured on the Cx interface, the LIR/LIA pair for an
+unprovisioned number matched on hop-by-hop identifier:
+
+    LIR  Public-Identity = sip:35900000002@ims.<realm>
+    LIA  Result-Code = <absent>  Experimental-Result-Code = 2004
+
+The same 2004 also defeats ims_icscf's route_lir_user_unknown modparam, which
+exists precisely so a deployment can re-target an unknown number -- to a BGCF,
+a trunk, a lookup of its own -- instead of rejecting it. That hook is keyed on
+5001 and so never fires against this HSS, which makes the behaviour impossible
+to work around in configuration and is why the fix belongs here.
+
+Telling the two cases apart needs no new lookup: hss_cx_get_user_name() returns
+the IMPI associated with the IMPU, and NULL when there is none. The UAR path in
+this same file already uses it that way, for the same distinction and with the
+same 5001 on failure, so this makes the LIR agree with the UAR rather than
+introducing a new convention.
+
+One limit is worth stating, because it decides which of the two codes a given
+number gets. The HSS's Cx registry is built from registration activity -- an
+IMPU enters it in the MAR path and again when a SAR downloads the profile --
+and not from the subscriber database, so an identity that is provisioned but
+has never registered is absent from it and answers 5001, the same as a number
+the network does not serve at all. 5003 is what a public identity gets once the
+HSS has seen it and it has no S-CSCF at the moment of the query. Telling
+"provisioned but never registered" apart from "not provisioned" would mean a
+database lookup on every LIR, which this does not add.
+
+Either way the I-CSCF now has a code it can map, and the UE gets 604 or 480
+rather than 500.
+diff --git a/src/hss/hss-cx-path.c b/src/hss/hss-cx-path.c
+index fb4e399..a9c72d6 100644
+--- a/src/hss/hss-cx-path.c
++++ b/src/hss/hss-cx-path.c
+@@ -1613,8 +1613,21 @@ static int hss_ogs_diam_cx_lir_cb(struct msg **msg, struct avp *avp,
+     /* Get Server-Name by IMPU(Public-Identity) */
+     server_name = hss_cx_get_server_name(public_identity);
+     if (!server_name) {
+-        ogs_error("No Server-Name in Public-Identity[%s]", public_identity);
+-        result_code = OGS_DIAM_CX_SERVER_NAME_NOT_STORED;
++        /*
++         * Having no S-CSCF for the identity is two different answers, and
++         * TS 29.228 6.1.4 keeps them apart: DIAMETER_ERROR_USER_UNKNOWN when
++         * the HSS does not hold the public identity at all, and
++         * DIAMETER_ERROR_IDENTITY_NOT_REGISTERED when it does but nothing is
++         * registered against it. The UAR path above already distinguishes the
++         * two the same way, by whether an IMPI is associated with the IMPU.
++         */
++        if (!hss_cx_get_user_name(public_identity)) {
++            ogs_error("Unknown Public-Identity[%s]", public_identity);
++            result_code = OGS_DIAM_CX_ERROR_USER_UNKNOWN;
++        } else {
++            ogs_error("No Server-Name in Public-Identity[%s]", public_identity);
++            result_code = OGS_DIAM_CX_ERROR_IDENTITY_NOT_REGISTERED;
++        }
+         error_occurred = 1;
+         goto out;
+     }

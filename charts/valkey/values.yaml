@@ -5,9 +5,9 @@ image:
   # empty string.
   pullPolicy: IfNotPresent
 
-# Same: `toYaml .Values.resources` rendered `resources: null` when the key was
-# simply absent from this file.
-resources: {}
+resources:
+  requests: {cpu: 100m, memory: 64Mi}
+  limits: {cpu: 1, memory: 256Mi}
 
 nodeSelector: {}
 tolerations: []

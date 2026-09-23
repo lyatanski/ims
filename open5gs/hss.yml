@@ -25,7 +25,10 @@ services:
     - cert-hss:/var/hss
 
   mongo:
-    image: mongo
+    # Not `latest`: 8.0 and 8.3 refuse to start on a 6.19+ kernel (TCMalloc
+    # breaks the rseq ABI there, SERVER-121912) with a hard check that no
+    # GLIBC_TUNABLES gets past. 8.2 carries the fixed TCMalloc.
+    image: mongo:8.2
     command: --bind_ip 0.0.0.0
     #healthcheck:
     #  test: mongosh --quiet --eval db.runCommand("ping").ok
@@ -40,7 +43,7 @@ services:
     - 27017/tcp
 
   subscribers:
-    image: mongo
+    image: mongo:8.2
     entrypoint: mongosh --host mongo --file /opt/subscribers.js
     configs:
     - source: subscribers

@@ -1,0 +1,23 @@
+{{/*
+The Gm attachment. Enabling Gm is what creates it -- the chart owns the
+NetworkAttachmentDefinition rather than expecting the cluster to carry one, so
+there is no state where the pod is annotated for a network that does not exist.
+
+Helm has no ordering for a kind it does not know, and sorts those last, so this
+is applied after the StatefulSet that references it. That is survivable where
+a missing Multus configuration is not: a NAD that is not there yet fails the
+CNI ADD loudly -- an event naming the missing net-attach-def -- and the kubelet
+retries the sandbox until it is, whereas an unconfigured Multus attaches
+nothing and reports nothing.
+*/}}
+{{- if .Values.gm.enabled }}
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ include "ims.gm.name" . }}
+  labels: {{- include "ims.labels" . | nindent 4 }}
+spec:
+  # A string, not a mapping: the CRD types this as the raw CNI config, and the
+  # plugin chain parses it itself.
+  config: {{ include "ims.network.config" . | quote }}
+{{- end }}

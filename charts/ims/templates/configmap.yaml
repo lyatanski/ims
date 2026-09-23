@@ -9,7 +9,7 @@ data:
   proxy.xml: |
     <?xml version="1.0" encoding="UTF-8"?>
     <DiameterPeer
-        FQDN="pcscf.{{ $ims }}"
+        FQDN="@IDENTITY@.{{ $ims }}"
         Realm="{{ $ims }}"
         Vendor_Id="10415"
         Product_Name="PCSCF"
@@ -24,7 +24,7 @@ data:
   interrogating.xml: |
     <?xml version="1.0" encoding="UTF-8"?>
     <DiameterPeer
-        FQDN="icscf.{{ $ims }}"
+        FQDN="@IDENTITY@.{{ $ims }}"
         Realm="{{ $ims }}"
         Vendor_Id="10415"
         Product_Name="ICSCF"
@@ -39,7 +39,7 @@ data:
   serving.xml: |
     <?xml version="1.0" encoding="UTF-8"?>
     <DiameterPeer
-        FQDN="scscf.{{ $ims }}"
+        FQDN="@IDENTITY@.{{ $ims }}"
         Realm="{{ $ims }}"
         Vendor_Id="10415"
         Product_Name="SCSCF"

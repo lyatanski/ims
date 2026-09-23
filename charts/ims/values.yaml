@@ -10,18 +10,139 @@ realm:
   ims: ims.{{ tpl .Values.domain . }}
   epc: epc.{{ tpl .Values.domain . }}
 
+# ENUM (RFC 6116). The tree the S-CSCF queries to translate a dialled E.164
+# number into a SIP URI it can route -- a tel URI carries a number and no host,
+# so nothing routes until the translation has happened. RFC 6116 roots the
+# public tree at e164.arpa; this is the operator's own, which is what TS 24.229
+# assumes and what keeps the lookup inside the network. The zone answering it
+# is the NAPTR rule under `dns.zones` below, and the two have to agree.
+#
+# The trailing dot is load-bearing: the module concatenates this onto the
+# reversed digits and queries the result verbatim.
+#
+# Empty disables the translation, and a dialled number is then answered 404.
+enum: e164.{{ tpl .Values.domain . }}.
+
+# Dial plan, applied to a dialled number before the ENUM lookup so that local
+# forms reach it as E.164 (TS 24.229 5.4.3.2). `idd` is the international
+# prefix and `ndd` the national trunk prefix; `cc` is the country a nationally
+# dialled number belongs to, which defaults to the prefix this IMS serves
+# because for a single-country deployment they are the same digits.
+#
+# A number matching neither prefix is left exactly as dialled -- see
+# route[DIALPLAN] in images/kamailio/cscf/serving.cfg. Empty `cc` disables the
+# national rule; empty `idd`/`ndd` fall back to the cfg's own 00 and 0.
+dialplan:
+  cc: "{{ .Values.global.e164.home }}"
+  idd: "00"
+  ndd: "0"
+
+# BGCF next hop (TS 23.228 4.3.4) for a number the ENUM tree does not claim --
+# a SIP URI, e.g. sip:sbc.example.net:5060. Only the next hop is overridden;
+# the Request-URI keeps the tel URI the UE dialled. Empty leaves such a number
+# unroutable, answered 404, and keeps the variable off the pod entirely.
+#
+# Media follows signalling: a call that leaves this way is the one the S-CSCF
+# hands rtpengine the `outgoing` template for, so it is answered on that
+# chart's `external` interface rather than the one the UEs are on. Setting this
+# is also what compiles in the terminating-side handling for a call arriving
+# *from* the trunk. See `templates` in charts/rtpengine/values.yaml.
+trunk: ""
+
 # Under `global` because Helm passes that -- and only that -- down to the
 # subcharts, and the CoreDNS zone below is rendered by the dns subchart with its
 # own context. Anything the zone templates need has to live here.
 global:
-  # Helm release name of the `core` chart. Its Service names are prefixed with
-  # it, and one release cannot look into another at render time, so it is a
-  # value. The CoreDNS rule for the EPC realm rewrites names onto it.
   core:
     release: core
+  # The E.164 prefix this IMS serves, international format without "+". The
+  # ENUM zone under `dns.zones` answers only for numbers that start with it --
+  # reversing it into ENUM label order is done there, so this stays a plain
+  # number. Anything outside it is not an IMS number and leaves through `trunk`
+  # below, or is answered 404.
+  #
+  # Must agree with the MSISDNs the core chart provisions: its
+  # `subscribers.dial`. More than one range is an alternation in that zone
+  # rule; another operator's range is a rule of its own, answering their realm.
+  e164:
+    home: "359"
   ue:
     subnet: 10.10.0.0/16
     mtu: 1452
+    # Next hop for the route to the pool above. Empty derives it from the
+    # pod's own default route, which is where the UPF sits when everything
+    # shares the primary CNI. With `gm` below attached that stops being true:
+    # the pool is reached through the Gm network's router, while the default
+    # route still points at the primary CNI. Name that router here.
+    via: ""
+
+# Gm (TS 24.229) on a secondary interface, attached by Multus from a
+# NetworkAttachmentDefinition, rather than over the primary CNI.
+#
+# Gm carries IPsec in transport mode (TS 33.203), and transport mode does not
+# survive NAT -- the integrity check covers the addresses, and a Service DNATs
+# them. Addressing the pod directly is what avoids that today, and it works,
+# but a pod address is the CNI's to hand out and to move, and it is reachable
+# only from inside the cluster's pod network. A secondary interface puts the
+# P-CSCF on the network the UEs are already on, with an address from that
+# network's own IPAM.
+#
+# What it does not buy on its own is a *stable* Gm address across rescheduling:
+# whereabouts hands out the next free address in the range, not the one the
+# departing pod had, so HA-PLAN Tier 1's per-ordinal takeover still needs a
+# reservation mechanism on top of this. See doc/kubernetes.md.
+#
+# The SMF is the other half. What the UE dials is the PCO, and the core chart
+# fills that from the P-CSCF's headless Service -- which publishes pod
+# addresses, because Endpoints carry the primary CNI's address and nothing
+# else. Enabling this without pointing the SMF's `p-cscf` list at the Gm
+# addresses leaves the UE registering over the interface this was meant to
+# replace.
+gm:
+  # On by default: Gm is IPsec in transport mode, and transport mode does not
+  # survive the DNAT a Service does, so the secondary interface is the shape
+  # this chart assumes rather than an opt-in.
+  #
+  # Enabling it means the chart owns the attachment: the
+  # NetworkAttachmentDefinition is rendered from `config` below into the
+  # release's namespace, rather than expected to exist. Two things have to be
+  # true of the cluster for that to work -- Multus' CRD installed, or the
+  # install fails on an unknown kind, and `config.master` naming a device the
+  # nodes actually have, or the pod fails to start.
+  #
+  # values-ci.yaml keeps it on and replaces `config` with a bridge onto a
+  # single node, which is what the CI job and kind.sh both install with. There
+  # is deliberately no profile that turns it off: the DNAT-free path is the
+  # reason the attachment exists, and a test that skips it tests nothing this
+  # chart is for.
+  enabled: true
+  # The NetworkAttachmentDefinition's name, which the release name is
+  # prefixed onto: `gm` here is `<release>-gm` on the cluster. A NAD is a
+  # namespaced object, so without that prefix two releases in one namespace
+  # write the same one and the second install fails on an ownership conflict.
+  # The name is both what is created and what the pod annotation references,
+  # and one helper renders both, so the two cannot drift.
+  name: gm
+  # The device name inside the pod. It is addressed by name twice -- by
+  # images/kamailio/cscf/start.sh, which reads `ipsec_listen_addr` off it, and
+  # by the annotation below -- which is why the attachment is written in the
+  # JSON list form: the bare-name form cannot pin a device name.
+  interface: gm0
+  # Written verbatim into the NAD's `spec.config` as JSON, with `name` filled
+  # in from above where it is absent. The default is the shape
+  # doc/kubernetes.md proposes: macvlan onto a node device, addresses from a
+  # whereabouts pool. `master` is the one field the chart cannot get right on
+  # its own -- it names a device on the node -- so it is the first thing to
+  # set for a cluster whose uplink is not `eth0`.
+  config:
+    cniVersion: 0.3.1
+    type: macvlan
+    master: eth0
+    mode: bridge
+    ipam:
+      type: whereabouts
+      range: 10.20.0.0/24
+      gateway: 10.20.0.1
 
 # Seconds between reconciles of the UE route.
 # loop rather than a one-shot because a pod's routing table does not survive rescheduling
@@ -34,6 +155,44 @@ db:
   serving: 4
 
 replicaCount: 1
+
+# Rolling-update drain, applied as a preStop hook on all three roles.
+# See images/kamailio/cscf/drain.sh for the mechanism.
+#
+# `linger` is the part every role needs: Kubernetes withdraws the endpoint and
+# sends SIGTERM concurrently, so without it in-flight transactions die with the
+# pod. It has to exceed SIP timer B, 32 s at default T1.
+#
+# `deregister` is S-CSCF-only. It clears this pod's usrloc and makes the
+# P-CSCF drop its reg-event subscription, its contact, and the IPsec SAs bound
+# to that contact -- measured 10 -> 0 contacts and 40 -> 0 SAs.
+#
+# That last part needs images/kamailio/patches/0006-*.patch in the image, and
+# nothing here can check for it. Upstream's regscscf.dereg_impu emits a NOTIFY
+# with no <contact> elements at all, leaving the P-CSCF nothing to delete: the
+# same run against an image without 0006 left all 10 contacts and all 40 SAs
+# in place. See the header of images/kamailio/cscf/drain.sh for the mechanism
+# and DRAIN-STATUS.md 5.1 for both sets of numbers.
+drain:
+  linger: 35
+  deregister: true
+  # IMPUs per second, bounding the terminated-NOTIFY burst. 0 disables pacing.
+  rate: 20
+  # Hard cap on the de-registration phase. The work scales with the registered
+  # subscriber count, which is not knowable at render time, so it is bounded
+  # here -- that is what makes the grace period below derivable instead of a
+  # guess. At `rate: 20` this covers 900 subscribers, the measured per-pod load.
+  budget: 60
+  # Head-room over the hook's worst case, for the kubelet's own overhead.
+  grace: 10
+  # Drop this S-CSCF's row from the I-CSCF's candidate table before draining,
+  # so no fresh registration is handed to a pod that is going away. Costs a
+  # window -- between the preStop DEL and the replacement pod's publish there
+  # is no row -- which is harmless for a *running* I-CSCF, whose snapshot is
+  # immutable, but makes an I-CSCF that starts inside that window wait in its
+  # `wait-store` init container until the new S-CSCF publishes. Set false to
+  # leave the row in place across a rollout.
+  unpublish: true
 
 image:
   repository: ghcr.io/lyatanski/kamailio
@@ -58,15 +217,81 @@ test:
   opc: "177FAD988A964A3AD0421B4693257056"
   imsi: "{{ .Values.mcc }}{{ .Values.mnc }}0000000001"
   msisdn:
-    cc: "359"
+    cc: "{{ .Values.global.e164.home }}"
     digits: 9
+  # How the generator addresses the callee. `tel` dials the MSISDN as a tel URI
+  # (RFC 3966), which is what a handset does and what rides the ENUM
+  # translation above; `phone` the sip:+<msisdn>;user=phone form (TS 23.003
+  # 13.4), translated the same way; `sip` the registered sip IMPU, which needs
+  # no number anywhere and leaves ENUM out of the run.
+  uri: tel
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 2, memory: 1Gi}
 
 podAnnotations: {}
 
 service:
   port: 5060
 
+# Measured, not guessed -- see SIZING.md for the runs these come from. One
+# replica of each role is sized for the reference point the load rig actually
+# sustained end to end: ~200 registrations/s and ~1000 concurrently registered
+# subscribers. Both scale close to linearly, so 900 registrations/s is five of
+# these, not one pod five times the size -- and for the CSCFs that means
+# replicas, which per HA-PLAN §4.2 needs per-pod Diameter identity first.
+#
+# CPU limits are deliberately far above the requests. These are event-loop SIP
+# and Diameter processes: CFS throttling does not slow them down, it stalls
+# them to the end of the 100 ms period, and a REGISTER that misses its
+# transaction timer is a failed registration rather than a slow one. The limit
+# is here to catch a runaway, not to shape the workload.
+#
+# Memory limits are the arena the process can actually reach -- Kamailio cannot
+# exceed `shm_mem_size` plus `children x pkg_mem_size` however much the cgroup
+# allows -- so they are a real ceiling rather than a guess with headroom.
+# `resources` is the fallback for a role that names none.
 resources: {}
+
+cscf:
+  # P-CSCF. The biggest of the three at rest: shm_mem_size 256 plus the ~425
+  # processes ims_ipsec_pcscf forks (two per bound port, both ranges, TCP and
+  # UDP). Grows ~142 KiB per registered subscriber -- contact, IPsec SAs and
+  # policies. Measured 0.41 cores p95 and 438 MiB at 900 subscribers, 566 MiB
+  # peak under deliberate overload.
+  proxy:
+    resources:
+      requests: {cpu: 500m, memory: 512Mi}
+      limits: {cpu: 2, memory: 1Gi}
+
+  # I-CSCF. Stateless between transactions -- it holds a Cx LIR/UAR in flight
+  # and nothing else -- so its 45 KiB per subscriber is transaction memory
+  # faulted in and not handed back, not a per-subscriber record. 0.15 cores
+  # p95, 51 MiB at 900 subscribers. The limit is its arena: 256 shm + 4x8 pkg.
+  interrogating:
+    resources:
+      requests: {cpu: 200m, memory: 128Mi}
+      limits: {cpu: 1, memory: 384Mi}
+
+  # S-CSCF. Holds the most per subscriber -- a usrloc record, a reg-event
+  # subscription, an ims_dialog entry per call -- at ~84 KiB each, so it is the
+  # role whose memory tracks the subscriber count most directly. 0.30 cores
+  # p95, 102 MiB at 900 subscribers, 205 MiB peak. The limit is its arena:
+  # 512 shm + 4x8 pkg, which is also what caps subscribers per pod.
+  serving:
+    resources:
+      requests: {cpu: 400m, memory: 256Mi}
+      limits: {cpu: 2, memory: 768Mi}
+
+# The init containers and the ueroute sidecar: a `modprobe`, two valkey-cli
+# calls and an `ip route` every `reconcile` seconds. Constant work, unrelated
+# to subscriber count, so these are reasoned rather than measured. They are
+# here because an unset request is BestEffort -- first to be evicted, and
+# invisible to the scheduler.
+sidecar:
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {memory: 64Mi}
 
 autoscaling:
   enabled: false
@@ -100,6 +325,43 @@ dns:
         match "(?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
         answer "{{`{{ .Name }}`}} 30 SRV 0 0 5060 {{ .Release.Name }}-{{`{{ or .Group.name \"icscf\" }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
         fallthrough
+    # ENUM (RFC 6116), the tree `enum` above names. It answers only for the
+    # numbers this IMS serves: `global.e164.home` reversed into the label order
+    # an ENUM name uses, which sprig can do here so the prefix is written once.
+    # A number outside it gets no NAPTR at all, and the S-CSCF breaks that one
+    # out to `trunk` or answers 404.
+    #
+    # toString for the same reason mcc/mnc carry it: `--set global.e164.home=44`
+    # arrives as an int64, which splitList refuses.
+    #
+    # One rule covers every number in the range: the digits are only ever in
+    # the *name*, and the regexp in the record does the rewriting. The home
+    # domain comes out of the name too, so this repeats neither the realm nor
+    # mcc/mnc -- which it could not reach anyway, since a subchart sees
+    # `global` and nothing else.
+    #
+    # The regexp drops the leading "+": what comes out of it is what the I-CSCF
+    # asks the HSS for in the Cx LIR, and open5gs returns the MSISDN without
+    # one -- sip:359000000001@ims.<realm> and tel:359000000001. Change the
+    # mapping here, not in the S-CSCF.
+    #
+    # Both rules must precede the catch-all IN ANY rule below, which matches an
+    # ENUM name too and would answer it a nonsense CNAME.
+    - name: template
+      parameters: IN NAPTR
+      configBlock: |-
+        match "^([0-9]\.)+{{ join "\\." (reverse (splitList "" (toString .Values.global.e164.home))) }}\.e164\.(?P<home>mnc\d{2,3}\.mcc\d{3}\.3gppnetwork\.org)\.$"
+        answer "{{`{{ .Name }}`}} 30 IN NAPTR 10 100 \"u\" \"E2U+sip\" \"!^\\+(.*)$!sip:\\1@ims.{{`{{ .Group.home }}`}}!\" ."
+        fallthrough
+    # A number in the tree but outside the served range: no such name. Without
+    # this it would reach the catch-all and come back as a CNAME, which is an
+    # answer, so the miss has to be made explicit here. No fallthrough,
+    # deliberately -- that is the whole point of the rule.
+    - name: template
+      parameters: IN NAPTR
+      configBlock: |-
+        match "^([0-9]\.)+e164\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork\.org\.$"
+        rcode NXDOMAIN
     - name: template
       parameters: IN ANY
       configBlock: |-

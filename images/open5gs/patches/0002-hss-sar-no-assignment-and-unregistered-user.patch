@@ -1,0 +1,96 @@
+Answer NO_ASSIGNMENT and UNREGISTERED_USER Server-Assignment-Requests as TS
+29.228 6.1.2.1 has them.
+
+The SAR callback downloaded User-Data only for REGISTRATION and RE_REGISTRATION.
+NO_ASSIGNMENT and UNREGISTERED_USER are sent precisely to get the profile -- the
+first by an S-CSCF restoring a user it lost (TS 23.380 4.4.2), the second for a
+terminating request to an unregistered user -- and both got a DIAMETER_SUCCESS
+with no User-Data, which the S-CSCF (kamailio's ims_registrar_scscf) fails as
+"We require User data for this assignment/register and none was supplied".
+
+NO_ASSIGNMENT also assigns nothing: it is answered only for the S-CSCF already
+assigned to the user, and any other gets DIAMETER_UNABLE_TO_COMPLY with the
+stored Server-Name left alone. The callback instead overwrote the Server-Name
+for every type before looking at which one it was, so a NO_ASSIGNMENT from a
+second S-CSCF would have moved the user to it. The type is now read first: a
+NO_ASSIGNMENT from anyone but the assigned S-CSCF is refused, and only the
+other types overwrite. DIAMETER_UNABLE_TO_COMPLY is a base protocol code, so it
+goes out as a Result-Code rather than through the Experimental-Result the
+error path otherwise uses.
+
+diff --git a/src/hss/hss-cx-path.c b/src/hss/hss-cx-path.c
+index a9c72d6..689091d 100644
+--- a/src/hss/hss-cx-path.c
++++ b/src/hss/hss-cx-path.c
+@@ -1080,6 +1080,7 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+ 
+     ogs_ims_data_t ims_data;
+     int error_occurred = 0;
++    int unable_to_comply = 0;
+ 
+     ogs_debug("Rx Server-Assignment-Request");
+ 
+@@ -1268,8 +1269,29 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+         goto out;
+     }
+ 
+-    /* Overwrite Server-Name for IMPU(Public-Identity) */
+-    hss_cx_set_server_name(public_identity, server_name, true);
++    /*
++     * NO_ASSIGNMENT asks for the profile and nothing else: it assigns no
++     * S-CSCF, and it is answered only for the S-CSCF already assigned. Any
++     * other gets DIAMETER_UNABLE_TO_COMPLY and the stored name is left alone
++     * (TS 29.228 6.1.2.1, TS 23.380 4.4.2) -- which is what tells an S-CSCF
++     * that lost its data to have the UE register again.
++     */
++    ret = fd_msg_search_avp(qry, ogs_diam_cx_server_assignment_type, &avp);
++    if (ret == 0 && avp && fd_msg_avp_hdr(avp, &hdr) == 0 && hdr &&
++            hdr->avp_value->i32 == OGS_DIAM_CX_SERVER_NO_ASSIGNMENT) {
++        char *assigned = hss_cx_get_server_name(public_identity);
++        if (!assigned || strcmp(assigned, server_name) != 0) {
++            ogs_warn("NO_ASSIGNMENT from [%s] for [%s] assigned to [%s]",
++                    server_name, public_identity,
++                    assigned ? assigned : "none");
++            unable_to_comply = 1;
++            error_occurred = 1;
++            goto out;
++        }
++    } else {
++        /* Overwrite Server-Name for IMPU(Public-Identity) */
++        hss_cx_set_server_name(public_identity, server_name, true);
++    }
+ 
+     if (!error_occurred) {
+         /* Set Vendor-Specific-Application-Id AVP */
+@@ -1359,9 +1381,17 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+             goto out;
+         }
+ 
++        /*
++         * The profile goes with every assignment that sets up service for the
++         * user, not only registration: NO_ASSIGNMENT and UNREGISTERED_USER are
++         * both asked for precisely to download it (TS 29.228 6.1.2.1).
++         */
+         if (hdr->avp_value->i32 == OGS_DIAM_CX_SERVER_ASSIGNMENT_REGISTRATION ||
+             hdr->avp_value->i32 ==
+-                OGS_DIAM_CX_SERVER_ASSIGNMENT_RE_REGISTRATION) {
++                OGS_DIAM_CX_SERVER_ASSIGNMENT_RE_REGISTRATION ||
++            hdr->avp_value->i32 == OGS_DIAM_CX_SERVER_NO_ASSIGNMENT ||
++            hdr->avp_value->i32 ==
++                OGS_DIAM_CX_SERVER_ASSIGNMENT_UNREGISTERED_USER) {
+ 
+             /* Get User-Data-Already-Available AVP (Mandatory) */
+             ret = fd_msg_search_avp(
+@@ -1503,7 +1533,11 @@ out:
+                 ans, OGS_DIAM_CX_APPLICATION_ID);
+ 
+         /* Set the Experimental-Result, Origin-Host and Origin-Realm AVPs */
+-        if (result_code != 0) {
++        if (unable_to_comply) {
++            /* a base protocol code, so a Result-Code, not Experimental */
++            ret = fd_msg_rescode_set(ans,
++                    (char*)"DIAMETER_UNABLE_TO_COMPLY", NULL, NULL, 1);
++        } else if (result_code != 0) {
+             ret = ogs_diam_message_experimental_rescode_set(ans, result_code);
+         }
+ 

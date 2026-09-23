@@ -24,6 +24,34 @@ app.kubernetes.io/name: {{ include "ims.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- define "ims.identity" -}}
+- name: identity
+  image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  {{- with .Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  env:
+  - name: INSTANCE
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+  command:
+  - sh
+  - -ec
+  - |
+    sed "s/@IDENTITY@/$INSTANCE/" /tmpl/diameter.xml > /run/cscf/diameter.xml
+    if grep -q "@IDENTITY@" /run/cscf/diameter.xml; then
+      echo "identity substitution failed"; exit 1
+    fi
+    cat /run/cscf/diameter.xml
+  volumeMounts:
+  - name: diameter
+    mountPath: /tmpl
+  - name: identity
+    mountPath: /run/cscf
+{{- end }}
+
 {{/*
 Wait redis! db_redis opens its connection at module init and does not retry
 
@@ -33,6 +61,9 @@ Call with (dict "root" $ "cscf" <role>).
 {{- $valkey := printf "-h %s -p %v" (include "valkey.name" .root.Subcharts.rtpengine.Subcharts.valkey) .root.Values.rtpengine.valkey.ports.valkey }}
 - name: wait-store
   image: {{ .root.Values.rtpengine.valkey.image.repository }}:{{ .root.Values.rtpengine.valkey.image.tag }}
+  {{- with .root.Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
   command:
   - sh
   - -ec
@@ -47,21 +78,8 @@ Call with (dict "root" $ "cscf" <role>).
     {{- end }}
 {{- end }}
 
-{{/*
-S-CSCF register
-*/}}
-{{- define "ims.register" -}}
-- name: register
-  image: {{ .Values.rtpengine.valkey.image.repository }}:{{ .Values.rtpengine.valkey.image.tag }}
-  command:
-  - valkey-cli
-  - -c
-  - -u
-  - redis://{{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ .Values.db.interrogating }}
-  - HSET
-  - s_cscf:entry::1
-  - s_cscf_uri
-  - sip:scscf.{{ include "ims.realm.ims" . }}
+{{- define "ims.regsrv" -}}
+addr={{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }};port={{ .Values.rtpengine.valkey.ports.valkey }};db={{ .Values.db.interrogating }}
 {{- end }}
 
 {{/*
@@ -70,6 +88,10 @@ IPsec init
 {{- define "ims.ipsec" -}}
 - name: ipsec
   image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  {{- with .Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
   command:
   - modprobe
   - -a
@@ -133,12 +155,65 @@ both need tpl before anything can be appended.
 {{- end }}
 
 {{/*
+The Gm NetworkAttachmentDefinition's name, release-prefixed.
+
+A NAD is a namespaced object and `gm.name` is the same string in every release,
+so without the prefix two releases in one namespace write the same object: the
+second install fails on an ownership conflict, and an upgrade of either one
+silently re-points the other release's P-CSCF at a different subnet. The
+release name is the prefix, as it is for every other object this chart owns.
+
+Call with the root context.
+*/}}
+{{- define "ims.gm.name" -}}
+{{- printf "%s-%s" .Release.Name .Values.gm.name -}}
+{{- end }}
+
+{{/*
+One entry for the `k8s.v1.cni.cncf.io/networks` annotation.
+
+The JSON list form rather than the bare "name" string, because only the list
+form carries `interface`, and the device name is what
+images/kamailio/cscf/start.sh reads `ipsec_listen_addr` off. Left to Multus it
+would be `net1`, `net2`, ... in attachment order -- stable only as long as
+nothing else is attached to the same pod.
+
+The name here is the rendered one, not `gm.name`: this annotation and the
+object above are the two halves that cannot drift.
+
+Call with the root context.
+*/}}
+{{- define "ims.networks" -}}
+{{- list (dict "name" (include "ims.gm.name" .) "interface" .Values.gm.interface) | toJson -}}
+{{- end }}
+
+{{/*
+A NetworkAttachmentDefinition's `spec.config`: the CNI config verbatim, with
+`name` defaulted to the attachment's own so the two cannot drift. `merge` lets
+the config win, so an explicit `name` in it is still honoured, and deepCopy
+keeps it from writing back into .Values.
+
+The default is the release-prefixed name for the same reason the object carries
+it, and this one is the easier of the two to miss: the CNI network name is what
+host-local keys its allocations on -- /var/lib/cni/networks/<name> -- so two
+releases sharing it hand out addresses from one pool into two subnets.
+
+Call with the root context.
+*/}}
+{{- define "ims.network.config" -}}
+{{- toJson (merge (deepCopy .Values.gm.config) (dict "name" (include "ims.gm.name" .))) -}}
+{{- end }}
+
+{{/*
 The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
 */}}
 {{- define "ims.ueroute" -}}
 - name: ueroute
   image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
   imagePullPolicy: {{ .Values.image.pullPolicy }}
+  {{- with .Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
   securityContext:
     capabilities:
       add:
@@ -149,12 +224,19 @@ The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
   - |
     pool={{ .Values.global.ue.subnet }}
     mtu={{ .Values.global.ue.mtu }}
+    via={{ .Values.global.ue.via | quote }}
 
     while :; do
-      # "default via <gw> dev <dev>" -> "<gw> <dev>"
-      set -- $(ip route | awk '$1 == "default" { print $3, $5; exit }')
-      if [ -n "$1" ]; then
-        ip route replace "$pool" via "$1" dev "$2" mtu "$mtu"
+      if [ -n "$via" ]; then
+        # An explicit next hop: the kernel resolves the device from it, which
+        # is the Gm one whenever that is the interface the hop is on-link on.
+        ip route replace "$pool" via "$via" mtu "$mtu"
+      else
+        # "default via <gw> dev <dev>" -> "<gw> <dev>"
+        set -- $(ip route | awk '$1 == "default" { print $3, $5; exit }')
+        if [ -n "$1" ]; then
+          ip route replace "$pool" via "$1" dev "$2" mtu "$mtu"
+        fi
       fi
       sleep {{ .Values.reconcile }}
     done

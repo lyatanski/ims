@@ -1,0 +1,51 @@
+Let lookup() report "no valid contact" when none of the bindings is valid.
+
+lookup() picks the first binding of the IMPU that is VALID_CONTACT - not
+expired, not pending delete or notify - by walking linked_contacts and
+breaking out of the loop on a match:
+
+	while(impucontact && (ptr = impucontact->contact)) {
+		if(VALID_UE_TYPE(...) && VALID_CONTACT(...) && allowed_method(...))
+			break;
+		impucontact = impucontact->next;
+	}
+	if(ptr == 0)
+		goto done;          /* "No contacts founds" */
+
+ptr is assigned on every iteration, before the test, so a walk that runs off
+the end without a match leaves it on the LAST binding it examined, not on
+NULL. The ptr == 0 check then only catches a record with no bindings at all;
+a record whose bindings are all dead falls through, and lookup() rewrites
+the Request-URI to the last dead one and returns 1.
+
+A record like that is not rare. The IMPU stays IMPU_REGISTERED from the
+moment its last binding expires or is de-registered until the usrloc timer
+next processes it, so every terminating request in that window is routed to
+an address the UE has left instead of being answered as unregistered, and
+route[REBIND] in serving.cfg - which uses lookup() to find the bindings a new
+registration supersedes - was handed that dead binding, re-injected it with
+expires=1 and so revived it for a second, with a round of NOTIFYs each time.
+Measured on KinD: a REGISTER a few seconds after the previous registration's
+de-REGISTER retired <sip:10.10.0.18:5088>, which was already in
+CONTACT_NOTIFY_READY, with no "Found a valid contact" logged for it.
+
+term_impu_has_contact() walks the same list the right way - its ret is set
+only inside the matching branch - so only lookup() needs the fix: a walk
+that reached the end of the list found nothing.
+
+diff --git a/src/modules/ims_registrar_scscf/lookup.c b/src/modules/ims_registrar_scscf/lookup.c
+--- a/src/modules/ims_registrar_scscf/lookup.c
++++ b/src/modules/ims_registrar_scscf/lookup.c
+@@ -149,6 +149,12 @@
+ 		impucontact = impucontact->next;
+ 	}
+ 
++	/* The walk leaves ptr on the last contact it examined, valid or not: only
++	 * a walk that stopped before the end of the list found one. Without this a
++	 * record holding nothing but dead bindings routes to the last of them. */
++	if(!impucontact)
++		ptr = 0;
++
+ 	/* look first for an un-expired and supported contact */
+ 	if(ptr == 0) {
+ 		LM_INFO("No contacts founds for IMPU <%.*s>\n", aor.len, aor.s);

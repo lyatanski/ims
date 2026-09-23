@@ -1,0 +1,423 @@
+Add assign_server(): a Server-Assignment-Request of a chosen type from the cfg.
+
+The only SAR the script could send for a request other than REGISTER was
+assign_server_unreg(), which is UNREGISTERED_USER: it downloads the profile and
+tells the HSS the user is unregistered at this S-CSCF. That is the right thing
+for a terminating request to an unregistered user, and the wrong one for the
+case TS 23.380 4.4.2 is about -- an S-CSCF that restarted and lost its usrloc
+receiving an originating request from a UE that is still registered. There the
+S-CSCF is to fetch the profile with NO_ASSIGNMENT, which changes nothing at the
+HSS and which the HSS answers only for the S-CSCF already assigned to the user
+(DIAMETER_UNABLE_TO_COMPLY otherwise, TS 29.228 6.1.2.1), and continue the
+request as normal. There was no way to send it.
+
+assign_server(async_route, domain, direction, type) is assign_server_unreg()
+with the type as a fourth parameter, and assign_server_unreg() is now that with
+UNREGISTERED_USER. Two types are accepted:
+
+  0  NO_ASSIGNMENT      the profile is stored; an IMPU already in usrloc keeps
+                        its registration state and bindings, a new one is
+                        created IMPU_UNREGISTERED -- a profile and no binding,
+                        which is what the usrloc timer makes of any record
+                        without a valid contact anyway.
+  3  UNREGISTERED_USER  as before.
+
+REGISTRATION and RE_REGISTRATION belong to save(). The de-registration types
+would have the HSS forget an assignment while usrloc keeps its bindings, since
+nothing here tears them down, so they are refused.
+
+The SAA callback decided whether to send the REGISTER's 200 and whether usrloc
+was already updated by comparing the type with UNREGISTERED_USER. That is now a
+flag on the saved transaction, set by assign_server() -- NO_ASSIGNMENT is the
+type save() itself starts from before it picks the real one, so the type is not
+a safe marker for "sent from the script".
+
+The Restoration-Info half of 23.380 (S-CSCF backing up Path and Contact at the
+HSS and restoring bindings from them) is deliberately not part of this.
+
+diff --git a/src/modules/ims_registrar_scscf/cxdx_sar.c b/src/modules/ims_registrar_scscf/cxdx_sar.c
+index b68b243..89bcd49 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_sar.c
++++ b/src/modules/ims_registrar_scscf/cxdx_sar.c
+@@ -234,9 +234,8 @@ void async_cdp_callback(
+ 				goto error;
+ 		}
+ 		//success
+-		//if this is from a save (not a server assign unreg) and expires is zero we don't update usrloc as this is a dereg and usrloc was updated previously
+-		if(data->sar_assignment_type != AVP_IMS_SAR_UNREGISTERED_USER
+-				&& data->expires == 0) {
++		//if this is from a save (not a server assign from the script) and expires is zero we don't update usrloc as this is a dereg and usrloc was updated previously
++		if(!data->script_assignment && data->expires == 0) {
+ 			LM_DBG("no need to update usrloc - already done for de-reg\n");
+ 			result = CSCF_RETURN_TRUE;
+ 			goto success;
+@@ -288,7 +287,7 @@ success:
+ 	update_stat(accepted_registrations, 1);
+ 
+ done:
+-	if(data->sar_assignment_type != AVP_IMS_SAR_UNREGISTERED_USER)
++	if(!data->script_assignment)
+ 		reg_send_reply_transactional(req, data->contact_header, t);
+ 	LM_DBG("DBG:SAR Async CDP callback: ... Done resuming transaction\n");
+ 
+@@ -314,7 +313,7 @@ done:
+ 
+ error:
+ 	create_return_code(-2);
+-	if(data->sar_assignment_type != AVP_IMS_SAR_UNREGISTERED_USER)
++	if(!data->script_assignment)
+ 		reg_send_reply_transactional(req, data->contact_header, t);
+ 
+ error_no_send: //if we don't have the transaction then we can't send a transaction response
+diff --git a/src/modules/ims_registrar_scscf/cxdx_sar.h b/src/modules/ims_registrar_scscf/cxdx_sar.h
+index 7844806..639039c 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_sar.h
++++ b/src/modules/ims_registrar_scscf/cxdx_sar.h
+@@ -63,6 +63,7 @@ typedef struct saved_transaction
+ 	int expires; //used to see if this is a dereg as then we don't need to touch usrloc! > 0 if not dereg - 0 id de-reg
+ 	int require_user_data;
+ 	int sar_assignment_type;
++	int script_assignment; //sent by assign_server() for a request other than REGISTER: nothing to reply to, no Contacts to store
+ 	str public_identity;
+ 	udomain_t *domain;
+ 	contact_for_header_t *
+diff --git a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
+index d70537f..1cf9ab1 100644
+--- a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
++++ b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
+@@ -659,11 +659,88 @@ unregister("location");
+       <title><function moreinfo="none">assign_server_unreg(aysnc_reply_route,
+       domain, direction)</function></title>
+ 
+-      <para>TBD</para>
++      <para>Same as assign_server() with a Server-Assignment-Type of 3
++      (UNREGISTERED_USER).</para>
+ 
+       <para>used in REQUEST_ROUTE</para>
+     </section>
+ 
++    <section>
++      <title><function moreinfo="none">assign_server(async_reply_route,
++      domain, direction, assignment_type)</function></title>
++
++      <para>Sends a Cx Server-Assignment-Request on behalf of a request other
++      than REGISTER, downloading the served user's profile into usrloc. The
++      transaction is suspended and resumed in async_reply_route once the SAA
++      arrives, with $avp(saa_return_code) set to 1 when a profile was stored
++      and to a negative value otherwise. No reply is sent by the module; that
++      is left to the route.</para>
++
++      <para>Meaning of the parameters is as follows:</para>
++
++      <itemizedlist>
++        <listitem>
++          <para><emphasis>async_reply_route</emphasis> - route to resume in
++          when the SAA arrives.</para>
++        </listitem>
++
++        <listitem>
++          <para><emphasis>domain</emphasis> - Logical domain within
++          registrar.</para>
++        </listitem>
++
++        <listitem>
++          <para><emphasis>direction</emphasis> - "orig" takes the served user
++          from the P-Asserted-Identity, "term" from the Request-URI.</para>
++        </listitem>
++
++        <listitem>
++          <para><emphasis>assignment_type</emphasis> - the
++          Server-Assignment-Type, an integer or a variable holding one:</para>
++
++          <itemizedlist>
++            <listitem>
++              <para>0 (NO_ASSIGNMENT) - fetch the profile without changing
++              anything at the HSS. The HSS answers DIAMETER_UNABLE_TO_COMPLY
++              when another S-CSCF is assigned to the user. An IMPU already in
++              usrloc keeps its registration state and bindings; a new one is
++              stored as unregistered. This is the S-CSCF restoration procedure
++              for an originating request (3GPP TS 23.380 4.4.2).</para>
++            </listitem>
++
++            <listitem>
++              <para>3 (UNREGISTERED_USER) - fetch the unregistered profile and
++              tell the HSS the user is unregistered here (3GPP TS 29.228
++              6.1.2.1).</para>
++            </listitem>
++          </itemizedlist>
++
++          <para>Any other type is refused: REGISTRATION and RE_REGISTRATION
++          are sent by save(), and the de-registration types would leave usrloc
++          out of step with the HSS.</para>
++        </listitem>
++      </itemizedlist>
++
++      <para>This function can be used in REQUEST_ROUTE.</para>
++
++      <example>
++        <title><function>assign_server</function> usage</title>
++
++        <programlisting format="linespecific">...
++assign_server("ORIG_SAA", "location", "orig", 0);
++...
++route[ORIG_SAA] {
++    if($avp(saa_return_code) != 1) {
++        t_reply("504", "Server Time-out");
++        exit;
++    }
++    # continue as for a registered user
++}
++...
++</programlisting>
++      </example>
++    </section>
++
+     <section>
+       <title><function
+       moreinfo="none">impu_registered(domain)</function></title>
+diff --git a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
+index 9c56bde..03cfc88 100644
+--- a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
++++ b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
+@@ -139,6 +139,8 @@ static int w_save4(
+ 		struct sip_msg *_m, char *_route, char *_d, char *mode, char *_cflags);
+ static int w_assign_server_unreg(
+ 		struct sip_msg *_m, char *_route, char *_d, char *_direction);
++static int w_assign_server(struct sip_msg *_m, char *_route, char *_d,
++		char *_direction, char *_type);
+ static int w_lookup(struct sip_msg *_m, char *_d, char *_p2);
+ static int w_lookup_ue_type(struct sip_msg *_m, char *_d, char *_p2);
+ static int w_lookup_path_to_contact(struct sip_msg *_m, char *contact_uri);
+@@ -147,6 +149,8 @@ static int w_lookup_path_to_contact(struct sip_msg *_m, char *contact_uri);
+ static int domain_fixup(void **param, int param_no);
+ static int assign_save_fixup3_async(void **param, int param_no);
+ static int assign_save_fixup_free(void **param, int param_no);
++static int assign_server_fixup4(void **param, int param_no);
++static int assign_server_fixup4_free(void **param, int param_no);
+ static int free_uint_fixup(void **param, int param_no);
+ static int save_fixup4(void **param, int param_no);
+ static int unreg_fixup(void **param, int param_no);
+@@ -259,6 +263,8 @@ static cmd_export_t cmds[] = {
+ 			REQUEST_ROUTE | FAILURE_ROUTE},
+ 	{"assign_server_unreg", (cmd_function)w_assign_server_unreg, 3, assign_save_fixup3_async, assign_save_fixup_free,
+ 			REQUEST_ROUTE},
++	{"assign_server", (cmd_function)w_assign_server, 4, assign_server_fixup4, assign_server_fixup4_free,
++			REQUEST_ROUTE},
+ 	{"add_sock_hdr", (cmd_function)add_sock_hdr, 1, fixup_str_null, fixup_free_str_null,
+ 			REQUEST_ROUTE},
+ 	{"unregister", (cmd_function)unregister, 2, unreg_fixup, unreg_fixup_free,
+@@ -710,6 +716,21 @@ static int w_assign_server_unreg(
+ 	return assign_server_unreg(_m, _d, &direction, _route);
+ }
+ 
++static int w_assign_server(struct sip_msg *_m, char *_route, char *_d,
++		char *_direction, char *_type)
++{
++	str direction;
++	int type;
++
++	if(fixup_get_ivalue(_m, (gparam_t *)_type, &type) != 0) {
++		LM_ERR("invalid Server-Assignment-Type\n");
++		return -1;
++	}
++	direction.s = _direction;
++	direction.len = strlen(_direction);
++	return assign_server_type(_m, _d, &direction, _route, type);
++}
++
+ static int w_lookup_path_to_contact(struct sip_msg *_m, char *contact_uri)
+ {
+ 	return lookup_path_to_contact(_m, contact_uri);
+@@ -800,6 +821,22 @@ static int assign_save_fixup_free(void **param, int param_no)
+ 	return 0;
+ }
+ 
++/* assign_server(route, domain, direction, type): the first three as for
++ * assign_server_unreg(), the Server-Assignment-Type an int or a variable */
++static int assign_server_fixup4(void **param, int param_no)
++{
++	if(param_no == 4)
++		return fixup_igp_null(param, 1);
++	return assign_save_fixup3_async(param, param_no);
++}
++
++static int assign_server_fixup4_free(void **param, int param_no)
++{
++	if(param_no == 4)
++		return fixup_free_igp_null(param, 1);
++	return assign_save_fixup_free(param, param_no);
++}
++
+ 
+ static int uint_fixup(void **param, int param_no)
+ {
+diff --git a/src/modules/ims_registrar_scscf/save.c b/src/modules/ims_registrar_scscf/save.c
+index ce7f7ce..4e1b559 100644
+--- a/src/modules/ims_registrar_scscf/save.c
++++ b/src/modules/ims_registrar_scscf/save.c
+@@ -1273,6 +1273,44 @@ static int update_contacts_sar_unregistered_user(udomain_t *_d,
+ 	return 1;
+ }
+ 
++/*!
++ * NO_ASSIGNMENT only downloads the profile (TS 29.228 6.1.2.1): the HSS changes
++ * nothing about the user's registration or assignment, so neither does this.
++ * An IMPU already in usrloc keeps its state and its bindings and only has its
++ * profile refreshed. One that is not is created holding the profile and no
++ * binding, i.e. IMPU_UNREGISTERED - which is also what the usrloc timer makes
++ * of any record without a valid contact.
++ */
++static int update_contacts_sar_no_assignment(udomain_t *_d,
++		ims_subscription **s, str *ccf1, str *ccf2, str *ecf1, str *ecf2)
++{
++	int i, j;
++	impurecord_t *impu_rec = NULL;
++	ims_public_identity *pi = NULL;
++	int reg_state;
++
++	LM_DBG("updating contacts for NO_ASSIGNMENT\n");
++	for(i = 0; i < (*s)->service_profiles_cnt; i++)
++		for(j = 0; j < (*s)->service_profiles[i].public_identities_cnt; j++) {
++			pi = &((*s)->service_profiles[i].public_identities[j]);
++			ul.lock_udomain(_d, &pi->public_identity);
++			reg_state = IMS_USER_UNREGISTERED;
++			if(ul.get_impurecord(_d, &pi->public_identity, &impu_rec) == 0)
++				reg_state = impu_rec->reg_state;
++			if(ul.update_impurecord(_d, &pi->public_identity, 0, reg_state,
++					   -1 /*do not change send sar on delete */, pi->barring, 0,
++					   s, ccf1, ccf2, ecf1, ecf2, &impu_rec)
++					!= 0) {
++				LM_ERR("Unable to update impurecord for <%.*s>\n",
++						STR_FMT(&pi->public_identity));
++				ul.unlock_udomain(_d, &pi->public_identity);
++				return -1;
++			}
++			ul.unlock_udomain(_d, &pi->public_identity);
++		}
++	return 1;
++}
++
+ /**
+  *
+  * @param msg
+@@ -1322,6 +1360,10 @@ int update_contacts(struct sip_msg *msg, udomain_t *_d, str *public_identity,
+ 			ret = update_contacts_sar_unregistered_user(
+ 					_d, s, ccf1, ccf2, ecf1, ecf2);
+ 			break;
++		case AVP_IMS_SAR_NO_ASSIGNMENT:
++			ret = update_contacts_sar_no_assignment(
++					_d, s, ccf1, ccf2, ecf1, ecf2);
++			break;
+ 		default:
+ 			LM_ERR("unimplemented assignment_type[%d] when trying to update "
+ 				   "contacts\n",
+@@ -1332,9 +1374,28 @@ int update_contacts(struct sip_msg *msg, udomain_t *_d, str *public_identity,
+ 
+ int assign_server_unreg(
+ 		struct sip_msg *_m, char *str1, str *direction, char *route)
++{
++	return assign_server_type(
++			_m, str1, direction, route, AVP_IMS_SAR_UNREGISTERED_USER);
++}
++
++/*!
++ * A SAR on behalf of a request other than REGISTER, resumed in the async route
++ * with $avp(saa_return_code) set. Only the types that download a profile
++ * without the S-CSCF owning any binding change are accepted:
++ *  - UNREGISTERED_USER: the served user is unregistered here, and the HSS is
++ *    told so (TS 29.228 6.1.2.1). The profile is stored IMPU_UNREGISTERED.
++ *  - NO_ASSIGNMENT: the profile is fetched and nothing changes at the HSS -
++ *    the HSS refuses it with DIAMETER_UNABLE_TO_COMPLY if another S-CSCF is
++ *    assigned (TS 23.380 4.4.2), which is how an S-CSCF that lost its data
++ *    restores it for an originating request.
++ * REGISTRATION and RE_REGISTRATION are save()'s, and the de-registration types
++ * have to move usrloc with them, which a script-initiated SAR does not do.
++ */
++int assign_server_type(struct sip_msg *_m, char *str1, str *direction,
++		char *route, int assignment_type)
+ {
+ 	str private_identity = {0, 0}, public_identity = {0, 0};
+-	int assignment_type = AVP_IMS_SAR_NO_ASSIGNMENT;
+ 	int data_available = AVP_IMS_SAR_USER_DATA_NOT_AVAILABLE;
+ 	int require_user_data = 1;
+ 	rerrno = R_FINE;
+@@ -1346,8 +1407,15 @@ int assign_server_unreg(
+ 
+ 	udomain_t *_d = (udomain_t *)str1;
+ 
++	if(assignment_type != AVP_IMS_SAR_UNREGISTERED_USER
++			&& assignment_type != AVP_IMS_SAR_NO_ASSIGNMENT) {
++		LM_ERR("assignment type %d cannot be sent from the script\n",
++				assignment_type);
++		return -1;
++	}
++
+ 	if(fixup_get_svalue(_m, (gparam_t *)route, &route_name) != 0) {
+-		LM_ERR("no async route block for assign_server_unreg\n");
++		LM_ERR("no async route block for assign_server\n");
+ 		return -1;
+ 	}
+ 
+@@ -1365,8 +1433,8 @@ int assign_server_unreg(
+ 		return -1;
+ 	}
+ 
+-	LM_DBG("Assigning unregistered user for direction [%.*s]\n", direction->len,
+-			direction->s);
++	LM_DBG("Assigning server (type %d) for direction [%.*s]\n",
++			assignment_type, direction->len, direction->s);
+ 
+ 	enum cscf_dialog_direction dir = cscf_get_dialog_direction(direction->s);
+ 	switch(dir) {
+@@ -1389,7 +1457,6 @@ int assign_server_unreg(
+ 		goto error;
+ 	}
+ 
+-	assignment_type = AVP_IMS_SAR_UNREGISTERED_USER;
+ 	data_available = AVP_IMS_SAR_USER_DATA_NOT_AVAILABLE; //TODO: check this
+ 
+ 
+@@ -1421,6 +1488,7 @@ int assign_server_unreg(
+ 	saved_t->expires = 1; //not a dereg as this is server_assign_unreg
+ 	saved_t->require_user_data = require_user_data;
+ 	saved_t->sar_assignment_type = assignment_type;
++	saved_t->script_assignment = 1;
+ 	saved_t->domain = (udomain_t *)_d;
+ 
+ 	saved_t->contact_header = 0;
+diff --git a/src/modules/ims_registrar_scscf/save.h b/src/modules/ims_registrar_scscf/save.h
+index 3a31aaf..cecaa46 100644
+--- a/src/modules/ims_registrar_scscf/save.h
++++ b/src/modules/ims_registrar_scscf/save.h
+@@ -58,6 +58,8 @@
+ /*! \brief
+  * Process REGISTER request and save its contacts
+  */
++int assign_server_type(struct sip_msg *_m, char *str1, str *direction,
++		char *route, int assignment_type);
+ int assign_server_unreg(
+ 		struct sip_msg *_m, char *str1, str *direction, char *route);
+ 
+diff --git a/src/modules/ims_registrar_scscf/server_assignment.c b/src/modules/ims_registrar_scscf/server_assignment.c
+index 56dd556..2b49e54 100644
+--- a/src/modules/ims_registrar_scscf/server_assignment.c
++++ b/src/modules/ims_registrar_scscf/server_assignment.c
+@@ -54,7 +54,7 @@
+ extern str scscf_name_str;
+ /* Does the Server Assignment procedures, assigning this S-CSCF to the user.
+  * Covered cases:
+- * AVP_IMS_SAR_NO_ASSIGNMENT							= 0
++ * AVP_IMS_SAR_NO_ASSIGNMENT							= 0,		in assign_server
+  * AVP_IMS_SAR_REGISTRATION								= 1,		YES,HERE
+  * AVP_IMS_SAR_RE_REGISTRATION							= 2,
+  * AVP_IMS_SAR_UNREGISTERED_USER						= 3,		in S_assign_server_unreg
+@@ -84,7 +84,8 @@ int scscf_assign_server(struct sip_msg *msg, str public_identity,
+ 			&& assignment_type != AVP_IMS_SAR_USER_DEREGISTRATION
+ 			&& assignment_type
+ 					   != AVP_IMS_SAR_USER_DEREGISTRATION_STORE_SERVER_NAME
+-			&& assignment_type != AVP_IMS_SAR_UNREGISTERED_USER) {
++			&& assignment_type != AVP_IMS_SAR_UNREGISTERED_USER
++			&& assignment_type != AVP_IMS_SAR_NO_ASSIGNMENT) {
+ 		LM_DBG("Invalid SAR assignment type\n");
+ 		return result;
+ 	}

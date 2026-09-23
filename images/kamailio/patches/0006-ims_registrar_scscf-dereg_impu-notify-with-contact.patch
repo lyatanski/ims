@@ -1,0 +1,83 @@
+Make regscscf.dereg_impu's NOTIFY carry the contact it de-registered.
+
+reg_rpc_dereg_impu() marks a contact CONTACT_DELETE_PENDING, queues a
+reg-event notification for it, and sets CONTACT_DELETED on the next
+statement. Only the queueing happens here: the body is rendered later, in
+the forked notification worker, by generate_reginfo_full(), and
+process_xml_for_contact() returns early for CONTACT_DELETED. So the NOTIFY
+that goes out names the registration
+
+    <registration aor="sip:..." state="terminated"></registration>
+
+with no <contact> child at all.
+
+This is not a race the worker can win. The two statements are separated by
+nothing, and both run while the RPC process holds lock_contact_slot_i() on
+that contact and lock_udomain() on the IMPU -- the same two locks
+generate_reginfo_full() takes before it reads the state. The worker is
+excluded until after CONTACT_DELETED is committed, every time.
+
+A watcher that only removes a binding it can find in the body -- which is
+what ims_registrar_pcscf does, notify.c process_contact() -- therefore keeps
+its contact, and on an IMS access leg keeps the IPsec SA bound to it. The UE
+stays reachable on paper at a P-CSCF whose S-CSCF has forgotten it, until
+the contact expires on its own.
+
+Pass the contact URI as an explicit de-registration contact instead of
+relying on the usrloc walk. new_notification() copies the URI into the
+queued notification, and generate_reginfo_full() emits it through
+process_xml_for_explit_dereg_contact(), which renders state="terminated"
+event="expired" expires="0" from that copy and never looks at usrloc. The
+body is then independent of when the render happens, which is the same
+reason the de-REGISTER path in save.c produces a usable body:
+update_contacts_sar_user_deregistration() collects the Contact headers into
+explicit_dereg_contact before it starts flipping states, and its own live
+walk contributes nothing by the time the worker runs either.
+
+Nothing else changes. The contact still goes to CONTACT_DELETED here, so
+timer_impurecord() unlinks it on the next tick exactly as before; only the
+notification body is fixed.
+
+diff --git a/src/modules/ims_registrar_scscf/reg_rpc.c b/src/modules/ims_registrar_scscf/reg_rpc.c
+index cd07989..b65bd7f 100644
+--- a/src/modules/ims_registrar_scscf/reg_rpc.c
++++ b/src/modules/ims_registrar_scscf/reg_rpc.c
+@@ -38,6 +38,7 @@ static void reg_rpc_dereg_impu(rpc_t *rpc, void *ctx)
+ 	udomain_t *domain;
+ 	struct impurecord *impu_rec;
+ 	impu_contact_t *impucontact;
++	str dereg_contact;
+ 
+ 	if(rpc->scan(ctx, "S", &impu) < 1) {
+ 		rpc->fault(ctx, 400, "required IMPU argument");
+@@ -65,12 +66,27 @@ static void reg_rpc_dereg_impu(rpc_t *rpc, void *ctx)
+ 	while(impucontact) {
+ 		LM_DBG("Deleting contact with AOR [%.*s]\n",
+ 				impucontact->contact->aor.len, impucontact->contact->aor.s);
++		dereg_contact = impucontact->contact->c;
+ 		ul.lock_contact_slot_i(impucontact->contact->sl);
+ 		impucontact->contact->state = CONTACT_DELETE_PENDING;
+ 		if(impu_rec->shead) {
+-			//send NOTIFY to all subscribers of this IMPU.
+-			notify_subscribers(impu_rec, impucontact->contact, 0, 0,
+-					IMS_REGISTRAR_CONTACT_UNREGISTERED);
++			/* Send NOTIFY to all subscribers of this IMPU, passing the contact
++			 * URI as an explicit de-registration contact.  The notification is
++			 * only queued here; the body is rendered later, in the
++			 * notification worker, by generate_reginfo_full().  By then this
++			 * contact is CONTACT_DELETED - set below, two statements away and
++			 * under the very contact slot lock the renderer needs - so
++			 * process_xml_for_contact() returns early for it and the NOTIFY
++			 * goes out with no <contact> child at all.  A watcher that only
++			 * removes a contact it can find in the body (ims_registrar_pcscf)
++			 * therefore keeps its binding, and its IPsec tunnel with it.
++			 * new_notification() copies the explicit contact URI into the
++			 * queued notification, and generate_reginfo_full() emits it from
++			 * that copy, so the body no longer depends on when the render
++			 * happens.  This is the same mechanism the de-REGISTER path in
++			 * save.c relies on. */
++			notify_subscribers(impu_rec, impucontact->contact, &dereg_contact,
++					1, IMS_REGISTRAR_CONTACT_UNREGISTERED);
+ 		}
+ 		impucontact->contact->state = CONTACT_DELETED;
+ 		ul.unlock_contact_slot_i(impucontact->contact->sl);

@@ -109,6 +109,93 @@ Gm requires IPsec. In Kamailio this functionality is implemented in the ims_ipse
 - moving the IPsec endpoint to the IPVS. The Kubernetes service implementation in modern clusters is based on IPVS/LVS. These virtual devices could be used as IPsec termination and the SIP packet to be forwarded internally. Source Hashing (sh) load balancing algorithm should be used so the same UE will go to the same Proxy instance. This could work until the conntrack for UDP expires. MT INVITE might be a problem. In such situations the message might be routed with the worker node IP instead of service IP and will not be IPsec encapsulated.
 - eBPF? Custom eBPF load balancer could be implemented and it could forward towards multiple pods. Cilium does this but as CNI project, it is situated with knowledge of the pod network interface and could forward directly towards it. Another issue will be how to handle the IPsec? The eBPF program should be situated in such manner to be able to handle both incoming and outgoing packets. XDP seems to out of the question, probably TC.
 
+### Network attachment (implemented)
+
+The first of the three is what the chart implements: `gm.enabled` in
+`charts/ims/values.yaml` attaches a Multus `NetworkAttachmentDefinition` to the
+P-CSCF pod and moves Gm onto it.
+
+**It is on by default**, along with the network on rtpengine's `internal`
+interface below, and enabling it is what creates it: the chart owns the NAD
+rather than expecting the cluster to carry one, so the pod is never annotated
+for a network that does not exist. What the cluster still has to supply is
+Multus itself — without the CRD the install fails on an unknown kind — and a
+node device for `config.master` to sit on, which is the one field the chart
+cannot guess. `charts/ims/values-ci.yaml` is the single-node answer to both: it
+keeps the attachments on and swaps `config` for a `bridge` with host-local
+addressing, which is what the CI job and `kind.sh` install with. `./kind.sh
+prepare` is what puts Multus on the cluster for either.
+
+```yaml
+gm:
+  enabled: true         # renders the NAD and attaches it
+  name: gm              # created as <release>-gm; also what the annotation references
+  interface: gm0        # pinned, which is why the annotation is the JSON form
+  config:
+    master: eth0        # the node's device -- set this first
+```
+
+The one thing that is not a chart setting is the address. `ipsec_listen_addr`
+is what the protected ports bind to and what the kernel SAs and xfrm policies
+are keyed on, and `ims_ipsec_pcscf` parses it with `str2ipbuf()`
+(`ims_ipsec_pcscf_mod.c:226`): a numeric IPv4 literal, never an interface name,
+and `mod_init` returns -1 for anything else. With Gm on a secondary interface
+the address comes from that network's IPAM at pod creation, so it is in no
+field Kubernetes can project and in no value Helm can render. The chart
+therefore passes `GMDEV` instead, and `images/kamailio/cscf/start.sh` — now the
+image's entrypoint — reads the address off that device and exports `IPSEC` from
+it before exec'ing kamailio. Without the attachment nothing changes: the chart
+still sets `IPSEC` from `status.podIP` and the shim passes it straight through.
+
+Two things do not follow automatically:
+
+- **The PCO.** What the UE dials is the P-CSCF list the SMF hands out, and the
+  core chart fills it from the P-CSCF's headless Service, which publishes pod
+  addresses — Kubernetes Endpoints carry the primary CNI's address and nothing
+  else. Set `ims.pcscf` in `charts/core/values.yaml` to the Gm addresses, one
+  per P-CSCF, or the UE keeps registering over the interface this was meant to
+  replace. Empty, it falls back to the Service name. Nothing checks it: pointed
+  at the wrong interface, registration still works, so the only symptom is that
+  the DNAT-free path is silently unused.
+- **The route to the UE pool.** The `ueroute` sidecar derives its next hop from
+  the pod's default route, which still points at the primary CNI. When the pool
+  is reached through the Gm network's router instead, name it in
+  `global.ue.via`.
+- **Masquerade on the way in.** Whatever forwards the UE's packets to the Gm
+  address must not SNAT them. A cluster that masquerades traffic leaving the pod
+  CIDR will rewrite the source of a packet the UPF forwards to a Gm address that
+  is outside it, and ESP in transport mode does not survive that -- which is the
+  very thing the attachment exists to avoid. It fails *late* and looks like
+  something else: the plain REGISTER and the 401 both ride through, because UDP
+  survives NAT, and only the protected REGISTER disappears. The tell is in the
+  P-CSCF's own log,
+
+  ```
+  ipsec_create(): Registration for contact with AOR [sip:10.10.0.2:5088],
+      VIA [1://10.10.0.2:5088], received_host [1://10.20.0.1:5088]
+  ```
+
+  where `received_host` is the router's address rather than the UE's. Seen on
+  KinD, whose kindnet installs `KIND-MASQ-AGENT` with a single `RETURN` for the
+  pod CIDR and `MASQUERADE` for everything else; exempt the Gm subnet there.
+- **Asymmetry on the way out**, which is what `mhomed = 1` in `proxy.cfg` is
+  for. kamailio relays from the socket a message arrived on, and for anything
+  the UE sent that is now the protected socket bound to the Gm address — so the
+  REGISTER going on to the I-CSCF leaves by the Mw interface carrying a Gm
+  source address. Strict reverse-path filtering drops it. The symptom is
+  indistinguishable from a broken core: the UE gets its 401, installs its SAs,
+  sends the protected REGISTER, and nothing answers. `mhomed` makes kamailio
+  pick the source by looking up the route to the destination instead. Measured
+  on KinD with the node at `rp_filter=1` — without it, 0/2 registered and
+  `TcpExtIPReversePathFilter` moved by 10 per run; with it, 2/2 registered over
+  ESP, a call answered, and the counter did not move.
+
+The reservation in the first bullet of the list above still stands. whereabouts
+hands out the next free address in the range, not the one the departing pod
+had, so an ordinal does not keep its Gm address across rescheduling — this is
+the prerequisite for HA-PLAN Tier 1's takeover, not the whole of it.
+
+
 
 ## Serving-CSCF
 S-CSCF to PSTN connectivity. When S-CSCF is sending packet it will be sent by default from the worker node host IP. When receiving response on the same IP, Service type NodePort on the 5060 port is required. This is a problem as this requires system k8s reconfiguration as the port is not allowed by default for this Service type allocation.
@@ -116,5 +203,90 @@ S-CSCF to PSTN connectivity. When S-CSCF is sending packet it will be sent by de
 
 ## rtpengine
 The same challenges as the Proxy-CSCF apply. [whereabouts](https://github.com/k8snetworkplumbingwg/whereabouts) with host device/macvlan could be utilised as the IP in the SDP is assigned by the rtpengine when offer/answer is forwarded to it. IP allocation pool could be used for these cases.
+
+### Network attachment (implemented)
+
+Each entry in `media.interfaces` in `charts/rtpengine/values.yaml` can carry a
+`network`, and the one on `internal` is on by default for the same reason as
+Gm, with the same ownership: enabling it renders the NAD named by
+`network.name`, so no two interfaces may share one. It needs no shim: rtpengine resolves a device name to an address itself, so
+the device the attachment creates goes straight into the interface's `address`.
+
+```
+Could not parse 'media0' as network address, checking to see if it's an interface
+Determined address 10.30.0.5 for interface 'media0'
+```
+
+Only media moves. The ng control socket stays on `0.0.0.0` behind the ClusterIP
+Service the S-CSCF addresses, which is the one part of rtpengine that wants
+Kubernetes load balancing. Without an attachment the interface binds whatever
+its `address` names on the pod itself — `any` being every address it has, which
+under Kubernetes is the pod address.
+
+The same reservation as for Gm applies: an address out of a whereabouts pool is
+reachable from the UE, but it is not one the ordinal keeps across rescheduling,
+which is what HA-PLAN §5.5 needs before media can follow a takeover.
+
+The one thing that is not optional is the **return route**, which is why the
+shipped `config` carries an `ipam.routes` entry for the UE pool. rtpengine
+answers with its media address, but nothing else in the pod routes the UE pool
+out of the media interface, so the RTP would leave by the primary one still
+carrying the media source address — dropped by strict reverse-path filtering,
+and the call then comes up *answered* with the audio missing rather than
+failing. Measured on KinD: without the route the node's
+`TcpExtIPReversePathFilter` moved by ~179 over one two-stream call and neither
+stream received anything; with it, the best run was 199 sent / 198 received at
+0% loss and MOS 4.40. It goes in the attachment rather than a sidecar because
+the CNI installs it at attach time and the rtpengine image has no `ip`. Its
+`dst` has to track `global.ue.subnet` by hand.
+
+Do not read those figures as a verdict on the media path as a whole. The same
+two-subscriber call with **both attachments off** measured 199 sent / 0
+received with both streams dead, and some attachment-on runs still lost one of
+the two streams. Whatever that is, it predates this work and is worse without
+it; it wants isolating separately.
+
+### More than one interface, and who chooses (implemented)
+
+`media.interfaces` is a list because a call between two UEs and a call out to
+the trunk are not answered with the same address. rtpengine calls these
+*logical interfaces*, renders them as `[interface-<name>]` sections, and picks
+one per side of a call from `direction=`.
+
+Naming them at every `rtpengine_manage()` in the S-CSCF would put media policy
+in the dial plan, so the chart puts it in `templates` instead — rtpengine's own
+`[templates]` section, a name for a string of ng flags. The S-CSCF then sends
+only the name:
+
+| call | template | interfaces (offerer → answerer) |
+| --- | --- | --- |
+| UE to UE | `internal` | internal → internal |
+| UE to the trunk | `outgoing` | internal → external |
+| trunk to a UE | `incoming` | external → internal |
+
+`images/kamailio/cscf/serving.cfg` chooses in `route[E164]`, which is where the
+breakout decision is already made, and hands the name over in `route[MORIG]`.
+An incoming call is anchored on its terminating leg instead, and only where a
+trunk is configured — see `route[MTERM]` for why anchoring an on-net call there
+as well would loop its media back on itself.
+
+Measured against the daemon (26.3) with a rendered config, one advertised
+address on `external` to make the choice visible:
+
+```
+template=internal   toward callee: 172.17.0.3:30006    toward caller: 172.17.0.3:30016
+template=outgoing   toward callee: 203.0.113.7:40016   toward caller: 172.17.0.3:30060
+template=incoming   toward callee: 172.17.0.3:30062    toward caller: 203.0.113.7:40078
+```
+
+with the ports also coming from each interface's own range. Two things worth
+knowing about how it fails: rtpengine takes a `direction=` naming an interface
+it has never heard of, logs `Templates for signalling flags '...' not found`
+and answers on its **default** interface — a call that connects with the media
+on the wrong network. That is why the chart validates the templates against
+`media.interfaces` at render time and refuses rather than installs. And an
+interface with no attachment still resolves, so a single-network cluster can
+leave `external` as an `alias` of `internal` and lose nothing but the second
+address.
 
 

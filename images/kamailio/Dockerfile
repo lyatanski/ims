@@ -2,7 +2,6 @@ FROM alpine:latest AS build
 
 RUN apk --no-cache upgrade \
     && apk add --no-cache \
-        abuild sudo \
         git \
         gcc \
         build-base \
@@ -22,23 +21,19 @@ RUN apk --no-cache upgrade \
         curl-dev \
         nghttp2-dev \
         mariadb-dev \
-    && ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/ \
-    && adduser -D build && addgroup build abuild \
-    && echo "%abuild ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abuild
+    && ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/
 RUN git clone --depth=1 https://github.com/kamailio/kamailio.git
-# Carried until upstream takes them — each patch header says what it fixes and
-# why. `git apply` fails the build if one stops applying, which is what we want:
-# a silently unpatched image leaks an IPsec tunnel per ended registration.
 COPY patches/ /patches/
-RUN git -C /kamailio apply --verbose /patches/*.patch
+RUN for p in /patches/*.patch; do echo "== $p"; git -C /kamailio apply --verbose "$p" || exit 1; done
 RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
         -D MODULE_GROUP_NAME="" \
         -D INCLUDE_MODULES="xlog debugger \
             kex siputils textops textopsx \
             pv rr sl tm \
             sanity \
+            enum \
             xhttp xhttp_prom \
-            db_redis db_mysql \
+            db_redis ndb_redis \
             cdp cdp_avp \
             ims_dialog \
             pua ims_registrar_pcscf ims_usrloc_pcscf ims_ipsec_pcscf ims_qos \
@@ -72,5 +67,8 @@ RUN --mount=type=bind,from=build,source=/kamailio/utils/kamctl/db_redis/kamailio
     && cp /dbmap/rtpengine /etc/cscf/schema/serving
 COPY cscf/ /etc/cscf
 
-ENTRYPOINT ["kamailio", "-DD", "-E"]
+# Not the binary directly: start.sh derives ims_ipsec_pcscf's `ipsec_listen_addr`
+# from a Gm interface when one is attached, then execs kamailio with the flags
+# that used to be here and whatever `args`/`command` the caller appends.
+ENTRYPOINT ["sh", "/etc/cscf/start.sh"]
 

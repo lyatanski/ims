@@ -17,6 +17,9 @@ spec:
     image: {{ .Values.test.image }}
     command: [lua]
     args: [ims_test_s5.lua]
+    {{- with .Values.test.resources }}
+    resources: {{- toYaml . | nindent 6 }}
+    {{- end }}
     env:
     - {name: PGW_IP,           value: {{ .Values.global.core.release }}-smf.{{ .Release.Namespace }}.svc.cluster.local}
     - {name: GTPU_IFACE,       value: eth0}
@@ -31,9 +34,9 @@ spec:
     - {name: IMS_REALM, value: {{ include "ims.realm.ims" . | quote }}}
     - {name: IMS_IMSI,  value: {{ tpl .Values.test.imsi . | quote }}}
     - {name: IMS_SUBS,  value: {{ .Values.test.subscribers | quote }}}
-    - {name: IMS_MSISDN_CC,     value: {{ .Values.test.msisdn.cc | quote }}}
+    - {name: IMS_MSISDN_CC,     value: {{ tpl .Values.test.msisdn.cc . | quote }}}
     - {name: IMS_MSISDN_DIGITS, value: {{ .Values.test.msisdn.digits | quote }}}
-    - {name: CALL_URI, value: sip}
+    - {name: CALL_URI, value: {{ .Values.test.uri | quote }}}
     securityContext:
       capabilities:
         add:

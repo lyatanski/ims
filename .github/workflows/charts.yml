@@ -1,55 +1,229 @@
+# Called from container.yml once its images are published and tested. A
+# called workflow runs from the caller's commit, so a branch push tests that
+# branch's charts with that branch's copy of this file -- which a
+# `workflow_run` trigger never does: it always runs the default branch's.
 name: charts
 on:
-  workflow_run:
-    workflows: [container]
-    types: [completed]
-permissions: write-all
+  workflow_call:
 
 jobs:
-  charts:
+  publish:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success'
 
     steps:
     - uses: actions/checkout@v7
-      with:
-        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+    # rtpengine before ims: ims vendors it from file://../rtpengine, which has
+    # to carry its own valkey dependency by then.
     - name: Lint
       run: |
-        helm dependency update charts/core
-        helm dependency update charts/rtpengine
-        helm dependency update charts/ims
+        for c in core rtpengine ims; do helm dependency update charts/$c; done
         helm lint charts/core charts/ims
 
-    - name: Package
+    - name: Publish
       run: |
-        helm package --dependency-update charts/core
-        helm package --dependency-update charts/ims
+        helm package charts/core charts/ims
+        echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
+        for c in core-*.tgz ims-*.tgz; do helm push "$c" oci://ghcr.io/${{ github.actor }}; done
 
-    - name: Log in
-      run: helm registry login --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} oci://ghcr.io/
-
-    - name: Publish IMS
-      run: helm push ims-*.tgz oci://ghcr.io/${{ github.actor }}
-
-    - name: Publish Open5GS
-      run: helm push core-*.tgz oci://ghcr.io/${{ github.actor }}
-
+  # A single KinD node with the charts' Multus attachments on. They are the
+  # shape the charts ship -- transport-mode IPsec does not survive the DNAT a
+  # Service does, so testing without them tests a path no deployment uses.
+  # kind.sh does the same interactively; this is kept self-contained.
   test:
     needs:
-    - charts
+    - publish
     runs-on: ubuntu-latest
 
     steps:
     - name: Create KinD Cluster
       uses: helm/kind-action@v1
 
-    - name: Install Open5GS
-      run: helm install core oci://ghcr.io/${{ github.actor }}/core
+    # KinD ships neither the bridge plugin nor Multus. v4.3.0 because the thin
+    # image is published up to v4.3.0 only, and pinned by name because the
+    # manifest says `:snapshot`. Upstream's 50Mi limit OOMKills the daemon
+    # before it writes its CNI config.
+    - name: Install Multus
+      run: |
+        NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+        curl -sSLf https://github.com/containernetworking/plugins/releases/download/v1.9.1/cni-plugins-linux-amd64-v1.9.1.tgz \
+          | docker exec -i "$NODE" tar -xzf - -C /opt/cni/bin ./bridge ./macvlan ./static
 
+        MULTUS_IMAGE=ghcr.io/k8snetworkplumbingwg/multus-cni:v4.3.0
+        kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/v4.3.0/deployments/multus-daemonset.yml
+        kubectl -n kube-system set image ds/kube-multus-ds \
+          kube-multus="$MULTUS_IMAGE" install-multus-binary="$MULTUS_IMAGE"
+        kubectl -n kube-system set resources ds/kube-multus-ds \
+          --containers=kube-multus --requests=memory=256Mi --limits=memory=256Mi
+        kubectl -n kube-system rollout status ds/kube-multus-ds --timeout=5m
+
+        timeout 120 sh -c "until docker exec $NODE test -f /etc/cni/net.d/00-multus.conf; do sleep 2; done" || {
+          echo "::error::multus never wrote /etc/cni/net.d/00-multus.conf"
+          kubectl -n kube-system logs ds/kube-multus-ds
+          exit 1
+        }
+
+    # The file being there is not enough: kubelet rereads /etc/cni/net.d on
+    # its own schedule, and a pod created before it does silently gets only
+    # the primary network. Attach something and look at what it got.
+    - name: Verify Multus attaches
+      run: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: k8s.cni.cncf.io/v1
+        kind: NetworkAttachmentDefinition
+        metadata: {name: multus-probe}
+        spec:
+          config: '{"cniVersion": "0.3.1", "name": "multus-probe", "type": "bridge", "bridge": "probe0", "ipam": {"type": "host-local", "subnet": "10.99.0.0/24"}}'
+        ---
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: multus-probe
+          annotations:
+            k8s.v1.cni.cncf.io/networks: '[{"name": "multus-probe", "interface": "probe0"}]'
+        spec:
+          containers:
+          - name: probe
+            image: registry.k8s.io/pause:3.10
+        EOF
+        kubectl wait pod/multus-probe --for=condition=Ready --timeout=60s
+        status=$(kubectl get pod multus-probe -o jsonpath='{.metadata.annotations.k8s\.v1\.cni\.cncf\.io/network-status}')
+        kubectl delete pod/multus-probe net-attach-def/multus-probe
+        echo "$status" | grep -q '"interface": *"probe0"' || {
+          echo "::error::multus is installed but attached no probe0"
+          exit 1
+        }
+
+    # kindnet SNATs anything leaving the pod CIDR, and transport-mode ESP does
+    # not survive that: the plain REGISTER and the 401 ride through and only
+    # the protected REGISTER disappears. The Gm and media subnets from the IMS
+    # values below.
+    - name: Exempt the secondary subnets from masquerading
+      run: |
+        NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+        for net in 10.20.0.0/24 10.30.0.0/24; do
+          docker exec "$NODE" iptables -t nat -I KIND-MASQ-AGENT 1 -d "$net" -j RETURN
+        done
+
+    # The chart defaults request 5.8 cores between them -- the measured demand
+    # of one capacity unit (SIZING.md) -- against the runner's 4 vCPU, so both
+    # installs lower `requests` to schedule. Limits stay as shipped: a limit
+    # does not affect scheduling, and the SMF and P-CSCF idle above 256Mi.
+    #
+    # ims.pcscf is the P-CSCF's Gm address rather than the `ims-pcscf` Service:
+    # the protected ports bind on gm0, and a protected REGISTER arriving on the
+    # pod address has no SA to match. A literal, because core installs before
+    # ims exists to be asked -- host-local hands out upward from `rangeStart`
+    # and the P-CSCF is the only pod on that network, so it is always .10.
+    - name: Install Open5GS
+      run: |
+        helm install core oci://ghcr.io/${{ github.actor }}/core -f - <<'EOF'
+        ims:
+          pcscf:
+          - 10.20.0.10
+        components:
+          hss:
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 2, memory: 256Mi}
+          pcrf:
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 1500m, memory: 256Mi}
+          smf:
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 2500m, memory: 1Gi}
+          upf:
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 2, memory: 768Mi}
+        mongodb:
+          resources:
+            requests: {cpu: 100m, memory: 192Mi}
+            limits: {cpu: 1500m, memory: 1Gi}
+        EOF
+
+    # `bridge` rather than macvlan, whose child cannot reach its parent's host
+    # -- and here the UE sits behind the node. `host-local` rather than
+    # whereabouts, one operator fewer. The `null`s drop macvlan's and
+    # whereabouts' keys, which Helm's map merge would otherwise keep beside
+    # these. rtpengine's interfaces are a list, which Helm replaces whole, so
+    # `external` is restated and no `null`s are needed there.
+    #
+    # Gm's `rangeStart` is what makes the P-CSCF .10 -- move it together with
+    # ims.pcscf above.
     - name: Install IMS
-      run: helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m
+      run: |
+        helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m -f - <<'EOF'
+        gm:
+          enabled: true
+          config:
+            cniVersion: 0.3.1
+            type: bridge
+            bridge: gm0
+            isGateway: true
+            master: null
+            mode: null
+            ipam:
+              type: host-local
+              subnet: 10.20.0.0/24
+              gateway: 10.20.0.1
+              rangeStart: 10.20.0.10
+              rangeEnd: 10.20.0.250
+              range: null
+        global:
+          ue:
+            via: 10.20.0.1
+        cscf:
+          proxy:
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 2, memory: 1Gi}
+          interrogating:
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 1, memory: 384Mi}
+          serving:
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 2, memory: 768Mi}
+        rtpengine:
+          media:
+            interfaces:
+            - name: internal
+              address: media0
+              network:
+                enabled: true
+                name: media
+                config:
+                  cniVersion: 0.3.1
+                  type: bridge
+                  bridge: media0
+                  isGateway: true
+                  ipam:
+                    type: host-local
+                    subnet: 10.30.0.0/24
+                    gateway: 10.30.0.1
+                    rangeStart: 10.30.0.10
+                    rangeEnd: 10.30.0.250
+                    routes:
+                    - dst: 10.10.0.0/16
+                      gw: 10.30.0.1
+            - name: external
+              alias: internal
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 2, memory: 512Mi}
+          valkey:
+            resources:
+              requests: {cpu: 50m, memory: 32Mi}
+              limits: {cpu: 1, memory: 256Mi}
+        dns:
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 1, memory: 256Mi}
+        EOF
 
     - name: Test
       run: helm test ims --logs --timeout 10m
@@ -57,6 +231,7 @@ jobs:
     - name: Debug
       if: always()
       run: |
-        kubectl get pods,svc
+        kubectl get pods,svc,net-attach-def
         kubectl describe pod -l app.kubernetes.io/instance=ims
-        for d in $(kubectl get deploy -o name); do echo "== $d"; kubectl logs $d --tail=100; done
+        # deploy,sts: the CSCFs, rtpengine and valkey are StatefulSets.
+        for d in $(kubectl get deploy,sts -o name); do echo "== $d"; kubectl logs "$d" --tail=100; done
