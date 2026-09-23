@@ -2,7 +2,6 @@
 {{- range tuple "proxy" "interrogating" "serving" }}
 {{- $cscf := . -}}
 {{- with $dot }}
-{{- $dereg := and .Values.drain.deregister (eq "serving" $cscf) }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -31,10 +30,6 @@ spec:
       labels: {{- include "ims.labels" . | nindent 8 }}
         role: {{ trunc 1 $cscf }}cscf
     spec:
-      # The hook's worst case, plus head-room: the de-registration phase is
-      # capped at `budget` by drain.sh, then it lingers. Overrunning this would
-      # have the kubelet SIGKILL the pod mid-drain and lose the linger too.
-      terminationGracePeriodSeconds: {{ add .Values.drain.linger .Values.drain.grace (ternary .Values.drain.budget 0 $dereg) }}
       dnsPolicy: None
       dnsConfig:
         nameservers:
@@ -74,21 +69,7 @@ spec:
         {{- end }}
         - name: DBURL
           value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ index .Values.db $cscf }}
-        # drain.sh reads these with ${VAR:-default}, so an unset value renders
-        # empty and still falls back rather than becoming a literal "".
-        - name: DRAIN_DEREGISTER
-          value: {{ ternary "1" "0" $dereg | quote }}
-        - name: DRAIN_LINGER
-          value: {{ .Values.drain.linger | quote }}
-        {{- if $dereg }}
-        - name: DRAIN_RATE
-          value: {{ .Values.drain.rate | quote }}
-        - name: DRAIN_BUDGET
-          value: {{ .Values.drain.budget | quote }}
-        {{- end }}
         {{- if eq "serving" $cscf }}
-        - name: DRAIN_UNPUBLISH
-          value: {{ ternary "1" "0" .Values.drain.unpublish | quote }}
         - name: REGSRV
           value: {{ include "ims.regsrv" . | quote }}
         - name: RTPADR
@@ -129,13 +110,6 @@ spec:
           httpGet: {path: /metrics, port: mon}
           periodSeconds: 20
           failureThreshold: 6
-        # Invoked through `sh` rather than relying on the mode bit surviving
-        # git and COPY. On the S-CSCF this de-registers first; on the other two
-        # roles it is only the linger, which is all they have to hand over.
-        lifecycle:
-          preStop:
-            exec:
-              command: ["sh", "/etc/cscf/drain.sh"]
         # Per-role, because the three roles are not the same size
         {{- with dig $cscf "resources" (.Values.resources | default dict) (.Values.cscf | default dict) }}
         resources: {{- toYaml . | nindent 10 }}

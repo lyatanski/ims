@@ -18,8 +18,7 @@
 # through untouched -- the single-interface case, which is the pod address
 # under Kubernetes and a pinned one under compose.
 #
-# exec, so kamailio is still PID 1 and still receives signals directly: the
-# kubelet's SIGTERM and the preStop hook in drain.sh both depend on it.
+# exec, so kamailio is still PID 1 and receives the kubelet's SIGTERM directly.
 
 set -e
 
