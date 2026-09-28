@@ -22,11 +22,10 @@ error path otherwise uses.
 Augmented: TS 23.380 4.6.2 restoration information
 ---------------------------------------------------
 The above restores the profile, but not the registration binding a
-terminating request needs to actually be delivered -- kamailio's own
-patches/0011 said as much: "The Restoration-Info half of 23.380 (S-CSCF
-backing up Path and Contact at the HSS and restoring bindings from them) is
-deliberately not part of this." This closes that gap on the HSS side; a
-matching kamailio patch (patches/0012, images/kamailio) does the other half.
+terminating request needs to actually be delivered. This closes that gap on
+the HSS side; the matching kamailio patch (patches/0011, images/kamailio)
+does the S-CSCF half, backing up Path and Contact at the HSS and restoring
+bindings from them.
 
 TS 23.380 4.6.2 has the S-CSCF back up, during (RE_)REGISTRATION, "the list
 of SIP proxies in the path (normally it would be just the P-CSCF address)"
