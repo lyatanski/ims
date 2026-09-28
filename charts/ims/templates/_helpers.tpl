@@ -241,3 +241,42 @@ The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
       sleep {{ .Values.reconcile }}
     done
 {{- end }}
+
+{{/*
+The test UE's environment: the access it attaches over (S5/S8 to the core's
+SMF, GTP-U on the pod's own interface) and the subscriber it registers as.
+Shared by every helm test hook, so they all attach the same way and as the
+same provisioned IMSI range -- the core provisions `subscribers.count` of
+them, one by default, and a hook that registered as anybody else would be
+testing the HSS rather than the IMS.
+*/}}
+{{- define "ims.test.env" -}}
+- {name: PGW_IP,           value: {{ .Values.global.core.release }}-smf.{{ .Release.Namespace }}.svc.cluster.local}
+- {name: GTPU_IFACE,       value: eth0}
+- {name: GTPU_INNER_IFACE, value: eth0}
+{{- with .Values.test.t3ms }}
+- {name: GTP_T3_MS,        value: {{ . | quote }}}
+{{- end }}
+- {name: IMS_K,     value: {{ .Values.test.k | quote }}}
+- {name: IMS_OPC,   value: {{ .Values.test.opc | quote }}}
+- {name: IMS_MCC,   value: {{ .Values.mcc | quote }}}
+- {name: IMS_MNC,   value: {{ .Values.mnc | quote }}}
+- {name: IMS_REALM, value: {{ include "ims.realm.ims" . | quote }}}
+- {name: IMS_IMSI,  value: {{ tpl .Values.test.imsi . | quote }}}
+- {name: IMS_MSISDN_CC,     value: {{ tpl .Values.test.msisdn.cc . | quote }}}
+- {name: IMS_MSISDN_DIGITS, value: {{ .Values.test.msisdn.digits | quote }}}
+- {name: CALL_URI, value: {{ .Values.test.uri | quote }}}
+{{- end }}
+
+{{/*
+What the test UE needs of the kernel: NET_ADMIN for the ESP SAs and policies,
+the transparent UE socket and the TC hook; BPF to load the GTP-U datapath the
+user plane rides.
+*/}}
+{{- define "ims.test.securityContext" -}}
+capabilities:
+  add:
+  - NET_ADMIN
+  - BPF
+  - PERFMON
+{{- end }}

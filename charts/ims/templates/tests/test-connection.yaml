@@ -21,27 +21,6 @@ spec:
     resources: {{- toYaml . | nindent 6 }}
     {{- end }}
     env:
-    - {name: PGW_IP,           value: {{ .Values.global.core.release }}-smf.{{ .Release.Namespace }}.svc.cluster.local}
-    - {name: GTPU_IFACE,       value: eth0}
-    - {name: GTPU_INNER_IFACE, value: eth0}
-    {{- with .Values.test.t3ms }}
-    - {name: GTP_T3_MS,        value: {{ . | quote }}}
-    {{- end }}
-    - {name: IMS_K,     value: {{ .Values.test.k | quote }}}
-    - {name: IMS_OPC,   value: {{ .Values.test.opc | quote }}}
-    - {name: IMS_MCC,   value: {{ .Values.mcc | quote }}}
-    - {name: IMS_MNC,   value: {{ .Values.mnc | quote }}}
-    - {name: IMS_REALM, value: {{ include "ims.realm.ims" . | quote }}}
-    - {name: IMS_IMSI,  value: {{ tpl .Values.test.imsi . | quote }}}
+    {{- include "ims.test.env" . | nindent 4 }}
     - {name: IMS_SUBS,  value: {{ .Values.test.subscribers | quote }}}
-    - {name: IMS_MSISDN_CC,     value: {{ tpl .Values.test.msisdn.cc . | quote }}}
-    - {name: IMS_MSISDN_DIGITS, value: {{ .Values.test.msisdn.digits | quote }}}
-    - {name: CALL_URI, value: {{ .Values.test.uri | quote }}}
-    securityContext:
-      capabilities:
-        add:
-        # NET_ADMIN for the ESP SAs and policies, the transparent UE socket and
-        # the TC hook; BPF to load the GTP-U datapath the user plane rides.
-        - NET_ADMIN
-        - BPF
-        - PERFMON
+    securityContext: {{- include "ims.test.securityContext" . | nindent 6 }}

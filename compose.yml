@@ -158,6 +158,7 @@ services:
       IMS_MSISDN_CC:      ${DIAL}
       IMS_MSISDN_DIGITS:  9
       CALL_URI:  ${CALL_URI:-tel}
+      CALL_REVERSE_SLEEP_MS: 30000
     cap_add:
     - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
     - BPF         # loading the GTP-U datapath

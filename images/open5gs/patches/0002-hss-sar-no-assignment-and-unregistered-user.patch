@@ -1,5 +1,6 @@
 Answer NO_ASSIGNMENT and UNREGISTERED_USER Server-Assignment-Requests as TS
-29.228 6.1.2.1 has them.
+29.228 6.1.2.1 has them, and back up the S-CSCF's Contact/Path so a restoring
+S-CSCF gets more than the profile back.
 
 The SAR callback downloaded User-Data only for REGISTRATION and RE_REGISTRATION.
 NO_ASSIGNMENT and UNREGISTERED_USER are sent precisely to get the profile -- the
@@ -18,19 +19,447 @@ other types overwrite. DIAMETER_UNABLE_TO_COMPLY is a base protocol code, so it
 goes out as a Result-Code rather than through the Experimental-Result the
 error path otherwise uses.
 
+Augmented: TS 23.380 4.6.2 restoration information
+---------------------------------------------------
+The above restores the profile, but not the registration binding a
+terminating request needs to actually be delivered -- kamailio's own
+patches/0011 said as much: "The Restoration-Info half of 23.380 (S-CSCF
+backing up Path and Contact at the HSS and restoring bindings from them) is
+deliberately not part of this." This closes that gap on the HSS side; a
+matching kamailio patch (patches/0012, images/kamailio) does the other half.
+
+TS 23.380 4.6.2 has the S-CSCF back up, during (RE_)REGISTRATION, "the list
+of SIP proxies in the path (normally it would be just the P-CSCF address)"
+and "the Contact Information". TS 29.229 6.3.46 already gives this a home:
+SCSCF-Restoration-Info (639, Grouped), carrying the private identity and,
+one level down, the Path (640) and Contact (641) -- both OctetString:
+
+  SCSCF-Restoration-Info ::= < AVP Header: 639, 10415 >
+                             { User-Name }
+                           1*{ Restoration-Info }
+  Restoration-Info       ::= < AVP Header: 649, 10415 >   (6.3.52)
+                             { Path }
+                             { Contact }
+
+open5gs's own Cx dictionary (lib/diameter/cx/dict.c) already lists
+SCSCF-Restoration-Info as a legal optional AVP on both SAR and SAA. The
+freeDiameter dict_dcca_3gpp extension this HSS already loads (see its
+LoadExtension line) defines all four AVPs, so nothing new needs registering
+at the dictionary level, only resolving and using them.
+
+hss_ogs_diam_cx_sar_cb() now:
+ - on REGISTRATION/RE_REGISTRATION, reads the Path and Contact out of the
+   SAR's SCSCF-Restoration-Info/Restoration-Info, if present, and stores them
+   against the IMPU (hss-context.c, mirroring
+   hss_cx_set_server_name()/hss_cx_get_server_name()) -- only both together,
+   since both are mandatory and half a binding is not one to restore;
+ - on NO_ASSIGNMENT/UNREGISTERED_USER -- the same two restoration types the
+   result-code and User-Data changes above already single out -- attaches
+   whatever was stored back onto the SAA in the same two-level form, with
+   the IMPU's own private identity as the User-Name (a terminating
+   UNREGISTERED_USER SAR need not name one); unchanged (no
+   SCSCF-Restoration-Info) when there is nothing to hand back.
+
+Both halves are gated as TS 29.229 table 7.1.1 has it, on IMSRestorationInd
+(bit 2 of Cx Feature-List-ID 1): restoration information goes back in an
+SAA only when the SAR's Supported-Features sets that bit ("If the S-CSCF
+does not support this feature, the HSS shall not send the IMS Restoration
+Information"), and every SAA -- error answers included -- carries this
+HSS's own Supported-Features with that bit, M bit clear (7.2, 7.2.1).
+Storing is not gated: an S-CSCF that sends SCSCF-Restoration-Info without
+advertising the feature is out of spec, but keeping what it sent costs
+nothing and hands back nothing unless a later SAR asks with the bit set.
+Not done: 7.2.1's DIAMETER_ERROR_FEATURE_UNSUPPORTED. A SAR whose
+Supported-Features has the M bit set for a feature this HSS lacks (SiFC,
+say) is answered as though that bit were not there.
+
+hss_cx_set_restoration_info() fans the Contact/Path out to every public
+identity in the caller's implicit set (IMSI-form, MSISDN-form, tel-form:
+one hss_impu_t each, sharing one hss_impi_t), not only the identity string
+this particular SAR carried. Confirmed live against ims_test_s5: kamailio's
+REGISTRATION SAR names the IMSI-form identity, but a terminating INVITE
+resolves through ENUM to the MSISDN-form one, and the two are separate
+hss_impu_t records -- storing under one form left it invisible when queried
+under the other, so restoration silently never fired. hss-cx-path.c also
+does the storing call after the User-Data block, not right after the SAR's
+type is known: on a first-ever REGISTRATION the MSISDN-form and tel-form
+siblings are only created by hss_cx_download_user_data() in that same block,
+so storing any earlier would fan out to whichever IMPU already happened to
+exist and nothing else.
+
+Deliberately not backed up (TS 23.380 4.6.2 lists them as "may", not "shall"):
+Initial-CSeq-Sequence-Number, Call-ID, and the registration expiry, nor the
+4.6.3/4.6.4 reg-event Subscription-Info groups (needed only for the
+post-delivery NOTIFY nudge). An S-CSCF that never sends SCSCF-Restoration-Info
+-- one predating this patch, or a stock kamailio -- is unaffected: the AVP is
+optional on both sides of the exchange, and the answer carries none back.
+
+diff --git a/lib/diameter/cx/message.c b/lib/diameter/cx/message.c
+index 33155e0..ad6966b 100644
+--- a/lib/diameter/cx/message.c
++++ b/lib/diameter/cx/message.c
+@@ -39,6 +39,14 @@ struct dict_object *ogs_diam_cx_cmd_lia = NULL;
+ struct dict_object *ogs_diam_cx_public_identity = NULL;
+ struct dict_object *ogs_diam_cx_server_name = NULL;
+ 
++struct dict_object *ogs_diam_cx_scscf_restoration_info = NULL;
++struct dict_object *ogs_diam_cx_restoration_info = NULL;
++struct dict_object *ogs_diam_cx_supported_features = NULL;
++struct dict_object *ogs_diam_cx_feature_list_id = NULL;
++struct dict_object *ogs_diam_cx_feature_list = NULL;
++struct dict_object *ogs_diam_cx_path = NULL;
++struct dict_object *ogs_diam_cx_contact = NULL;
++
+ struct dict_object *ogs_diam_cx_sip_number_auth_items = NULL;
+ struct dict_object *ogs_diam_cx_sip_item_number = NULL;
+ struct dict_object *ogs_diam_cx_sip_auth_data_item = NULL;
+@@ -172,6 +180,21 @@ int ogs_diam_cx_init(void)
+     CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
+             "Server-Name", &ogs_diam_cx_server_name);
+ 
++    CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
++            "SCSCF-Restoration-Info", &ogs_diam_cx_scscf_restoration_info);
++    CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
++            "Restoration-Info", &ogs_diam_cx_restoration_info);
++    CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
++            "Supported-Features", &ogs_diam_cx_supported_features);
++    CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
++            "Feature-List-ID", &ogs_diam_cx_feature_list_id);
++    CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
++            "Feature-List", &ogs_diam_cx_feature_list);
++    CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
++            "Path", &ogs_diam_cx_path);
++    CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
++            "Contact", &ogs_diam_cx_contact);
++
+     CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
+             "SIP-Number-Auth-Items", &ogs_diam_cx_sip_number_auth_items);
+     CHECK_dict_search(DICT_AVP, AVP_BY_NAME_ALL_VENDORS,
+diff --git a/lib/diameter/cx/message.h b/lib/diameter/cx/message.h
+index 4bfa682..c53c42f 100644
+--- a/lib/diameter/cx/message.h
++++ b/lib/diameter/cx/message.h
+@@ -44,6 +44,25 @@ extern struct dict_object *ogs_diam_cx_cmd_lia;
+ extern struct dict_object *ogs_diam_cx_public_identity;
+ extern struct dict_object *ogs_diam_cx_server_name;
+ 
++/* TS 23.380 4.6.2: Contact and the Path leading to it (normally just the
++ * P-CSCF), backed up on REGISTRATION/RE_REGISTRATION and returned to a
++ * restoring S-CSCF on NO_ASSIGNMENT/UNREGISTERED_USER. TS 29.229 6.3.46:
++ * SCSCF-Restoration-Info ::= { User-Name } 1*{ Restoration-Info } ...,
++ * Restoration-Info ::= { Path } { Contact } ... (6.3.52). */
++extern struct dict_object *ogs_diam_cx_scscf_restoration_info;
++extern struct dict_object *ogs_diam_cx_restoration_info;
++
++/* TS 29.229 6.3.29-31 and table 7.1.1: Feature-List-ID 1 is the Cx feature
++ * list, and its bit 2 IMSRestorationInd is the one restoration information
++ * is gated on -- sent back in an SAA only to an S-CSCF that sets it. */
++#define OGS_DIAM_CX_FEATURE_LIST_ID 1
++#define OGS_DIAM_CX_FEATURE_IMS_RESTORATION_IND (1 << 2)
++extern struct dict_object *ogs_diam_cx_supported_features;
++extern struct dict_object *ogs_diam_cx_feature_list_id;
++extern struct dict_object *ogs_diam_cx_feature_list;
++extern struct dict_object *ogs_diam_cx_path;
++extern struct dict_object *ogs_diam_cx_contact;
++
+ extern struct dict_object *ogs_diam_cx_sip_number_auth_items;
+ extern struct dict_object *ogs_diam_cx_sip_item_number;
+ extern struct dict_object *ogs_diam_cx_sip_auth_data_item;
+diff --git a/src/hss/hss-context.c b/src/hss/hss-context.c
+index d62f640..4ffa6cc 100644
+--- a/src/hss/hss-context.c
++++ b/src/hss/hss-context.c
+@@ -48,6 +48,14 @@ typedef struct hss_impu_s {
+     char *id;
+     char *server_name;
+ 
++    /* TS 23.380 4.6.2 restoration information: the Contact and the Path
++     * leading to it (normally just the P-CSCF), backed up by the S-CSCF on
++     * REGISTRATION/RE_REGISTRATION and handed back on NO_ASSIGNMENT or
++     * UNREGISTERED_USER so a restarted S-CSCF can rebuild the binding
++     * instead of only the profile. */
++    char *restoration_contact;
++    char *restoration_path;
++
+     hss_impi_t *impi;
+ } hss_impu_t;
+ 
+@@ -679,6 +687,10 @@ static void impu_remove(hss_impu_t *impu)
+ 
+     if (impu->server_name)
+         ogs_free(impu->server_name);
++    if (impu->restoration_contact)
++        ogs_free(impu->restoration_contact);
++    if (impu->restoration_path)
++        ogs_free(impu->restoration_path);
+ 
+     ogs_pool_free(&impu_pool, impu);
+ }
+@@ -913,6 +925,60 @@ void hss_cx_set_server_name(
+     ogs_thread_mutex_unlock(&self.cx_lock);
+ }
+ 
++void hss_cx_get_restoration_info(char *public_identity,
++        char **user_name, char **contact, char **path)
++{
++    hss_impu_t *impu = NULL;
++
++    *user_name = NULL;
++    *contact = NULL;
++    *path = NULL;
++
++    ogs_thread_mutex_lock(&self.cx_lock);
++
++    impu = impu_find_by_id(public_identity);
++    if (impu && impu->impi) {
++        *user_name = impu->impi->id;
++        *contact = impu->restoration_contact;
++        *path = impu->restoration_path;
++    }
++
++    ogs_thread_mutex_unlock(&self.cx_lock);
++}
++
++void hss_cx_set_restoration_info(
++        char *public_identity, char *contact, char *path)
++{
++    hss_impu_t *impu = NULL;
++    hss_impu_t *sibling = NULL;
++
++    ogs_thread_mutex_lock(&self.cx_lock);
++
++    impu = impu_find_by_id(public_identity);
++    ogs_assert(impu);
++    ogs_assert(impu->impi);
++
++    /*
++     * Every public identity in the implicit set, not only the one this SAR
++     * named: the S-CSCF backs up restoration information once per REGISTER,
++     * against whichever form of the identity it sent (kamailio sends the
++     * IMSI-form one) -- but a terminating request restores by whatever form
++     * the caller dialled, MSISDN-form after ENUM. Storing under one form
++     * only would leave it invisible from every other.
++     */
++    ogs_list_for_each(&impu->impi->impu_list, sibling) {
++        if (sibling->restoration_contact)
++            ogs_free(sibling->restoration_contact);
++        sibling->restoration_contact = contact ? ogs_strdup(contact) : NULL;
++
++        if (sibling->restoration_path)
++            ogs_free(sibling->restoration_path);
++        sibling->restoration_path = path ? ogs_strdup(path) : NULL;
++    }
++
++    ogs_thread_mutex_unlock(&self.cx_lock);
++}
++
+ char *hss_cx_download_user_data(
+         char *user_name, char *visited_network_identifier,
+         ogs_ims_data_t *ims_data)
+diff --git a/src/hss/hss-context.h b/src/hss/hss-context.h
+index 1fe0ddc..249f02b 100644
+--- a/src/hss/hss-context.h
++++ b/src/hss/hss-context.h
+@@ -90,6 +90,16 @@ char *hss_cx_get_server_name(char *public_identity);
+ void hss_cx_set_server_name(
+         char *public_identity, char *server_name, bool overwrite);
+ 
++/* TS 23.380 4.6.2 restoration information: not e.g. hss_cx_get_server_name()'s
++ * single return value, since it may legitimately be absent (no REGISTER
++ * backed up yet) without that being an error. user_name is the private
++ * identity the binding belongs to, the User-Name TS 29.229 6.3.46 requires
++ * alongside it. */
++void hss_cx_get_restoration_info(char *public_identity,
++        char **user_name, char **contact, char **path);
++void hss_cx_set_restoration_info(
++        char *public_identity, char *contact, char *path);
++
+ char *hss_cx_download_user_data(
+         char *user_name, char *visited_network_identifier,
+         ogs_ims_data_t *ims_data);
 diff --git a/src/hss/hss-cx-path.c b/src/hss/hss-cx-path.c
-index a9c72d6..689091d 100644
+index ab89036..744f4e5 100644
 --- a/src/hss/hss-cx-path.c
 +++ b/src/hss/hss-cx-path.c
-@@ -1080,6 +1080,7 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+@@ -1068,6 +1068,160 @@ out:
+     return 0;
+ }
+ 
++/* Adds an OctetString AVP holding the C string value to parent */
++static int add_os_avp(struct avp *parent, struct dict_object *model,
++        char *value)
++{
++    struct avp *child = NULL;
++    union avp_value val;
++    int ret;
++
++    ret = fd_msg_avp_new(model, 0, &child);
++    if (ret != 0)
++        return ret;
++    val.os.data = (uint8_t *)value;
++    val.os.len = strlen(value);
++    ret = fd_msg_avp_setvalue(child, &val);
++    if (ret == 0)
++        ret = fd_msg_avp_add(parent, MSG_BRW_LAST_CHILD, child);
++    if (ret != 0)
++        fd_msg_free((msg_or_avp *)child);
++    return ret;
++}
++
++/*
++ * TS 29.229 6.3.46/6.3.52, all three values mandatory:
++ *   SCSCF-Restoration-Info ::= { User-Name } 1*{ Restoration-Info } ...
++ *   Restoration-Info ::= { Path } { Contact } ...
++ */
++static int add_scscf_restoration_info(struct msg *ans, char *user_name,
++        char *path, char *contact)
++{
++    struct avp *sri_avp = NULL, *ri_avp = NULL;
++    int ret;
++
++    ret = fd_msg_avp_new(ogs_diam_cx_restoration_info, 0, &ri_avp);
++    if (ret != 0)
++        return ret;
++    if ((ret = add_os_avp(ri_avp, ogs_diam_cx_path, path)) != 0 ||
++        (ret = add_os_avp(ri_avp, ogs_diam_cx_contact, contact)) != 0) {
++        fd_msg_free((msg_or_avp *)ri_avp);
++        return ret;
++    }
++
++    ret = fd_msg_avp_new(ogs_diam_cx_scscf_restoration_info, 0, &sri_avp);
++    if (ret != 0) {
++        fd_msg_free((msg_or_avp *)ri_avp);
++        return ret;
++    }
++    if ((ret = add_os_avp(sri_avp, ogs_diam_user_name, user_name)) != 0) {
++        fd_msg_free((msg_or_avp *)ri_avp);
++        fd_msg_free((msg_or_avp *)sri_avp);
++        return ret;
++    }
++    ret = fd_msg_avp_add(sri_avp, MSG_BRW_LAST_CHILD, ri_avp);
++    if (ret != 0) {
++        fd_msg_free((msg_or_avp *)ri_avp);
++        fd_msg_free((msg_or_avp *)sri_avp);
++        return ret;
++    }
++
++    ret = fd_msg_avp_add(ans, MSG_BRW_LAST_CHILD, sri_avp);
++    if (ret != 0)
++        fd_msg_free((msg_or_avp *)sri_avp);
++    return ret;
++}
++
++/*
++ * The Feature-List of the Cx feature list (Vendor-Id 3GPP, Feature-List-ID 1)
++ * among the request's Supported-Features AVPs, or 0 when it has none -- an
++ * S-CSCF that advertises nothing supports nothing beyond Rel-5 (TS 29.229 7.2).
++ */
++static uint32_t cx_feature_list(struct msg *qry)
++{
++    struct avp *avp = NULL, *child = NULL;
++    struct avp_hdr *hdr = NULL, *child_hdr = NULL;
++
++    if (fd_msg_browse(qry, MSG_BRW_FIRST_CHILD, (void *)&avp, NULL) != 0)
++        return 0;
++    for (; avp; fd_msg_browse(avp, MSG_BRW_NEXT, (void *)&avp, NULL)) {
++        if (fd_msg_avp_hdr(avp, &hdr) != 0 || !hdr ||
++                hdr->avp_code != 628 || hdr->avp_vendor != OGS_3GPP_VENDOR_ID)
++            continue;
++
++        if (fd_msg_search_avp(avp, ogs_diam_vendor_id, &child) != 0 ||
++                !child || fd_msg_avp_hdr(child, &child_hdr) != 0 ||
++                !child_hdr || child_hdr->avp_value->u32 != OGS_3GPP_VENDOR_ID)
++            continue;
++        if (fd_msg_search_avp(avp, ogs_diam_cx_feature_list_id, &child) != 0 ||
++                !child || fd_msg_avp_hdr(child, &child_hdr) != 0 ||
++                !child_hdr ||
++                child_hdr->avp_value->u32 != OGS_DIAM_CX_FEATURE_LIST_ID)
++            continue;
++        if (fd_msg_search_avp(avp, ogs_diam_cx_feature_list, &child) != 0 ||
++                !child || fd_msg_avp_hdr(child, &child_hdr) != 0 ||
++                !child_hdr)
++            continue;
++
++        return child_hdr->avp_value->u32;
++    }
++
++    return 0;
++}
++
++/*
++ * An answer lists the complete set of features its sender supports (TS 29.229
++ * 7.2), with the M bit never set (7.2.1) -- which fd_msg_avp_new() already
++ * leaves clear, the dictionary having M as "may" for Supported-Features and
++ * "must not" for its members. The only Cx feature this HSS implements is
++ * IMSRestorationInd.
++ */
++static int add_supported_features(struct msg *ans)
++{
++    struct avp *avp = NULL, *child = NULL;
++    union avp_value val;
++    int ret;
++
++    ret = fd_msg_avp_new(ogs_diam_cx_supported_features, 0, &avp);
++    if (ret != 0)
++        return ret;
++
++    ret = fd_msg_avp_new(ogs_diam_vendor_id, 0, &child);
++    if (ret == 0) {
++        val.u32 = OGS_3GPP_VENDOR_ID;
++        ret = fd_msg_avp_setvalue(child, &val);
++        if (ret == 0)
++            ret = fd_msg_avp_add(avp, MSG_BRW_LAST_CHILD, child);
++        else
++            fd_msg_free((msg_or_avp *)child);
++    }
++    if (ret == 0)
++        ret = fd_msg_avp_new(ogs_diam_cx_feature_list_id, 0, &child);
++    if (ret == 0) {
++        val.u32 = OGS_DIAM_CX_FEATURE_LIST_ID;
++        ret = fd_msg_avp_setvalue(child, &val);
++        if (ret == 0)
++            ret = fd_msg_avp_add(avp, MSG_BRW_LAST_CHILD, child);
++        else
++            fd_msg_free((msg_or_avp *)child);
++    }
++    if (ret == 0)
++        ret = fd_msg_avp_new(ogs_diam_cx_feature_list, 0, &child);
++    if (ret == 0) {
++        val.u32 = OGS_DIAM_CX_FEATURE_IMS_RESTORATION_IND;
++        ret = fd_msg_avp_setvalue(child, &val);
++        if (ret == 0)
++            ret = fd_msg_avp_add(avp, MSG_BRW_LAST_CHILD, child);
++        else
++            fd_msg_free((msg_or_avp *)child);
++    }
++    if (ret == 0)
++        ret = fd_msg_avp_add(ans, MSG_BRW_LAST_CHILD, avp);
++    if (ret != 0)
++        fd_msg_free((msg_or_avp *)avp);
++    return ret;
++}
++
+ /* Callback for incoming Server-Assignment-Request messages */
+ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+         struct session *session, void *opaque, enum disp_action *act)
+@@ -1087,9 +1241,16 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+     char *user_data = NULL;
+     char *imsi_bcd = NULL;
+     char *visited_network_identifier = NULL;
++    char *restoration_contact = NULL; /* owned: ogs_strndup'd from the SAR */
++    char *restoration_path = NULL;    /* owned: ogs_strndup'd from the SAR */
++    char *stored_user_name = NULL; /* borrowed from the impi, do not free */
++    char *stored_contact = NULL; /* borrowed from the impu, do not free */
++    char *stored_path = NULL;    /* borrowed from the impu, do not free */
  
      ogs_ims_data_t ims_data;
      int error_occurred = 0;
 +    int unable_to_comply = 0;
++    int sa_type = -1;
  
      ogs_debug("Rx Server-Assignment-Request");
  
-@@ -1268,8 +1269,29 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+@@ -1278,8 +1439,29 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
          goto out;
      }
  
@@ -62,26 +491,138 @@ index a9c72d6..689091d 100644
  
      if (!error_occurred) {
          /* Set Vendor-Specific-Application-Id AVP */
-@@ -1359,9 +1381,17 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+@@ -1369,9 +1551,19 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
              goto out;
          }
  
+-        if (hdr->avp_value->i32 == OGS_DIAM_CX_SERVER_ASSIGNMENT_REGISTRATION ||
+-            hdr->avp_value->i32 ==
+-                OGS_DIAM_CX_SERVER_ASSIGNMENT_RE_REGISTRATION) {
++        /* Saved because the searches below (restoration info, User-Data,
++         * ...) reuse and overwrite 'avp'/'hdr'. */
++        sa_type = hdr->avp_value->i32;
++
 +        /*
 +         * The profile goes with every assignment that sets up service for the
 +         * user, not only registration: NO_ASSIGNMENT and UNREGISTERED_USER are
 +         * both asked for precisely to download it (TS 29.228 6.1.2.1).
 +         */
-         if (hdr->avp_value->i32 == OGS_DIAM_CX_SERVER_ASSIGNMENT_REGISTRATION ||
-             hdr->avp_value->i32 ==
--                OGS_DIAM_CX_SERVER_ASSIGNMENT_RE_REGISTRATION) {
-+                OGS_DIAM_CX_SERVER_ASSIGNMENT_RE_REGISTRATION ||
-+            hdr->avp_value->i32 == OGS_DIAM_CX_SERVER_NO_ASSIGNMENT ||
-+            hdr->avp_value->i32 ==
-+                OGS_DIAM_CX_SERVER_ASSIGNMENT_UNREGISTERED_USER) {
++        if (sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_REGISTRATION ||
++            sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_RE_REGISTRATION ||
++            sa_type == OGS_DIAM_CX_SERVER_NO_ASSIGNMENT ||
++            sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_UNREGISTERED_USER) {
  
              /* Get User-Data-Already-Available AVP (Mandatory) */
              ret = fd_msg_search_avp(
-@@ -1503,7 +1533,11 @@ out:
+@@ -1479,6 +1671,96 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+             }
+         }
+ 
++        /*
++         * TS 23.380 4.6.2: on REGISTRATION/RE_REGISTRATION, back up the
++         * Contact and the Path leading to it (normally just the P-CSCF) so a
++         * restarted S-CSCF can ask for them back later instead of only the
++         * profile. Optional: an S-CSCF that predates this AVP simply never
++         * sends it, and nothing here is lost that wasn't already missing.
++         *
++         * Deliberately after the User-Data block above, not right after
++         * sa_type is known: hss_cx_set_restoration_info() fans the info out
++         * to every public identity in the implicit set (IMSI-form,
++         * MSISDN-form, tel-form -- a terminating request restores by
++         * whichever of those the caller dialled, not necessarily the
++         * IMSI-form one this SAR names), and on a first-ever REGISTRATION
++         * those sibling IMPUs are only created by hss_cx_download_user_data()
++         * just above. Run this first and the fan-out could reach only the one
++         * IMPU that already existed.
++         */
++        if (sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_REGISTRATION ||
++                sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_RE_REGISTRATION) {
++            struct avp *sri_avp = NULL, *ri_avp = NULL, *child = NULL;
++            struct avp_hdr *child_hdr = NULL;
++
++            /* Path and Contact sit one level down, in the (first)
++             * Restoration-Info of the SCSCF-Restoration-Info, not directly
++             * in it (TS 29.229 6.3.46/6.3.52). */
++            ret = fd_msg_search_avp(
++                    qry, ogs_diam_cx_scscf_restoration_info, &sri_avp);
++            if (ret == 0 && sri_avp)
++                ret = fd_msg_search_avp(
++                        sri_avp, ogs_diam_cx_restoration_info, &ri_avp);
++            if (ret == 0 && ri_avp) {
++                if (fd_msg_search_avp(ri_avp, ogs_diam_cx_path, &child) == 0
++                        && child &&
++                        fd_msg_avp_hdr(child, &child_hdr) == 0 && child_hdr) {
++                    restoration_path = ogs_strndup(
++                            (char*)child_hdr->avp_value->os.data,
++                            child_hdr->avp_value->os.len);
++                }
++                if (fd_msg_search_avp(ri_avp, ogs_diam_cx_contact, &child)
++                            == 0 && child &&
++                        fd_msg_avp_hdr(child, &child_hdr) == 0 && child_hdr) {
++                    restoration_contact = ogs_strndup(
++                            (char*)child_hdr->avp_value->os.data,
++                            child_hdr->avp_value->os.len);
++                }
++                /* both mandatory: half a binding is not one to restore */
++                if (restoration_path && restoration_contact) {
++                    hss_cx_set_restoration_info(public_identity,
++                            restoration_contact, restoration_path);
++                } else {
++                    ogs_warn("Restoration-Info for [%s] without %s",
++                            public_identity,
++                            restoration_path ? "Contact" : "Path");
++                }
++            }
++        }
++
++        /*
++         * TS 23.380 4.6.2/4.2.3: a restoring S-CSCF asks for the profile with
++         * NO_ASSIGNMENT (originating) or UNREGISTERED_USER (terminating) --
++         * the same two types that just downloaded User-Data above. Hand back
++         * whatever Contact/Path this IMPU had backed up, if any: an IMPU that
++         * never registered while this HSS ran (or predates this AVP) simply
++         * has none, and the answer carries no SCSCF-Restoration-Info, same as
++         * before this change.
++         */
++        if ((sa_type == OGS_DIAM_CX_SERVER_NO_ASSIGNMENT ||
++                sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_UNREGISTERED_USER) &&
++                (cx_feature_list(qry) &
++                    OGS_DIAM_CX_FEATURE_IMS_RESTORATION_IND)) {
++            hss_cx_get_restoration_info(public_identity,
++                    &stored_user_name, &stored_contact, &stored_path);
++            if (stored_user_name && stored_contact && stored_path) {
++                ret = add_scscf_restoration_info(ans,
++                        stored_user_name, stored_path, stored_contact);
++                if (ret != 0) {
++                    ogs_error("Failed to add SCSCF-Restoration-Info AVP");
++                    error_occurred = 1;
++                    goto out;
++                }
++            }
++        }
++
++        ret = add_supported_features(ans);
++        if (ret != 0) {
++            ogs_error("Failed to add Supported-Features AVP");
++            error_occurred = 1;
++            goto out;
++        }
++
+         /* Send the answer */
+         ret = fd_msg_send(msg, NULL, NULL);
+         if (ret != 0) {
+@@ -1501,6 +1783,10 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+         if (user_name) ogs_free(user_name);
+         if (public_identity) ogs_free(public_identity);
+         if (server_name) ogs_free(server_name);
++        /* restoration_contact/path: ours, ogs_strndup'd above.
++         * stored_*: borrowed from the impu/impi, never ours to free. */
++        if (restoration_contact) ogs_free(restoration_contact);
++        if (restoration_path) ogs_free(restoration_path);
+ 
+         return 0;
+     }
+@@ -1513,7 +1799,11 @@ out:
                  ans, OGS_DIAM_CX_APPLICATION_ID);
  
          /* Set the Experimental-Result, Origin-Host and Origin-Realm AVPs */
@@ -94,3 +635,26 @@ index a9c72d6..689091d 100644
              ret = ogs_diam_message_experimental_rescode_set(ans, result_code);
          }
  
+@@ -1527,6 +1817,13 @@ out:
+             }
+         }
+ 
++        /* 7.2: an answer always lists the features its sender supports.
++         * The error path may have been reached after the success path
++         * already added it; add it only if it is not there yet. */
++        if (fd_msg_search_avp(ans, ogs_diam_cx_supported_features, &avp) != 0
++                || !avp)
++            ret = add_supported_features(ans);
++
+         ret = fd_msg_send(msg, NULL, NULL);
+         if (ret != 0) {
+             ogs_error("Failed to send error response");
+@@ -1544,6 +1841,8 @@ out:
+     if (user_name) ogs_free(user_name);
+     if (public_identity) ogs_free(public_identity);
+     if (server_name) ogs_free(server_name);
++    if (restoration_contact) ogs_free(restoration_contact);
++    if (restoration_path) ogs_free(restoration_path);
+ 
+     return 0;
+ }

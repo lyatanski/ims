@@ -50,6 +50,26 @@ which attaches `test.subscribers` UEs over S5/S8, registers each with IMS-AKA an
 transport-mode ESP, and calls them pairwise — the same load generator the compose
 `test` profile runs. Raise `test.subscribers` to put the chain under load.
 
+`--set test.rereg.enabled=true` adds a second hook for what a UE leaves behind
+when it comes back on a new address without de-registering. It runs the same
+UE `test.rereg.cycles` times back to back, each run getting a new PDN
+connection and so a new PAA, and none but the last sending the Expires:0
+REGISTER. Each run's reg-event NOTIFY must list its own contact and no other
+active one, so from the second cycle on, a contact the S-CSCF kept for an
+address the UE has left fails the run. That is the check on `route[REBIND]` in
+`images/kamailio/cscf/serving.cfg`. The hook is off by default until the test
+image that knows `REG_EVENT_EXCLUSIVE` is published; an older image passes
+without checking.
+
+`--set test.abandon.enabled=true` covers registrations that never complete. The
+UE sends the initial REGISTER, verifies the 401 and walks away, `cycles` times
+from new addresses, and then registers once for real. For each abandoned
+registration the P-CSCF holds a pending contact and the IPsec tunnel built for
+it at the 401 (4 SAs, 4 policies), which only the contact's own expiry removes.
+The hook reads the P-CSCF's usrloc rows in valkey and fails if any address the
+run used still has one after `deadline`. It is off by default for the same
+reason, and refuses to pass on a test image without `IMS_ABANDON`.
+
 `helm test` needs the GTP-U datapath in the test image, which is where the UE's
 user plane comes from. To check the signalling chain on its own — Gm through Cx
 to the HSS and back — an unprotected REGISTER sent straight at the P-CSCF should
@@ -121,9 +141,10 @@ rather than expecting the cluster to carry one, so the pod is never annotated
 for a network that does not exist. What the cluster still has to supply is
 Multus itself — without the CRD the install fails on an unknown kind — and a
 node device for `config.master` to sit on, which is the one field the chart
-cannot guess. `charts/ims/values-ci.yaml` is the single-node answer to both: it
-keeps the attachments on and swaps `config` for a `bridge` with host-local
-addressing, which is what the CI job and `kind.sh` install with. `./kind.sh
+cannot guess. The CI job's values (the `Install IMS` step of
+`.github/workflows/charts.yml`, which `kind.sh` repeats) are the single-node
+answer to both: they keep the attachments on and swap `config` for a `bridge`
+with host-local addressing. `./kind.sh
 prepare` is what puts Multus on the cluster for either.
 
 ```yaml

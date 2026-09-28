@@ -110,8 +110,8 @@ gm:
   # install fails on an unknown kind, and `config.master` naming a device the
   # nodes actually have, or the pod fails to start.
   #
-  # values-ci.yaml keeps it on and replaces `config` with a bridge onto a
-  # single node, which is what the CI job and kind.sh both install with. There
+  # The CI job (.github/workflows/charts.yml) and kind.sh keep it on and
+  # replace `config` with a bridge onto a single node. There
   # is deliberately no profile that turns it off: the DNAT-free path is the
   # reason the attachment exists, and a test that skips it tests nothing this
   # chart is for.
@@ -156,44 +156,6 @@ db:
 
 replicaCount: 1
 
-# Rolling-update drain, applied as a preStop hook on all three roles.
-# See images/kamailio/cscf/drain.sh for the mechanism.
-#
-# `linger` is the part every role needs: Kubernetes withdraws the endpoint and
-# sends SIGTERM concurrently, so without it in-flight transactions die with the
-# pod. It has to exceed SIP timer B, 32 s at default T1.
-#
-# `deregister` is S-CSCF-only. It clears this pod's usrloc and makes the
-# P-CSCF drop its reg-event subscription, its contact, and the IPsec SAs bound
-# to that contact -- measured 10 -> 0 contacts and 40 -> 0 SAs.
-#
-# That last part needs images/kamailio/patches/0006-*.patch in the image, and
-# nothing here can check for it. Upstream's regscscf.dereg_impu emits a NOTIFY
-# with no <contact> elements at all, leaving the P-CSCF nothing to delete: the
-# same run against an image without 0006 left all 10 contacts and all 40 SAs
-# in place. See the header of images/kamailio/cscf/drain.sh for the mechanism
-# and DRAIN-STATUS.md 5.1 for both sets of numbers.
-drain:
-  linger: 35
-  deregister: true
-  # IMPUs per second, bounding the terminated-NOTIFY burst. 0 disables pacing.
-  rate: 20
-  # Hard cap on the de-registration phase. The work scales with the registered
-  # subscriber count, which is not knowable at render time, so it is bounded
-  # here -- that is what makes the grace period below derivable instead of a
-  # guess. At `rate: 20` this covers 900 subscribers, the measured per-pod load.
-  budget: 60
-  # Head-room over the hook's worst case, for the kubelet's own overhead.
-  grace: 10
-  # Drop this S-CSCF's row from the I-CSCF's candidate table before draining,
-  # so no fresh registration is handed to a pod that is going away. Costs a
-  # window -- between the preStop DEL and the replacement pod's publish there
-  # is no row -- which is harmless for a *running* I-CSCF, whose snapshot is
-  # immutable, but makes an I-CSCF that starts inside that window wait in its
-  # `wait-store` init container until the new S-CSCF publishes. Set false to
-  # leave the row in place across a rollout.
-  unpublish: true
-
 image:
   repository: ghcr.io/lyatanski/kamailio
   tag: latest
@@ -228,6 +190,53 @@ test:
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: 2, memory: 1Gi}
+  # A second test hook: `cycles` back-to-back attaches, each registering from a
+  # new PAA and none but the last de-registering, failing the moment the
+  # S-CSCF's reg-info lists a contact the UE has left behind. See
+  # templates/tests/test-rereg.yaml.
+  #
+  # What it measures is route[REBIND] in images/kamailio/cscf/serving.cfg,
+  # which retires the binding an earlier registration left behind. Off by
+  # default until the pro2call image that knows REG_EVENT_EXCLUSIVE is
+  # published: an older one ignores the flag and passes regardless, so turning
+  # this on before then would test nothing.
+  rereg:
+    enabled: false
+    cycles: 3
+    subscribers: 1
+    # Seconds between cycles. Not cosmetic: every cycle is a fresh process, so
+    # its Create Session goes out with sequence 1 from the same SGW address as
+    # the last one's did, and open5gs matches duplicates on exactly (peer,
+    # sequence). Inside its holding window the SMF takes the new request for a
+    # retransmission and replays the old response -- the PAA and TEIDs of a
+    # session it has already deleted, so the UPF drops the REGISTER and the
+    # cycle times out before it gets anywhere near the registrar.
+    gap: 15
+    # Seconds, on both the REGISTER and the reg-event SUBSCRIBE. Has to outlive
+    # every cycle, or a stale contact expires before the next one looks for it;
+    # kept short so a failing run's leftovers are gone before the next one.
+    expires: 120
+    # Print every SIP message both ways. A failure here is a question of which
+    # Contact carried which expiry, and that is only on the wire.
+    dump: false
+  # A third hook: `cycles` registrations abandoned at the 401, then a complete
+  # one, failing if the P-CSCF still holds a contact for any of those addresses
+  # `deadline` seconds after the last. See templates/tests/test-abandon.yaml.
+  # Off by default for the same reason as `rereg`: it needs the pro2call image
+  # that knows IMS_ABANDON -- the hook refuses to pass on one that does not.
+  abandon:
+    enabled: false
+    cycles: 3
+    # Same reason as rereg's: consecutive runs must not reuse a GTP-C sequence
+    # inside the SMF's duplicate window.
+    gap: 15
+    # The complete registration's REGISTER and SUBSCRIBE; short so a failing
+    # run's leftovers go on their own.
+    expires: 120
+    # Seconds after the last cycle. A pending contact goes pending_reg_expires
+    # (30) + expires_grace (1) after its REGISTER, at the first usrloc timer
+    # tick past that (every 60 s): 91 s at worst, 70 s measured.
+    deadline: 120
 
 podAnnotations: {}
 
