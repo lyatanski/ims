@@ -67,8 +67,5 @@ RUN --mount=type=bind,from=build,source=/kamailio/utils/kamctl/db_redis/kamailio
     && cp /dbmap/rtpengine /etc/cscf/schema/serving
 COPY cscf/ /etc/cscf
 
-# Not the binary directly: start.sh derives ims_ipsec_pcscf's `ipsec_listen_addr`
-# from a Gm interface when one is attached, then execs kamailio with the flags
-# that used to be here and whatever `args`/`command` the caller appends.
-ENTRYPOINT ["sh", "/etc/cscf/start.sh"]
+ENTRYPOINT ["kamailio", "-DD", "-E"]
 

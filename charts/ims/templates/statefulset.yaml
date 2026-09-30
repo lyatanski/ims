@@ -2,14 +2,27 @@
 {{- range tuple "proxy" "interrogating" "serving" }}
 {{- $cscf := . -}}
 {{- with $dot }}
+{{- /*
+With Gm attached, one single-replica P-CSCF StatefulSet per `gm.addresses`
+entry, each pinning its address: an ordinal of one shared StatefulSet has no
+way to name its own address, since the networks annotation lives in the one
+pod template. `$gm` is that address, empty everywhere else.
+*/}}
+{{- $gms := list "" }}
+{{- if and (eq "proxy" $cscf) .Values.gm.enabled }}
+{{- $gms = required "gm.addresses: one address per P-CSCF" .Values.gm.addresses }}
+{{- end }}
+{{- range $i, $gm := $gms }}
+{{- with $dot }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ .Release.Name }}-{{ trunc 1 $cscf }}cscf
+  name: {{ .Release.Name }}-{{ trunc 1 $cscf }}cscf{{ if $gm }}-{{ $i }}{{ end }}
   labels: {{- include "ims.labels" . | nindent 4 }}
+    role: {{ trunc 1 $cscf }}cscf
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ if $gm }}1{{ else }}{{ .Values.replicaCount }}{{ end }}
   serviceName: {{ .Release.Name }}-{{ trunc 1 $cscf }}cscf
   podManagementPolicy: Parallel
   updateStrategy:
@@ -17,18 +30,24 @@ spec:
   selector:
     matchLabels: {{- include "ims.selectorLabels" . | nindent 6 }}
       role: {{ trunc 1 $cscf }}cscf
+      {{- if $gm }}
+      gm: {{ $i | quote }}
+      {{- end }}
   template:
     metadata:
       annotations:
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- if and (eq "proxy" $cscf) .Values.gm.enabled }}
-        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface) | toJson | quote }}
+        {{- if $gm }}
+        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" (list $gm)) | toJson | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels: {{- include "ims.labels" . | nindent 8 }}
         role: {{ trunc 1 $cscf }}cscf
+        {{- if $gm }}
+        gm: {{ $i | quote }}
+        {{- end }}
     spec:
       dnsPolicy: None
       dnsConfig:
@@ -40,7 +59,7 @@ spec:
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
-      {{- include "ims.identity" . | nindent 6 }}
+      {{- include "ims.identity" (dict "root" . "instance" (ternary (printf "%s-pcscf-%d" .Release.Name $i) "" (ne $gm ""))) | nindent 6 }}
       {{- include "ims.waitdb" (dict "root" . "cscf" $cscf) | nindent 6 }}
       {{- if eq "proxy" $cscf }}
       {{- include "ims.ipsec" . | nindent 6 }}
@@ -54,9 +73,11 @@ spec:
         - name: REALM
           value: {{ tpl .Values.domain . }}
         {{- if eq "proxy" $cscf }}
-        {{- if .Values.gm.enabled }}
+        {{- if $gm }}
         - name: GMDEV
           value: {{ .Values.gm.interface | quote }}
+        - name: IPSEC
+          value: {{ (split "/" $gm)._0 | quote }}
         {{- else }}
         - name: IPSEC
           valueFrom:
@@ -145,5 +166,7 @@ spec:
       {{- with .Values.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- end }}

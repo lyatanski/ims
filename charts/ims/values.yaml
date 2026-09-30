@@ -41,15 +41,25 @@ gm:
   enabled: true
   # The device name inside the pod.
   interface: gm0
+  # One P-CSCF per entry, `<release>-pcscf-<index>`, each keeping its address
+  # across restarts and rescheduling. The prefix length is required. Scale by
+  # adding entries, and keep core's `ims.pcscf` (the PCO) the same list. The
+  # Diameter identity is `<release>-pcscf-<index>`, so core's `ims.replicas`
+  # has to be at least the number of entries or the PCRF refuses Rx.
+  addresses:
+  - 10.20.0.10/24
+  # `static` with the `ips` capability: the address is the one the pod's
+  # networks annotation names. Nothing tracks what is in use, so keep the
+  # addresses above out of any other pool on this subnet.
   config:
     cniVersion: 0.3.1
     type: macvlan
     master: eth0
     mode: bridge
+    capabilities:
+      ips: true
     ipam:
-      type: whereabouts
-      range: 10.20.0.0/24
-      gateway: 10.20.0.1
+      type: static
 
 # Seconds between reconciles of the UE route.
 # loop rather than a one-shot because a pod's routing table does not survive rescheduling

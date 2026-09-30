@@ -113,8 +113,7 @@ jobs:
     # ims.pcscf is the P-CSCF's Gm address rather than the `ims-pcscf` Service:
     # the protected ports bind on gm0, and a protected REGISTER arriving on the
     # pod address has no SA to match. A literal, because core installs before
-    # ims exists to be asked -- host-local hands out upward from `rangeStart`
-    # and the P-CSCF is the only pod on that network, so it is always .10.
+    # ims exists to be asked -- it is the ims chart's default `gm.addresses`.
     - name: Install Open5GS
       run: |
         helm install core oci://ghcr.io/${{ github.actor }}/core -f - <<'EOF'
@@ -145,14 +144,16 @@ jobs:
         EOF
 
     # `bridge` rather than macvlan, whose child cannot reach its parent's host
-    # -- and here the UE sits behind the node. `host-local` rather than
-    # whereabouts, one operator fewer. The `null`s drop macvlan's and
-    # whereabouts' keys, which Helm's map merge would otherwise keep beside
-    # these. rtpengine's interfaces are a list, which Helm replaces whole, so
-    # `external` is restated and no `null`s are needed there.
+    # -- and here the UE sits behind the node. `host-local` for media rather
+    # than whereabouts, one operator fewer. Gm keeps the chart's `static` IPAM,
+    # and with no gateway to take from it the bridge's own address is the
+    # subnet's first, 10.20.0.1. The `null`s drop macvlan's keys, which Helm's
+    # map merge would otherwise keep beside these. rtpengine's interfaces are a
+    # list, which Helm replaces whole, so `external` is restated and no `null`s
+    # are needed there.
     #
-    # Gm's `rangeStart` is what makes the P-CSCF .10 -- move it together with
-    # ims.pcscf above.
+    # The default `gm.addresses` is what makes the P-CSCF .10 -- move it
+    # together with ims.pcscf above.
     - name: Install IMS
       run: |
         helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m -f - <<'EOF'
@@ -165,13 +166,6 @@ jobs:
             isGateway: true
             master: null
             mode: null
-            ipam:
-              type: host-local
-              subnet: 10.20.0.0/24
-              gateway: 10.20.0.1
-              rangeStart: 10.20.0.10
-              rangeEnd: 10.20.0.250
-              range: null
         global:
           ue:
             via: 10.20.0.1

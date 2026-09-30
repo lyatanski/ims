@@ -124,7 +124,7 @@ node device for `config.master` to sit on, which is the one field the chart
 cannot guess. The CI job's values (the `Install IMS` step of
 `.github/workflows/charts.yml`, which `kind.sh` repeats) are the single-node
 answer to both: they keep the attachments on and swap `config` for a `bridge`
-with host-local addressing. `./kind.sh
+with host-local addressing for media. `./kind.sh
 prepare` is what puts Multus on the cluster for either.
 
 ```yaml
@@ -135,17 +135,32 @@ gm:
     master: eth0        # the node's device -- set this first
 ```
 
-The one thing that is not a chart setting is the address. `ipsec_listen_addr`
-is what the protected ports bind to and what the kernel SAs and xfrm policies
-are keyed on, and `ims_ipsec_pcscf` parses it with `str2ipbuf()`
-(`ims_ipsec_pcscf_mod.c:226`): a numeric IPv4 literal, never an interface name,
-and `mod_init` returns -1 for anything else. With Gm on a secondary interface
-the address comes from that network's IPAM at pod creation, so it is in no
-field Kubernetes can project and in no value Helm can render. The chart
-therefore passes `GMDEV` instead, and `images/kamailio/cscf/start.sh` — now the
-image's entrypoint — reads the address off that device and exports `IPSEC` from
-it before exec'ing kamailio. Without the attachment nothing changes: the chart
-still sets `IPSEC` from `status.podIP` and the shim passes it straight through.
+The address is a chart setting. `ipsec_listen_addr` is what the protected
+ports bind to and what the kernel SAs and xfrm policies are keyed on, and
+`ims_ipsec_pcscf` parses it with `str2ipbuf()` (`ims_ipsec_pcscf_mod.c:226`): a
+numeric IPv4 literal, never an interface name, and `mod_init` returns -1 for
+anything else. So the address cannot come from an IPAM pool, which assigns it
+at pod creation where no value Helm renders can see it. `gm.addresses` lists
+them instead, and the chart renders one single-replica StatefulSet per entry,
+`<release>-pcscf-<index>`, whose networks annotation names that address in
+`ips` and whose `IPSEC` is the same address. The NAD's `static` IPAM with the
+`ips` capability is what makes the annotation's address the interface's.
+
+```yaml
+gm:
+  addresses:            # one P-CSCF each; the prefix length is required
+  - 10.20.0.10/24
+  - 10.20.0.11/24
+```
+
+Scaling is adding an entry, not `replicaCount`, which the P-CSCF ignores while
+Gm is attached. The pods are `<release>-pcscf-<index>-0`, but the Diameter
+identity stays `<release>-pcscf-<index>`: that is the name the PCRF's
+`ConnectPeer` list in the core chart enumerates up to `ims.replicas`, and a
+P-CSCF outside it never gets Rx, which surfaces as a call whose 200 OK never
+reaches the caller. Nothing allocates or tracks these addresses, so keep them out of
+any other pool on the subnet. Without the attachment the P-CSCF is one
+StatefulSet of `replicaCount` again and `IPSEC` is `status.podIP`.
 
 Two things do not follow automatically:
 
@@ -154,7 +169,8 @@ Two things do not follow automatically:
   addresses — Kubernetes Endpoints carry the primary CNI's address and nothing
   else. Set `ims.pcscf` in `charts/core/values.yaml` to the Gm addresses, one
   per P-CSCF, or the UE keeps registering over the interface this was meant to
-  replace. Empty, it falls back to the Service name. Nothing checks it: pointed
+  replace — the same list as `gm.addresses`, without the prefix lengths.
+  Empty, it falls back to the Service name. Nothing checks it: pointed
   at the wrong interface, registration still works, so the only symptom is that
   the DNAT-free path is silently unused.
 - **The route to the UE pool.** The `ueroute` sidecar derives its next hop from
@@ -190,10 +206,9 @@ Two things do not follow automatically:
   `TcpExtIPReversePathFilter` moved by 10 per run; with it, 2/2 registered over
   ESP, a call answered, and the counter did not move.
 
-The reservation in the first bullet of the list above still stands. whereabouts
-hands out the next free address in the range, not the one the departing pod
-had, so an ordinal does not keep its Gm address across rescheduling — this is
-the prerequisite for HA-PLAN Tier 1's takeover, not the whole of it.
+Each P-CSCF keeps its Gm address across restarts and rescheduling, since the
+address belongs to its StatefulSet rather than to a pool. That is the
+prerequisite for HA-PLAN Tier 1's takeover, not the whole of it.
 
 
 
@@ -223,9 +238,9 @@ Kubernetes load balancing. Without an attachment the interface binds whatever
 its `address` names on the pod itself — `any` being every address it has, which
 under Kubernetes is the pod address.
 
-The same reservation as for Gm applies: an address out of a whereabouts pool is
-reachable from the UE, but it is not one the ordinal keeps across rescheduling,
-which is what HA-PLAN §5.5 needs before media can follow a takeover.
+Unlike Gm, an address out of a whereabouts pool is reachable from the UE but
+is not one the ordinal keeps across rescheduling, which is what HA-PLAN §5.5
+needs before media can follow a takeover.
 
 The one thing that is not optional is the **return route**, which is why the
 shipped `config` carries an `ipam.routes` entry for the UE pool. rtpengine

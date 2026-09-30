@@ -24,7 +24,17 @@ app.kubernetes.io/name: {{ include "ims.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{/*
+The Diameter identity, `<instance>.<ims realm>`: the pod name, or `instance`
+when given. A P-CSCF StatefulSet per Gm address passes its own name, so
+`<release>-pcscf-<index>` stays the identity core's ConnectPeer list
+enumerates rather than becoming `<release>-pcscf-<index>-0`.
+
+Call with (dict "root" $ "instance" <name or "">).
+*/}}
 {{- define "ims.identity" -}}
+{{- $root := .root -}}
+{{- with $root }}
 - name: identity
   image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
   imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -33,9 +43,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   {{- end }}
   env:
   - name: INSTANCE
+    {{- with $.instance }}
+    value: {{ . | quote }}
+    {{- else }}
     valueFrom:
       fieldRef:
         fieldPath: metadata.name
+    {{- end }}
   command:
   - sh
   - -ec
@@ -50,6 +64,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
     mountPath: /tmpl
   - name: identity
     mountPath: /run/cscf
+{{- end }}
 {{- end }}
 
 {{/*
