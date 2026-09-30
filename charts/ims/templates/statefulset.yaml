@@ -55,9 +55,6 @@ spec:
           value: {{ tpl .Values.domain . }}
         {{- if eq "proxy" $cscf }}
         {{- if .Values.gm.enabled }}
-        # Not the address itself: with Gm on a secondary interface it comes
-        # from that network's IPAM at pod creation, so start.sh reads it off
-        # the device and exports IPSEC from what it finds.
         - name: GMDEV
           value: {{ .Values.gm.interface | quote }}
         {{- else }}
