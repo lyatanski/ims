@@ -95,7 +95,7 @@ mongodb:
 # provision HSS subscribers
 subscribers:
   enabled: true
-  count: 1
+  count: 2
   k: "3919F39741B626604B4BACE23ACFB094"
   opc: "177FAD988A964A3AD0421B4693257056"
   dial: "359"

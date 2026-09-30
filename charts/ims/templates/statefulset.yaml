@@ -22,7 +22,7 @@ spec:
       annotations:
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- if and (eq "proxy" $cscf) .Values.gm.enabled }}
-        k8s.v1.cni.cncf.io/networks: {{ .Release.Name }}-gm
+        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface) | toJson | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}

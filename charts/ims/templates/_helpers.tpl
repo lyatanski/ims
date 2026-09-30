@@ -168,7 +168,7 @@ releases sharing it hand out addresses from one pool into two subnets.
 Call with the root context.
 */}}
 {{- define "ims.network.config" -}}
-{{- toJson (merge (deepCopy .Values.gm.config) "gm") -}}
+{{- toJson (merge (deepCopy .Values.gm.config) (dict "name" (printf "%s-gm" .Release.Name))) -}}
 {{- end }}
 
 {{/*
