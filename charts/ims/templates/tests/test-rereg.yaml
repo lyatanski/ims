@@ -1,0 +1,78 @@
+{{- if .Values.test.rereg.enabled }}
+# Re-registration from a new address, without de-registering first -- what a
+# handset does when it loses coverage and comes back on a new PDN connection,
+# or is switched off and on again long before its contact expires.
+#
+# Each cycle is a whole run of the test UE: Create Session over S5/S8 (a fresh
+# PAA -- the SMF hands them out round-robin, so the address moves every time),
+# REGISTER, the reg-event SUBSCRIBE, then Delete Session. What it never sends
+# is the Expires:0 REGISTER, so each cycle leaves the core holding a contact for
+# an address the UE no longer has, and nothing in the next REGISTER asks for it
+# to go. Only the core can notice it is dead -- route[REBIND] in the S-CSCF's
+# serving.cfg is what is supposed to, and this is the test of it.
+#
+# REG_EVENT_EXCLUSIVE is the check that it did: the reg-info NOTIFY lists every
+# binding the S-CSCF holds for the identity, and any contact still `active`
+# other than the one this cycle registered fails the run. Cycle 1 is the
+# baseline -- it passes only on a core that holds nothing for the subscriber --
+# and every cycle after it is the measurement.
+#
+# The last cycle does de-register, after its check: a passing run then leaves
+# nothing behind for the next hook or the next `helm test`. A failing one leaves
+# its stale contacts until `expires` below runs out, which is why that is short
+# rather than the week the connection test asks for -- long enough to outlive
+# every cycle, short enough that a red run does not poison the next one.
+#
+# Weighted after the connection test, which de-registers, so cycle 1 starts
+# from a clean registrar. Same IMSI as that test: the core provisions one.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test-rereg
+  labels: {{- include "ims.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "1"
+spec:
+  restartPolicy: Never
+  containers:
+  - name: test
+    image: {{ .Values.test.image }}
+    command:
+    - sh
+    - -c
+    - |
+      i=1
+      while [ "$i" -le "$CYCLES" ]; do
+        [ "$i" -gt 1 ] && sleep "$GAP"
+        dereg=0
+        [ "$i" -eq "$CYCLES" ] && dereg=1
+        echo "=== cycle $i/$CYCLES: new PDN connection, REGISTER, de-REGISTER=$dereg"
+        IMS_DEREG=$dereg lua ims_test_s5.lua || {
+          echo "=== cycle $i/$CYCLES FAILED"
+          exit 1
+        }
+        i=$((i + 1))
+      done
+      echo "=== $CYCLES registration(s) from $CYCLES address(es), one contact bound each time"
+    {{- with .Values.test.resources }}
+    resources: {{- toYaml . | nindent 6 }}
+    {{- end }}
+    env:
+    {{- include "ims.test.env" . | nindent 4 }}
+    - {name: CYCLES,              value: {{ .Values.test.rereg.cycles | quote }}}
+    - {name: GAP,                 value: {{ .Values.test.rereg.gap | quote }}}
+    - {name: IMS_SUBS,            value: {{ .Values.test.rereg.subscribers | quote }}}
+    - {name: IMS_EXPIRES,         value: {{ .Values.test.rereg.expires | quote }}}
+    # The subscription outlives its cycle exactly as the contact does, so it is
+    # bounded the same way.
+    - {name: REG_EVENT_EXPIRES,   value: {{ .Values.test.rereg.expires | quote }}}
+    - {name: REG_EVENT_EXCLUSIVE, value: "1"}
+    - {name: IMS_DUMP,            value: {{ ternary "1" "0" .Values.test.rereg.dump | quote }}}
+    - {name: IMS_REG_EVENT,       value: "1"}
+    # Registration state is the whole question; calls and SMS only add
+    # failure modes of their own to a run that is not measuring them.
+    - {name: IMS_CALL,            value: "0"}
+    - {name: IMS_SMS,             value: "0"}
+    securityContext: {{- include "ims.test.securityContext" . | nindent 6 }}
+{{- end }}

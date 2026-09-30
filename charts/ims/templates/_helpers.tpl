@@ -155,39 +155,6 @@ both need tpl before anything can be appended.
 {{- end }}
 
 {{/*
-The Gm NetworkAttachmentDefinition's name, release-prefixed.
-
-A NAD is a namespaced object and `gm.name` is the same string in every release,
-so without the prefix two releases in one namespace write the same object: the
-second install fails on an ownership conflict, and an upgrade of either one
-silently re-points the other release's P-CSCF at a different subnet. The
-release name is the prefix, as it is for every other object this chart owns.
-
-Call with the root context.
-*/}}
-{{- define "ims.gm.name" -}}
-{{- printf "%s-%s" .Release.Name .Values.gm.name -}}
-{{- end }}
-
-{{/*
-One entry for the `k8s.v1.cni.cncf.io/networks` annotation.
-
-The JSON list form rather than the bare "name" string, because only the list
-form carries `interface`, and the device name is what
-images/kamailio/cscf/start.sh reads `ipsec_listen_addr` off. Left to Multus it
-would be `net1`, `net2`, ... in attachment order -- stable only as long as
-nothing else is attached to the same pod.
-
-The name here is the rendered one, not `gm.name`: this annotation and the
-object above are the two halves that cannot drift.
-
-Call with the root context.
-*/}}
-{{- define "ims.networks" -}}
-{{- list (dict "name" (include "ims.gm.name" .) "interface" .Values.gm.interface) | toJson -}}
-{{- end }}
-
-{{/*
 A NetworkAttachmentDefinition's `spec.config`: the CNI config verbatim, with
 `name` defaulted to the attachment's own so the two cannot drift. `merge` lets
 the config win, so an explicit `name` in it is still honoured, and deepCopy
@@ -201,7 +168,7 @@ releases sharing it hand out addresses from one pool into two subnets.
 Call with the root context.
 */}}
 {{- define "ims.network.config" -}}
-{{- toJson (merge (deepCopy .Values.gm.config) (dict "name" (include "ims.gm.name" .))) -}}
+{{- toJson (merge (deepCopy .Values.gm.config) "gm") -}}
 {{- end }}
 
 {{/*
