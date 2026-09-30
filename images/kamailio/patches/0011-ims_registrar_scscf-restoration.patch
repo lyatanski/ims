@@ -1,0 +1,1039 @@
+Restore a user at a restarted S-CSCF: assign_server() and Restoration-Info.
+
+The only SAR the script could send for a request other than REGISTER was
+assign_server_unreg(), which is UNREGISTERED_USER: it downloads the profile and
+tells the HSS the user is unregistered at this S-CSCF. That is the right thing
+for a terminating request to an unregistered user, and the wrong one for the
+case TS 23.380 4.4.2 is about -- an S-CSCF that restarted and lost its usrloc
+receiving an originating request from a UE that is still registered. There the
+S-CSCF is to fetch the profile with NO_ASSIGNMENT, which changes nothing at the
+HSS and which the HSS answers only for the S-CSCF already assigned to the user
+(DIAMETER_UNABLE_TO_COMPLY otherwise, TS 29.228 6.1.2.1), and continue the
+request as normal. There was no way to send it.
+
+assign_server(async_route, domain, direction, type) is assign_server_unreg()
+with the type as a fourth parameter, and assign_server_unreg() is now that with
+UNREGISTERED_USER. Two types are accepted:
+
+  0  NO_ASSIGNMENT      the profile is stored; an IMPU already in usrloc keeps
+                        its registration state and bindings, a new one is
+                        created IMPU_UNREGISTERED -- a profile and no binding,
+                        which is what the usrloc timer makes of any record
+                        without a valid contact anyway.
+  3  UNREGISTERED_USER  as before.
+
+REGISTRATION and RE_REGISTRATION belong to save(). The de-registration types
+would have the HSS forget an assignment while usrloc keeps its bindings, since
+nothing here tears them down, so they are refused.
+
+The SAA callback decided whether to send the REGISTER's 200 and whether usrloc
+was already updated by comparing the type with UNREGISTERED_USER. That is now a
+flag on the saved transaction, set by assign_server() -- NO_ASSIGNMENT is the
+type save() itself starts from before it picks the real one, so the type is not
+a safe marker for "sent from the script".
+
+Restoring the profile alone leaves a terminating request with no binding to
+route to. The other half of 23.380 -- the S-CSCF backing up Path and Contact
+at the HSS and restoring bindings from them -- is matched to open5gs
+patches/0002 (images/open5gs), which backs up and returns TS 23.380 4.6.2
+restoration information (an SCSCF-Restoration-Info AVP, TS 29.229 6.3.46)
+alongside the profile on the same two SARs assign_server() sends:
+NO_ASSIGNMENT for an S-CSCF restoring an originating user, and
+UNREGISTERED_USER for a terminating request to one it has no data for.
+
+Without a live binding, a request to that identity keeps getting 480 until
+the UE's own registration timer fires -- correct per spec, but avoidable:
+TS 23.380 4.3.2 describes the terminating case as "delivered, UE action:
+none" precisely because the HSS can hand the S-CSCF a Contact and Path to
+route through. Nothing before this sent the S-CSCF's own Path/Contact to
+the HSS in the first place, and nothing read them back out of a restoring
+SAA either.
+
+cxdx_avp.c/.h: cxdx_add_scscf_restoration_info() and
+cxdx_get_scscf_restoration_info(), the same shape as the existing
+SIP-Auth-Data-Item builder and the Charging-Information getter. The AVP
+codes (639/640/641/649, TS 29.229 6.3.46-48/52) were already in
+cdp/diameter_ims_code_avp.h; only the two helper functions were missing.
+The encoding is the two-level one 29.229 defines, with every member it
+marks mandatory:
+
+  SCSCF-Restoration-Info ::= < AVP Header: 639, 10415 >
+                             { User-Name }
+                           1*{ Restoration-Info }
+  Restoration-Info       ::= < AVP Header: 649, 10415 >
+                             { Path }
+                             { Contact }
+
+so the builder adds nothing unless it has all three of the private identity,
+a Path and a Contact, and the getter looks for Path/Contact inside the first
+Restoration-Info of the first SCSCF-Restoration-Info (an SAA may carry one
+per private identity). 639/640/641/649 go out with only the V bit set: table
+6.3.1 has them "M: must not".
+
+cxdx_sar.c: cxdx_send_sar() attaches SCSCF-Restoration-Info -- the SAR's own
+User-Name (the private identity), the REGISTER's own Path (path.c's
+build_path_vector(), same as save()'s own usrloc write) and first Contact --
+when the assignment type is REGISTRATION or
+RE_REGISTRATION, i.e. only when msg actually is that REGISTER; for every
+other assignment_type msg is the request being served, whose Path/Contact
+have nothing to do with the served user's binding. With path_enabled off
+there is no Path to back up, so no SCSCF-Restoration-Info goes out at all
+rather than one missing a mandatory member. async_cdp_callback() reads
+SCSCF-Restoration-Info back out of the SAA and passes it into update_contacts().
+
+cxdx_avp.c/.h, cxdx_sar.c: every SAR also advertises the feature this is,
+IMSRestorationInd -- bit 2 of Cx Feature-List-ID 1 (TS 29.229 table 7.1.1;
+cdp already had the bit as AVP_IMS_Feature_List_ID_IMS_Restoration_Indication)
+-- in a Supported-Features AVP (6.3.29: Vendor-Id 3GPP, Feature-List-ID 1,
+Feature-List). The table has the HSS send restoration information only to an
+S-CSCF that supports the feature, and 7.2 has a request list every feature it
+was constructed with. The M bit follows 7.2.1: set on a (RE_)REGISTRATION SAR
+that actually carries SCSCF-Restoration-Info, since that SAR uses the
+feature; clear on every other SAR, NO_ASSIGNMENT and UNREGISTERED_USER
+included, which use no feature themselves but are prepared for an SAA that
+does. A consequence of the M bit, and the one the spec intends: an HSS
+without the feature may refuse such a REGISTRATION SAR with
+DIAMETER_ERROR_FEATURE_UNSUPPORTED (or DIAMETER_AVP_UNSUPPORTED if it has no
+Supported-Features at all), which fails the REGISTER -- there is no re-send
+with the feature dropped. The SAA's own Supported-Features is not read.
+
+save.c: a new restore_ucontact(), called from update_contacts_sar_unregistered_user()
+and update_contacts_sar_no_assignment() (both above) once their
+own update_impurecord() succeeds. It inserts (or refreshes) a usrloc contact
+the same way a real REGISTER would -- ul.get_ucontact()/insert_ucontact()/
+update_ucontact(), the exact sequence update_contacts_helper() already uses --
+except Call-ID and CSeq, which 23.380 4.6.2 lists as optional to back up and
+this patch does not: a fixed low placeholder for each, so the UE's own next
+REGISTER always supersedes them, and the module's own default_expires for
+the expiry that was never backed up either. For NO_ASSIGNMENT this only fires
+when the IMPU had no live binding already, so an originating restart-restore
+never touches a binding the S-CSCF never actually lost (TS 23.380 4.4.2).
+
+This alone does not change behaviour: nothing routes on the restored contact
+without the matching serving.cfg change (route[TERM_RESTORE_SAA] now retries
+lookup() after a restoring SAA before falling back to unregistered-service
+handling), which is not a vendor patch and ships directly in cscf/.
+
+Not carried, since 23.380 4.6.2 lists it as optional: the true registration
+expiry, Call-ID, CSeq, or the 4.6.3/4.6.4 reg-event Subscription-Info used
+for the post-delivery NOTIFY nudge. An HSS that never returns
+SCSCF-Restoration-Info -- one predating open5gs patches/0002, or any other
+vendor's -- leaves this patch a no-op: cxdx_get_scscf_restoration_info()
+finds nothing and restore_ucontact() is never called with a contact to add.
+
+ims_registrar_scscf_mod.c/.h, cxdx_sar.c: the whole of the above -- both the
+SCSCF-Restoration-Info AVP and the Supported-Features AVP that advertises
+IMSRestorationInd -- is behind a new modparam, scscf_restoration_info_enabled
+(default 0). This is not about the read side, which is already a no-op
+against a non-supporting HSS; it is about the mandatory Supported-Features
+AVP itself, which every SAR carries once this is on. Per the M bit logic
+above, a REGISTRATION/RE_REGISTRATION SAR that actually carries
+SCSCF-Restoration-Info sets the M bit on its own Supported-Features AVP, and
+an HSS without IMSRestorationInd must then reject that SAR outright
+(DIAMETER_ERROR_FEATURE_UNSUPPORTED, or DIAMETER_AVP_UNSUPPORTED if it has no
+Supported-Features support at all) -- failing the REGISTER, with no retry
+that drops the feature. Off by default so an HSS that has not been confirmed
+to support the feature is unaffected; an operator turns it on only once the
+HSS is known to support it.
+
+cxdx_sar.c, save.c: the terminating restoration answer is not a Result-Code
+of DIAMETER_SUCCESS. TS 29.228 6.1.2.1 has the HSS answer an UNREGISTERED_USER
+SAR for an identity it holds as registered, when IMS restoration is supported,
+with all the S-CSCF Restoration Information and Experimental-Result-Code
+DIAMETER_ERROR_IN_ASSIGNMENT_TYPE; TS 23.380 4.3.2 adds the user profile and
+has the S-CSCF "trigger matched registered services". async_cdp_callback()
+treated any SAA without a Result-Code as a Diameter error, so that answer
+failed the request with 480 despite carrying everything needed to deliver
+it. It now proceeds as on success when an UNREGISTERED_USER SAA has
+DIAMETER_ERROR_IN_ASSIGNMENT_TYPE together with SCSCF-Restoration-Info; the
+same code without restoration information is still an error. And
+update_contacts_sar_unregistered_user() stores the IMPU as registered rather
+than unregistered whenever the SAA carried restoration information, which it
+does only for an identity the HSS holds as registered -- whichever result
+code came with it, since open5gs patches/0002 answers the same case with
+DIAMETER_SUCCESS.
+
+diff --git a/src/modules/ims_registrar_scscf/cxdx_avp.c b/src/modules/ims_registrar_scscf/cxdx_avp.c
+index a01e13e..d61fe85 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_avp.c
++++ b/src/modules/ims_registrar_scscf/cxdx_avp.c
+@@ -534,6 +534,81 @@ int cxdx_add_server_name(AAAMessage *msg, str data)
+ 			IMS_vendor_id_3GPP, AVP_DUPLICATE_DATA, __FUNCTION__);
+ }
+ 
++int cxdx_add_scscf_restoration_info(
++		AAAMessage *msg, str user_name, str path, str contact)
++{
++	AAA_AVP_LIST list, ri_list;
++	str group, ri_group;
++	list.head = 0;
++	list.tail = 0;
++	ri_list.head = 0;
++	ri_list.tail = 0;
++
++	/* User-Name, Path and Contact are all mandatory (TS 29.229 6.3.46,
++	 * 6.3.52): without one of them there is nothing valid to back up. */
++	if(!user_name.len || !path.len || !contact.len)
++		return 1;
++
++	/* Restoration-Info ::= { Path } { Contact } ...
++	 * 639/640/641/649 are V, M must not (TS 29.229 table 6.3.1) */
++	cxdx_add_avp_list(&ri_list, path.s, path.len, AVP_IMS_Path, 0,
++			IMS_vendor_id_3GPP, AVP_DONT_FREE_DATA, __FUNCTION__);
++	cxdx_add_avp_list(&ri_list, contact.s, contact.len, AVP_IMS_Contact, 0,
++			IMS_vendor_id_3GPP, AVP_DONT_FREE_DATA, __FUNCTION__);
++
++	ri_group = cdpb.AAAGroupAVPS(ri_list);
++
++	cdpb.AAAFreeAVPList(&ri_list);
++
++	/* SCSCF-Restoration-Info ::= { User-Name } 1*{ Restoration-Info } ... */
++	cxdx_add_avp_list(&list, user_name.s, user_name.len, AVP_User_Name,
++			AAA_AVP_FLAG_MANDATORY, 0, AVP_DONT_FREE_DATA, __FUNCTION__);
++	cxdx_add_avp_list(&list, ri_group.s, ri_group.len,
++			AVP_IMS_Restoration_Info, 0, IMS_vendor_id_3GPP, AVP_FREE_DATA,
++			__FUNCTION__);
++
++	group = cdpb.AAAGroupAVPS(list);
++
++	cdpb.AAAFreeAVPList(&list);
++
++	return cxdx_add_avp(msg, group.s, group.len,
++			AVP_IMS_SCSCF_Restoration_Info, 0, IMS_vendor_id_3GPP,
++			AVP_FREE_DATA, __FUNCTION__);
++}
++
++int cxdx_add_supported_features(
++		AAAMessage *msg, unsigned int feature_list, int mandatory)
++{
++	AAA_AVP_LIST list;
++	str group;
++	char x[4];
++	list.head = 0;
++	list.tail = 0;
++
++	/* Supported-Features ::= { Vendor-Id } { Feature-List-ID }
++	 * { Feature-List } (TS 29.229 6.3.29), Feature-List-ID 1 being the Cx
++	 * feature list of table 7.1.1 */
++	set_4bytes(x, IMS_vendor_id_3GPP);
++	cxdx_add_avp_list(&list, x, 4, AVP_Vendor_Id, AAA_AVP_FLAG_MANDATORY, 0,
++			AVP_DUPLICATE_DATA, __FUNCTION__);
++	set_4bytes(x, 1);
++	cxdx_add_avp_list(&list, x, 4, AVP_IMS_Feature_List_ID, 0,
++			IMS_vendor_id_3GPP, AVP_DUPLICATE_DATA, __FUNCTION__);
++	set_4bytes(x, feature_list);
++	cxdx_add_avp_list(&list, x, 4, AVP_IMS_Feature_List, 0,
++			IMS_vendor_id_3GPP, AVP_DUPLICATE_DATA, __FUNCTION__);
++
++	group = cdpb.AAAGroupAVPS(list);
++
++	cdpb.AAAFreeAVPList(&list);
++
++	/* 7.2.1: M set in a request constructed using one of the features,
++	 * clear in one only prepared to accept an answer that uses them */
++	return cxdx_add_avp(msg, group.s, group.len, AVP_IMS_Supported_Features,
++			mandatory ? AAA_AVP_FLAG_MANDATORY : 0, IMS_vendor_id_3GPP,
++			AVP_FREE_DATA, __FUNCTION__);
++}
++
+ /**
+  * Returns the SIP-Number-Auth-Items AVP from a Diameter message.
+  * @param msg - the Diameter message
+@@ -915,6 +990,52 @@ int cxdx_get_charging_info(
+ 	return 1;
+ }
+ 
++int cxdx_get_scscf_restoration_info(AAAMessage *msg, str *path, str *contact)
++{
++	AAA_AVP_LIST list, ri_list;
++	AAA_AVP *avp;
++	str grp;
++
++	path->s = 0;
++	path->len = 0;
++	contact->s = 0;
++	contact->len = 0;
++
++	/* SCSCF-Restoration-Info ::= { User-Name } 1*{ Restoration-Info } ...
++	 * Restoration-Info ::= { Path } { Contact } ...  (TS 29.229 6.3.46/52)
++	 * An SAA may carry one per private identity, and each may carry more
++	 * than one Restoration-Info; the first of each is the one restored. */
++	grp = cxdx_get_avp(
++			msg, AVP_IMS_SCSCF_Restoration_Info, IMS_vendor_id_3GPP,
++			__FUNCTION__);
++	if(!grp.s)
++		return 0;
++
++	list = cdpb.AAAUngroupAVPS(grp);
++	avp = cdpb.AAAFindMatchingAVPList(
++			list, 0, AVP_IMS_Restoration_Info, IMS_vendor_id_3GPP, 0);
++	if(!avp) {
++		LM_WARN("SCSCF-Restoration-Info without Restoration-Info\n");
++		cdpb.AAAFreeAVPList(&list);
++		return 0;
++	}
++
++	ri_list = cdpb.AAAUngroupAVPS(avp->data);
++	avp = cdpb.AAAFindMatchingAVPList(
++			ri_list, 0, AVP_IMS_Path, IMS_vendor_id_3GPP, 0);
++	if(avp)
++		*path = avp->data;
++
++	avp = cdpb.AAAFindMatchingAVPList(
++			ri_list, 0, AVP_IMS_Contact, IMS_vendor_id_3GPP, 0);
++	if(avp)
++		*contact = avp->data;
++
++	cdpb.AAAFreeAVPList(&ri_list);
++	cdpb.AAAFreeAVPList(&list);
++	return 1;
++}
++
+ /**
+  * Creates and adds a Server-Assignment-Type AVP.
+  * @param msg - the Diameter message to add to.
+diff --git a/src/modules/ims_registrar_scscf/cxdx_avp.h b/src/modules/ims_registrar_scscf/cxdx_avp.h
+index 917d3e4..ad3b4c9 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_avp.h
++++ b/src/modules/ims_registrar_scscf/cxdx_avp.h
+@@ -183,6 +183,44 @@ int cxdx_add_sip_auth_data_item_request(AAAMessage *msg, str auth_scheme,
+  */
+ int cxdx_add_server_name(AAAMessage *msg, str data);
+ 
++/**
++ * Creates and adds an SCSCF-Restoration-Info AVP (TS 23.380 4.6.2): the
++ * Contact and the Path leading to it (normally just the P-CSCF), backed up
++ * at the HSS so a restarted S-CSCF can ask for them back later. Encoded as
++ * TS 29.229 6.3.46 has it: User-Name plus one Restoration-Info (6.3.52)
++ * grouping the Path and the Contact.
++ * @param msg - the Diameter message to add to.
++ * @param user_name - the private identity the binding belongs to
++ * @param path - the Path header value backed up at REGISTER
++ * @param contact - the Contact header value backed up at REGISTER
++ * @returns 1 on success (including nothing to add, when any of the three
++ * mandatory values is empty) or 0 on error
++ */
++int cxdx_add_scscf_restoration_info(
++		AAAMessage *msg, str user_name, str path, str contact);
++
++/**
++ * Returns the Path/Contact of the first Restoration-Info in the first
++ * SCSCF-Restoration-Info AVP, if any.
++ * @param msg - the Diameter message
++ * @param path - filled with the Path, or {0,0} if absent
++ * @param contact - filled with the Contact, or {0,0} if absent
++ * @returns 1 if the AVP was present, 0 otherwise
++ */
++int cxdx_get_scscf_restoration_info(AAAMessage *msg, str *path, str *contact);
++
++/**
++ * Creates and adds a Supported-Features AVP for Feature-List-ID 1, the Cx
++ * feature list (TS 29.229 6.3.29, table 7.1.1).
++ * @param msg - the Diameter message to add to.
++ * @param feature_list - the AVP_IMS_Feature_List_ID_* bits supported
++ * @param mandatory - set the M bit: the request was constructed using one of
++ * those features (TS 29.229 7.2.1)
++ * @returns 1 on success or 0 on error
++ */
++int cxdx_add_supported_features(
++		AAAMessage *msg, unsigned int feature_list, int mandatory);
++
+ /**
+  * Returns the SIP-Number-Auth-Items AVP from a Diameter message.
+  * @param msg - the Diameter message
+diff --git a/src/modules/ims_registrar_scscf/cxdx_sar.c b/src/modules/ims_registrar_scscf/cxdx_sar.c
+index b68b243..cfce980 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_sar.c
++++ b/src/modules/ims_registrar_scscf/cxdx_sar.c
+@@ -60,6 +60,7 @@
+ #include "../../core/counters.h"
+ #include "../../core/data_lump_rpl.h"
+ #include "sip_msg.h"
++#include "path.h"
+ #include "regtime.h"
+ #include "../../core/parser/hf.h"
+ #include "../../lib/ims/ims_getters.h"
+@@ -114,6 +115,7 @@ void async_cdp_callback(
+ 
+ 	str xml_data = {0, 0}, ccf1 = {0, 0}, ccf2 = {0, 0}, ecf1 = {0, 0},
+ 		ecf2 = {0, 0};
++	str restoration_path = {0, 0}, restoration_contact = {0, 0};
+ 	ims_subscription *s = 0;
+ 	rerrno = R_FINE;
+ 
+@@ -206,6 +208,11 @@ void async_cdp_callback(
+ 		cxdx_get_result_code(saa, &rc);
+ 		cxdx_get_experimental_result_code(saa, &experimental_rc);
+ 		cxdx_get_charging_info(saa, &ccf1, &ccf2, &ecf1, &ecf2);
++		/* TS 23.380 4.6.2: present only on a NO_ASSIGNMENT/UNREGISTERED_USER
++		 * SAA that is itself a restoration answer; absent (and harmless)
++		 * otherwise. */
++		cxdx_get_scscf_restoration_info(
++				saa, &restoration_path, &restoration_contact);
+ 
+ 		if(!rc && !experimental_rc) {
+ 			LM_ERR("bad SAA result code\n");
+@@ -213,6 +220,20 @@ void async_cdp_callback(
+ 			goto error;
+ 		}
+ 
++		/* TS 29.228 6.1.2.1, TS 23.380 4.3.2: an UNREGISTERED_USER SAR for an
++		 * identity the HSS holds as registered is answered with the profile,
++		 * the restoration information and Experimental-Result
++		 * DIAMETER_ERROR_IN_ASSIGNMENT_TYPE. That is the restoration answer,
++		 * not a failure: the S-CSCF triggers the registered services. */
++		if(rc == -1
++				&& experimental_rc == RC_IMS_DIAMETER_ERROR_IN_ASSIGNMENT_TYPE
++				&& data->sar_assignment_type == AVP_IMS_SAR_UNREGISTERED_USER
++				&& restoration_contact.len) {
++			LM_DBG("UNREGISTERED_USER SAA with restoration information: "
++				   "restoring a registered user\n");
++			rc = AAA_SUCCESS;
++		}
++
+ 		switch(rc) {
+ 			case -1:
+ 				LM_DBG("Received Diameter error\n");
+@@ -234,9 +255,8 @@ void async_cdp_callback(
+ 				goto error;
+ 		}
+ 		//success
+-		//if this is from a save (not a server assign unreg) and expires is zero we don't update usrloc as this is a dereg and usrloc was updated previously
+-		if(data->sar_assignment_type != AVP_IMS_SAR_UNREGISTERED_USER
+-				&& data->expires == 0) {
++		//if this is from a save (not a server assign from the script) and expires is zero we don't update usrloc as this is a dereg and usrloc was updated previously
++		if(!data->script_assignment && data->expires == 0) {
+ 			LM_DBG("no need to update usrloc - already done for de-reg\n");
+ 			result = CSCF_RETURN_TRUE;
+ 			goto success;
+@@ -269,7 +289,8 @@ void async_cdp_callback(
+ 		//here we update the contacts and also build the new contact header for the 200 OK reply
+ 		if(update_contacts(req, data->domain, &data->public_identity,
+ 				   data->sar_assignment_type, &s, &ccf1, &ccf2, &ecf1, &ecf2,
+-				   &data->contact_header)
++				   &data->contact_header, &restoration_contact,
++				   &restoration_path)
+ 				<= 0) {
+ 			LM_ERR("Error processing REGISTER\n");
+ 			rerrno = R_SAR_FAILED;
+@@ -288,7 +309,7 @@ success:
+ 	update_stat(accepted_registrations, 1);
+ 
+ done:
+-	if(data->sar_assignment_type != AVP_IMS_SAR_UNREGISTERED_USER)
++	if(!data->script_assignment)
+ 		reg_send_reply_transactional(req, data->contact_header, t);
+ 	LM_DBG("DBG:SAR Async CDP callback: ... Done resuming transaction\n");
+ 
+@@ -314,7 +335,7 @@ done:
+ 
+ error:
+ 	create_return_code(-2);
+-	if(data->sar_assignment_type != AVP_IMS_SAR_UNREGISTERED_USER)
++	if(!data->script_assignment)
+ 		reg_send_reply_transactional(req, data->contact_header, t);
+ 
+ error_no_send: //if we don't have the transaction then we can't send a transaction response
+@@ -350,6 +371,7 @@ int cxdx_send_sar(struct sip_msg *msg, str public_identity,
+ 	unsigned int hash = 0, label = 0;
+ 	struct hdr_field *hdr;
+ 	str call_id;
++	int restoration_info_sent = 0;
+ 
+ 	session = cdpb.AAACreateSession(0);
+ 
+@@ -391,6 +413,62 @@ int cxdx_send_sar(struct sip_msg *msg, str public_identity,
+ 	if(!cxdx_add_userdata_available(sar, data_available))
+ 		goto error1;
+ 
++	/*
++	 * TS 23.380 4.6.2: back up the Contact and the Path leading to it
++	 * (normally just the P-CSCF) at the HSS during (RE_)REGISTRATION, so a
++	 * restarted S-CSCF can ask for them back later instead of only the
++	 * profile. msg is the REGISTER only for these two types; for any other
++	 * assignment_type it is the request being served (INVITE, MESSAGE...),
++	 * whose Path/Contact have nothing to do with the served user's binding.
++	 *
++	 * Gated behind scscf_restoration_info_enabled: Supported-Features goes
++	 * out with the M bit set on a SAR that carries SCSCF-Restoration-Info
++	 * (TS 29.229 7.2.1), which an HSS without IMSRestorationInd must reject
++	 * (DIAMETER_ERROR_FEATURE_UNSUPPORTED, or DIAMETER_AVP_UNSUPPORTED if it
++	 * has no Supported-Features support at all) -- failing the REGISTER.
++	 * Default off so an unpatched HSS keeps working; turn on only once the
++	 * HSS is known to support the feature.
++	 */
++	if(scscf_restoration_info_enabled) {
++		if(msg
++				&& (assignment_type == AVP_IMS_SAR_REGISTRATION
++						|| assignment_type == AVP_IMS_SAR_RE_REGISTRATION)) {
++			str restoration_path = {0, 0}, path_received = {0, 0};
++			str restoration_contact = {0, 0};
++			contact_t *c;
++
++			if(path_enabled)
++				build_path_vector(msg, &restoration_path, &path_received);
++
++			c = get_first_contact(msg);
++			if(c)
++				restoration_contact = c->uri;
++
++			if(private_identity.len && restoration_path.len
++					&& restoration_contact.len) {
++				if(cxdx_add_scscf_restoration_info(sar, private_identity,
++						   restoration_path, restoration_contact))
++					restoration_info_sent = 1;
++				else
++					LM_WARN("Failed to add SCSCF-Restoration-Info to SAR.... "
++							"continuing... assuming non-critical\n");
++			}
++		}
++
++		/*
++		 * TS 29.229 table 7.1.1 IMSRestorationInd: the HSS sends restoration
++		 * information back only to an S-CSCF that says it supports the
++		 * feature, so every SAR says so once enabled -- NO_ASSIGNMENT and
++		 * UNREGISTERED_USER being the ones that ask for it back. 7.2.1: the
++		 * M bit is set only when this SAR itself uses the feature, i.e.
++		 * carries SCSCF-Restoration-Info.
++		 */
++		if(!cxdx_add_supported_features(sar,
++				   AVP_IMS_Feature_List_ID_IMS_Restoration_Indication,
++				   restoration_info_sent))
++			goto error1;
++	}
++
+ 	if(msg && tmb.t_get_trans_ident(msg, &hash, &label) < 0) {
+ 		// it's ok cause we can call this async with a message for ul callbacks!
+ 		LM_DBG("SIP message without transaction... must be a ul callback\n");
+diff --git a/src/modules/ims_registrar_scscf/cxdx_sar.h b/src/modules/ims_registrar_scscf/cxdx_sar.h
+index 7844806..639039c 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_sar.h
++++ b/src/modules/ims_registrar_scscf/cxdx_sar.h
+@@ -63,6 +63,7 @@ typedef struct saved_transaction
+ 	int expires; //used to see if this is a dereg as then we don't need to touch usrloc! > 0 if not dereg - 0 id de-reg
+ 	int require_user_data;
+ 	int sar_assignment_type;
++	int script_assignment; //sent by assign_server() for a request other than REGISTER: nothing to reply to, no Contacts to store
+ 	str public_identity;
+ 	udomain_t *domain;
+ 	contact_for_header_t *
+diff --git a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
+index d70537f..1cf9ab1 100644
+--- a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
++++ b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
+@@ -659,11 +659,88 @@ unregister("location");
+       <title><function moreinfo="none">assign_server_unreg(aysnc_reply_route,
+       domain, direction)</function></title>
+ 
+-      <para>TBD</para>
++      <para>Same as assign_server() with a Server-Assignment-Type of 3
++      (UNREGISTERED_USER).</para>
+ 
+       <para>used in REQUEST_ROUTE</para>
+     </section>
+ 
++    <section>
++      <title><function moreinfo="none">assign_server(async_reply_route,
++      domain, direction, assignment_type)</function></title>
++
++      <para>Sends a Cx Server-Assignment-Request on behalf of a request other
++      than REGISTER, downloading the served user's profile into usrloc. The
++      transaction is suspended and resumed in async_reply_route once the SAA
++      arrives, with $avp(saa_return_code) set to 1 when a profile was stored
++      and to a negative value otherwise. No reply is sent by the module; that
++      is left to the route.</para>
++
++      <para>Meaning of the parameters is as follows:</para>
++
++      <itemizedlist>
++        <listitem>
++          <para><emphasis>async_reply_route</emphasis> - route to resume in
++          when the SAA arrives.</para>
++        </listitem>
++
++        <listitem>
++          <para><emphasis>domain</emphasis> - Logical domain within
++          registrar.</para>
++        </listitem>
++
++        <listitem>
++          <para><emphasis>direction</emphasis> - "orig" takes the served user
++          from the P-Asserted-Identity, "term" from the Request-URI.</para>
++        </listitem>
++
++        <listitem>
++          <para><emphasis>assignment_type</emphasis> - the
++          Server-Assignment-Type, an integer or a variable holding one:</para>
++
++          <itemizedlist>
++            <listitem>
++              <para>0 (NO_ASSIGNMENT) - fetch the profile without changing
++              anything at the HSS. The HSS answers DIAMETER_UNABLE_TO_COMPLY
++              when another S-CSCF is assigned to the user. An IMPU already in
++              usrloc keeps its registration state and bindings; a new one is
++              stored as unregistered. This is the S-CSCF restoration procedure
++              for an originating request (3GPP TS 23.380 4.4.2).</para>
++            </listitem>
++
++            <listitem>
++              <para>3 (UNREGISTERED_USER) - fetch the unregistered profile and
++              tell the HSS the user is unregistered here (3GPP TS 29.228
++              6.1.2.1).</para>
++            </listitem>
++          </itemizedlist>
++
++          <para>Any other type is refused: REGISTRATION and RE_REGISTRATION
++          are sent by save(), and the de-registration types would leave usrloc
++          out of step with the HSS.</para>
++        </listitem>
++      </itemizedlist>
++
++      <para>This function can be used in REQUEST_ROUTE.</para>
++
++      <example>
++        <title><function>assign_server</function> usage</title>
++
++        <programlisting format="linespecific">...
++assign_server("ORIG_SAA", "location", "orig", 0);
++...
++route[ORIG_SAA] {
++    if($avp(saa_return_code) != 1) {
++        t_reply("504", "Server Time-out");
++        exit;
++    }
++    # continue as for a registered user
++}
++...
++</programlisting>
++      </example>
++    </section>
++
+     <section>
+       <title><function
+       moreinfo="none">impu_registered(domain)</function></title>
+diff --git a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
+index 9c56bde..888fd90 100644
+--- a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
++++ b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
+@@ -139,6 +139,8 @@ static int w_save4(
+ 		struct sip_msg *_m, char *_route, char *_d, char *mode, char *_cflags);
+ static int w_assign_server_unreg(
+ 		struct sip_msg *_m, char *_route, char *_d, char *_direction);
++static int w_assign_server(struct sip_msg *_m, char *_route, char *_d,
++		char *_direction, char *_type);
+ static int w_lookup(struct sip_msg *_m, char *_d, char *_p2);
+ static int w_lookup_ue_type(struct sip_msg *_m, char *_d, char *_p2);
+ static int w_lookup_path_to_contact(struct sip_msg *_m, char *contact_uri);
+@@ -147,6 +149,8 @@ static int w_lookup_path_to_contact(struct sip_msg *_m, char *contact_uri);
+ static int domain_fixup(void **param, int param_no);
+ static int assign_save_fixup3_async(void **param, int param_no);
+ static int assign_save_fixup_free(void **param, int param_no);
++static int assign_server_fixup4(void **param, int param_no);
++static int assign_server_fixup4_free(void **param, int param_no);
+ static int free_uint_fixup(void **param, int param_no);
+ static int save_fixup4(void **param, int param_no);
+ static int unreg_fixup(void **param, int param_no);
+@@ -171,6 +175,10 @@ int path_mode =
+ int path_use_params =
+ 		0; /*!< if the received- and nat-parameters of last Path uri should be used
+  						 * to determine if UAC is nat'ed */
++int scscf_restoration_info_enabled =
++		0; /*!< if SCSCF-Restoration-Info/Supported-Features should be sent on
++			*   the Cx SAR; leave off for an HSS without IMSRestorationInd, or
++			*   it will reject the SAR (mandatory Supported-Features AVP) */
+ 
+ char *aor_avp_param =
+ 		0; /*!< if instead of extacting the AOR from the request, it should be
+@@ -259,6 +267,8 @@ static cmd_export_t cmds[] = {
+ 			REQUEST_ROUTE | FAILURE_ROUTE},
+ 	{"assign_server_unreg", (cmd_function)w_assign_server_unreg, 3, assign_save_fixup3_async, assign_save_fixup_free,
+ 			REQUEST_ROUTE},
++	{"assign_server", (cmd_function)w_assign_server, 4, assign_server_fixup4, assign_server_fixup4_free,
++			REQUEST_ROUTE},
+ 	{"add_sock_hdr", (cmd_function)add_sock_hdr, 1, fixup_str_null, fixup_free_str_null,
+ 			REQUEST_ROUTE},
+ 	{"unregister", (cmd_function)unregister, 2, unreg_fixup, unreg_fixup_free,
+@@ -306,6 +316,8 @@ static param_export_t params[] = {
+ 	{"use_path", PARAM_INT, &path_enabled},
+ 	{"path_mode", PARAM_INT, &path_mode},
+ 	{"path_use_received", PARAM_INT, &path_use_params},
++	{"scscf_restoration_info_enabled", PARAM_INT,
++			&scscf_restoration_info_enabled},
+ 	{"user_data_dtd", PARAM_STRING, &scscf_user_data_dtd},
+ 	{"user_data_xsd", PARAM_STRING, &scscf_user_data_xsd},
+ 	{"support_wildcardPSI", PARAM_INT, &scscf_support_wildcardPSI},
+@@ -710,6 +722,21 @@ static int w_assign_server_unreg(
+ 	return assign_server_unreg(_m, _d, &direction, _route);
+ }
+ 
++static int w_assign_server(struct sip_msg *_m, char *_route, char *_d,
++		char *_direction, char *_type)
++{
++	str direction;
++	int type;
++
++	if(fixup_get_ivalue(_m, (gparam_t *)_type, &type) != 0) {
++		LM_ERR("invalid Server-Assignment-Type\n");
++		return -1;
++	}
++	direction.s = _direction;
++	direction.len = strlen(_direction);
++	return assign_server_type(_m, _d, &direction, _route, type);
++}
++
+ static int w_lookup_path_to_contact(struct sip_msg *_m, char *contact_uri)
+ {
+ 	return lookup_path_to_contact(_m, contact_uri);
+@@ -800,6 +827,22 @@ static int assign_save_fixup_free(void **param, int param_no)
+ 	return 0;
+ }
+ 
++/* assign_server(route, domain, direction, type): the first three as for
++ * assign_server_unreg(), the Server-Assignment-Type an int or a variable */
++static int assign_server_fixup4(void **param, int param_no)
++{
++	if(param_no == 4)
++		return fixup_igp_null(param, 1);
++	return assign_save_fixup3_async(param, param_no);
++}
++
++static int assign_server_fixup4_free(void **param, int param_no)
++{
++	if(param_no == 4)
++		return fixup_free_igp_null(param, 1);
++	return assign_save_fixup_free(param, param_no);
++}
++
+ 
+ static int uint_fixup(void **param, int param_no)
+ {
+diff --git a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.h b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.h
+index 427644e..006a369 100644
+--- a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.h
++++ b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.h
+@@ -103,6 +103,7 @@ extern int method_filtering;
+ extern int path_enabled;
+ extern int path_mode;
+ extern int path_use_params;
++extern int scscf_restoration_info_enabled;
+ 
+ extern str sock_hdr_name;
+ extern int sock_flag;
+diff --git a/src/modules/ims_registrar_scscf/save.c b/src/modules/ims_registrar_scscf/save.c
+index ce7f7ce..8fa9168 100644
+--- a/src/modules/ims_registrar_scscf/save.c
++++ b/src/modules/ims_registrar_scscf/save.c
+@@ -1243,13 +1243,88 @@ done:
+ 	return 1;
+ }
+ 
+-static int update_contacts_sar_unregistered_user(udomain_t *_d,
+-		ims_subscription **s, str *ccf1, str *ccf2, str *ecf1, str *ecf2)
++/*!
++ * TS 23.380 4.6.2 restoration information, the other half: give the restored
++ * Contact (and its Path, if backed up) a binding in usrloc, the same way a
++ * real REGISTER would -- so a terminating request finds someone to deliver
++ * to instead of falling back to unregistered-service handling. Call-ID and
++ * CSeq were not backed up (23.380 4.6.2 lists them as optional), so this uses
++ * placeholders low enough that the UE's own next REGISTER always supersedes
++ * them; expires is the module's own default, since the true value was not
++ * backed up either -- conservative, and self-correcting once the UE
++ * re-registers. A no-op when the HSS had nothing to hand back.
++ */
++static int restore_ucontact(struct sip_msg *_m, impurecord_t *impu_rec,
++		str *restoration_contact, str *restoration_path)
++{
++	static str callid = str_init("scscf-restoration");
++	static str no_ua = str_init("n/a");
++	ucontact_info_t ci;
++	struct ucontact *ucontact = NULL;
++	int sl;
++
++	if(!restoration_contact || !restoration_contact->len)
++		return 0;
++
++	memset(&ci, 0, sizeof(ucontact_info_t));
++	ci.callid = &callid;
++	ci.cseq = 0;
++	ci.q = Q_UNSPECIFIED;
++	ci.expires = calc_contact_expires(0, -1, 0);
++	ci.methods = ALL_METHODS;
++	ci.user_agent = &no_ua;
++	ci.sock = _m ? _m->rcv.bind_address : 0;
++	if(restoration_path && restoration_path->len)
++		ci.path = restoration_path;
++
++	if(ul.get_ucontact(restoration_contact, ci.callid, ci.path, ci.cseq,
++			   &ucontact)
++			!= 0) {
++		LM_DBG("restoring contact <%.*s> for IMPU <%.*s>\n",
++				restoration_contact->len, restoration_contact->s,
++				impu_rec->public_identity.len,
++				impu_rec->public_identity.s);
++		if(ul.insert_ucontact(impu_rec, restoration_contact, &ci, &ucontact)
++				!= 0) {
++			LM_ERR("Error restoring contact <%.*s>\n",
++					restoration_contact->len, restoration_contact->s);
++			return -1;
++		}
++	} else {
++		LM_DBG("refreshing already-present contact <%.*s> from restoration "
++			   "info\n",
++				restoration_contact->len, restoration_contact->s);
++		sl = ucontact->sl;
++		ul.lock_contact_slot_i(sl);
++		if(ucontact->state != CONTACT_VALID)
++			ucontact->state = CONTACT_VALID;
++		if(ul.update_ucontact(impu_rec, ucontact, &ci) != 0) {
++			LM_ERR("Error refreshing restored contact <%.*s>\n",
++					restoration_contact->len, restoration_contact->s);
++			ul.unlock_contact_slot_i(sl);
++			ul.release_ucontact(ucontact);
++			return -1;
++		}
++		ul.unlock_contact_slot_i(sl);
++		ul.release_ucontact(ucontact);
++	}
++
++	return 0;
++}
++
++static int update_contacts_sar_unregistered_user(struct sip_msg *msg,
++		udomain_t *_d, ims_subscription **s, str *ccf1, str *ccf2, str *ecf1,
++		str *ecf2, str *restoration_contact, str *restoration_path)
+ {
+ 	int i, j;
+ 	impurecord_t *impu_rec = NULL;
+ 	ims_public_identity *pi = NULL;
+-	int reg_state = IMS_USER_UNREGISTERED;
++	/* Restoration information comes back only for an identity the HSS holds
++	 * as registered (TS 29.228 6.1.2.1), which TS 23.380 4.3.2 has the S-CSCF
++	 * serve as registered. */
++	int reg_state = restoration_contact && restoration_contact->len
++							? IMS_USER_REGISTERED
++							: IMS_USER_UNREGISTERED;
+ 
+ 	LM_DBG("updating contacts for UNREGISTERED_USER state\n");
+ 	for(i = 0; i < (*s)->service_profiles_cnt; i++)
+@@ -1265,6 +1340,12 @@ static int update_contacts_sar_unregistered_user(udomain_t *_d,
+ 				ul.unlock_udomain(_d, &pi->public_identity);
+ 				return -1;
+ 			}
++			if(restore_ucontact(msg, impu_rec, restoration_contact,
++					   restoration_path)
++					!= 0) {
++				ul.unlock_udomain(_d, &pi->public_identity);
++				return -1;
++			}
+ 			ul.unlock_udomain(_d, &pi->public_identity);
+ 		}
+ 	/* if we were successful up to this point, then we need to copy the contacts
+@@ -1273,6 +1354,55 @@ static int update_contacts_sar_unregistered_user(udomain_t *_d,
+ 	return 1;
+ }
+ 
++/*!
++ * NO_ASSIGNMENT only downloads the profile (TS 29.228 6.1.2.1): the HSS changes
++ * nothing about the user's registration or assignment, so neither does this.
++ * An IMPU already in usrloc keeps its state and its bindings and only has its
++ * profile refreshed. One that is not is created holding the profile and no
++ * binding, i.e. IMPU_UNREGISTERED - which is also what the usrloc timer makes
++ * of any record without a valid contact.
++ */
++static int update_contacts_sar_no_assignment(struct sip_msg *msg,
++		udomain_t *_d, ims_subscription **s, str *ccf1, str *ccf2, str *ecf1,
++		str *ecf2, str *restoration_contact, str *restoration_path)
++{
++	int i, j;
++	impurecord_t *impu_rec = NULL;
++	ims_public_identity *pi = NULL;
++	int reg_state;
++
++	LM_DBG("updating contacts for NO_ASSIGNMENT\n");
++	for(i = 0; i < (*s)->service_profiles_cnt; i++)
++		for(j = 0; j < (*s)->service_profiles[i].public_identities_cnt; j++) {
++			pi = &((*s)->service_profiles[i].public_identities[j]);
++			ul.lock_udomain(_d, &pi->public_identity);
++			reg_state = IMS_USER_UNREGISTERED;
++			if(ul.get_impurecord(_d, &pi->public_identity, &impu_rec) == 0)
++				reg_state = impu_rec->reg_state;
++			if(ul.update_impurecord(_d, &pi->public_identity, 0, reg_state,
++					   -1 /*do not change send sar on delete */, pi->barring, 0,
++					   s, ccf1, ccf2, ecf1, ecf2, &impu_rec)
++					!= 0) {
++				LM_ERR("Unable to update impurecord for <%.*s>\n",
++						STR_FMT(&pi->public_identity));
++				ul.unlock_udomain(_d, &pi->public_identity);
++				return -1;
++			}
++			/* Only when this IMPU had no live binding already -- an
++			 * originating restart-restore is not supposed to touch a
++			 * binding the S-CSCF never lost (TS 23.380 4.4.2). */
++			if(reg_state != IMPU_REGISTERED
++					&& restore_ucontact(msg, impu_rec, restoration_contact,
++							   restoration_path)
++							   != 0) {
++				ul.unlock_udomain(_d, &pi->public_identity);
++				return -1;
++			}
++			ul.unlock_udomain(_d, &pi->public_identity);
++		}
++	return 1;
++}
++
+ /**
+  *
+  * @param msg
+@@ -1292,7 +1422,8 @@ static int update_contacts_sar_unregistered_user(udomain_t *_d,
+ 
+ int update_contacts(struct sip_msg *msg, udomain_t *_d, str *public_identity,
+ 		int assignment_type, ims_subscription **s, str *ccf1, str *ccf2,
+-		str *ecf1, str *ecf2, contact_for_header_t **contact_header)
++		str *ecf1, str *ecf2, contact_for_header_t **contact_header,
++		str *restoration_contact, str *restoration_path)
+ {
+ 	int expires_hdr = -1; //by default registration doesn't expire
+ 	int ret = -1;
+@@ -1319,8 +1450,12 @@ int update_contacts(struct sip_msg *msg, udomain_t *_d, str *public_identity,
+ 					contact_header, expires_hdr);
+ 			break;
+ 		case AVP_IMS_SAR_UNREGISTERED_USER:
+-			ret = update_contacts_sar_unregistered_user(
+-					_d, s, ccf1, ccf2, ecf1, ecf2);
++			ret = update_contacts_sar_unregistered_user(msg, _d, s, ccf1,
++					ccf2, ecf1, ecf2, restoration_contact, restoration_path);
++			break;
++		case AVP_IMS_SAR_NO_ASSIGNMENT:
++			ret = update_contacts_sar_no_assignment(msg, _d, s, ccf1, ccf2,
++					ecf1, ecf2, restoration_contact, restoration_path);
+ 			break;
+ 		default:
+ 			LM_ERR("unimplemented assignment_type[%d] when trying to update "
+@@ -1332,9 +1467,28 @@ int update_contacts(struct sip_msg *msg, udomain_t *_d, str *public_identity,
+ 
+ int assign_server_unreg(
+ 		struct sip_msg *_m, char *str1, str *direction, char *route)
++{
++	return assign_server_type(
++			_m, str1, direction, route, AVP_IMS_SAR_UNREGISTERED_USER);
++}
++
++/*!
++ * A SAR on behalf of a request other than REGISTER, resumed in the async route
++ * with $avp(saa_return_code) set. Only the types that download a profile
++ * without the S-CSCF owning any binding change are accepted:
++ *  - UNREGISTERED_USER: the served user is unregistered here, and the HSS is
++ *    told so (TS 29.228 6.1.2.1). The profile is stored IMPU_UNREGISTERED.
++ *  - NO_ASSIGNMENT: the profile is fetched and nothing changes at the HSS -
++ *    the HSS refuses it with DIAMETER_UNABLE_TO_COMPLY if another S-CSCF is
++ *    assigned (TS 23.380 4.4.2), which is how an S-CSCF that lost its data
++ *    restores it for an originating request.
++ * REGISTRATION and RE_REGISTRATION are save()'s, and the de-registration types
++ * have to move usrloc with them, which a script-initiated SAR does not do.
++ */
++int assign_server_type(struct sip_msg *_m, char *str1, str *direction,
++		char *route, int assignment_type)
+ {
+ 	str private_identity = {0, 0}, public_identity = {0, 0};
+-	int assignment_type = AVP_IMS_SAR_NO_ASSIGNMENT;
+ 	int data_available = AVP_IMS_SAR_USER_DATA_NOT_AVAILABLE;
+ 	int require_user_data = 1;
+ 	rerrno = R_FINE;
+@@ -1346,8 +1500,15 @@ int assign_server_unreg(
+ 
+ 	udomain_t *_d = (udomain_t *)str1;
+ 
++	if(assignment_type != AVP_IMS_SAR_UNREGISTERED_USER
++			&& assignment_type != AVP_IMS_SAR_NO_ASSIGNMENT) {
++		LM_ERR("assignment type %d cannot be sent from the script\n",
++				assignment_type);
++		return -1;
++	}
++
+ 	if(fixup_get_svalue(_m, (gparam_t *)route, &route_name) != 0) {
+-		LM_ERR("no async route block for assign_server_unreg\n");
++		LM_ERR("no async route block for assign_server\n");
+ 		return -1;
+ 	}
+ 
+@@ -1365,8 +1526,8 @@ int assign_server_unreg(
+ 		return -1;
+ 	}
+ 
+-	LM_DBG("Assigning unregistered user for direction [%.*s]\n", direction->len,
+-			direction->s);
++	LM_DBG("Assigning server (type %d) for direction [%.*s]\n",
++			assignment_type, direction->len, direction->s);
+ 
+ 	enum cscf_dialog_direction dir = cscf_get_dialog_direction(direction->s);
+ 	switch(dir) {
+@@ -1389,7 +1550,6 @@ int assign_server_unreg(
+ 		goto error;
+ 	}
+ 
+-	assignment_type = AVP_IMS_SAR_UNREGISTERED_USER;
+ 	data_available = AVP_IMS_SAR_USER_DATA_NOT_AVAILABLE; //TODO: check this
+ 
+ 
+@@ -1421,6 +1581,7 @@ int assign_server_unreg(
+ 	saved_t->expires = 1; //not a dereg as this is server_assign_unreg
+ 	saved_t->require_user_data = require_user_data;
+ 	saved_t->sar_assignment_type = assignment_type;
++	saved_t->script_assignment = 1;
+ 	saved_t->domain = (udomain_t *)_d;
+ 
+ 	saved_t->contact_header = 0;
+@@ -1595,7 +1756,7 @@ int save(struct sip_msg *msg, char *str1, char *route, int _cflags)
+ 			LM_DBG("need to unregister contacts\n");
+ 			//lets update the contacts - we need to know if all were deleted or not for the public identity
+ 			int res = update_contacts(msg, _d, &public_identity,
+-					sar_assignment_type, 0, 0, 0, 0, 0, &contact_header);
++					sar_assignment_type, 0, 0, 0, 0, 0, &contact_header, 0, 0);
+ 			if(res <= 0) {
+ 				LM_DBG("Error processing REGISTER for de-registration\n");
+ 				free_contact_buf(contact_header);
+diff --git a/src/modules/ims_registrar_scscf/save.h b/src/modules/ims_registrar_scscf/save.h
+index 3a31aaf..47db038 100644
+--- a/src/modules/ims_registrar_scscf/save.h
++++ b/src/modules/ims_registrar_scscf/save.h
+@@ -58,6 +58,8 @@
+ /*! \brief
+  * Process REGISTER request and save its contacts
+  */
++int assign_server_type(struct sip_msg *_m, char *str1, str *direction,
++		char *route, int assignment_type);
+ int assign_server_unreg(
+ 		struct sip_msg *_m, char *str1, str *direction, char *route);
+ 
+@@ -67,6 +69,7 @@ int unregister(struct sip_msg *_m, char *_d, char *_uri);
+ 
+ int update_contacts(struct sip_msg *msg, udomain_t *_d, str *public_identity,
+ 		int assignment_type, ims_subscription **s, str *ccf1, str *ccf2,
+-		str *ecf1, str *ecf2, contact_for_header_t **contact_header);
++		str *ecf1, str *ecf2, contact_for_header_t **contact_header,
++		str *restoration_contact, str *restoration_path);
+ 
+ #endif /* SAVE_H */
+diff --git a/src/modules/ims_registrar_scscf/server_assignment.c b/src/modules/ims_registrar_scscf/server_assignment.c
+index 56dd556..2b49e54 100644
+--- a/src/modules/ims_registrar_scscf/server_assignment.c
++++ b/src/modules/ims_registrar_scscf/server_assignment.c
+@@ -54,7 +54,7 @@
+ extern str scscf_name_str;
+ /* Does the Server Assignment procedures, assigning this S-CSCF to the user.
+  * Covered cases:
+- * AVP_IMS_SAR_NO_ASSIGNMENT							= 0
++ * AVP_IMS_SAR_NO_ASSIGNMENT							= 0,		in assign_server
+  * AVP_IMS_SAR_REGISTRATION								= 1,		YES,HERE
+  * AVP_IMS_SAR_RE_REGISTRATION							= 2,
+  * AVP_IMS_SAR_UNREGISTERED_USER						= 3,		in S_assign_server_unreg
+@@ -84,7 +84,8 @@ int scscf_assign_server(struct sip_msg *msg, str public_identity,
+ 			&& assignment_type != AVP_IMS_SAR_USER_DEREGISTRATION
+ 			&& assignment_type
+ 					   != AVP_IMS_SAR_USER_DEREGISTRATION_STORE_SERVER_NAME
+-			&& assignment_type != AVP_IMS_SAR_UNREGISTERED_USER) {
++			&& assignment_type != AVP_IMS_SAR_UNREGISTERED_USER
++			&& assignment_type != AVP_IMS_SAR_NO_ASSIGNMENT) {
+ 		LM_DBG("Invalid SAR assignment type\n");
+ 		return result;
+ 	}

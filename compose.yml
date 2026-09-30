@@ -18,9 +18,10 @@ x-kamailio: &kamailio
 
 x-route: &route
   image: alpine
-  command: sh -c "ip route replace ${UENET} via $$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1) mtu 1450"
+  command: sh -c "gw=$$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1); test -n \"$$gw\" && ip route replace ${UENET} via $$gw mtu 1450"
   cap_add:
   - NET_ADMIN
+  restart: on-failure
 
 services:
   pcscf:
@@ -52,8 +53,8 @@ services:
     - source: icscf.xml
       target: /etc/cscf/diameter.xml
     depends_on:
-      dbprep:
-        condition: service_completed_successfully
+      scscf:
+        condition: service_healthy
 
   scscf:
     << : *kamailio
@@ -61,10 +62,19 @@ services:
     environment:
       REALM: ${REALM}
       #DBURL: redis:6379/3
+      REGSRV: addr=redis;port=6379;db=2
       RTPADR: udp:rtpengine:9910
+      ENUM: e164.${REALM}.
+      TRUNK:
+      E164CC: ${DIAL}
+      E164IDD:
+      E164NDD:
     configs:
     - source: scscf.xml
       target: /etc/cscf/diameter.xml
+    depends_on:
+      redis:
+        condition: service_healthy
 
   dns:
     image: coredns/coredns
@@ -119,15 +129,15 @@ services:
     volumes:
     - /lib/modules:/lib/modules
 
-  dbprep:
-    image: valkey/valkey:9-alpine
-    command: valkey-cli -u redis://redis:6379/2 HSET s_cscf:entry::1 s_cscf_uri sip:scscf.ims.${REALM}
-    restart: on-failure
-
   redis:
     image: valkey/valkey:9-alpine
     expose:
     - 6379/tcp
+    healthcheck:
+      test: valkey-cli ping | grep -q PONG
+      retries: 30
+      interval: 2s
+      start_period: 2s
 
   test:
     profiles:
@@ -147,12 +157,15 @@ services:
       IMS_SUBS:   ${SCALE}
       IMS_MSISDN_CC:      ${DIAL}
       IMS_MSISDN_DIGITS:  9
-      CALL_URI:  ${CALL_URI:-sip}
+      CALL_URI:  ${CALL_URI:-tel}
+      CALL_REVERSE_SLEEP_MS: 30000
     cap_add:
     - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
     - BPF         # loading the GTP-U datapath
     - PERFMON     # privileged verifier: skip the Spectre passes
     depends_on:
+      pcscf:
+        condition: service_healthy
       icscf:
         condition: service_healthy
       scscf:
@@ -220,7 +233,8 @@ configs:
       table = -1
       listen-http = 0.0.0.0:9090
       listen-ng = 0.0.0.0:9910
-      interface = any
+      interfaces-config = interface
+      templates = templates
       timeout = 60
       silent-timeout = 3600
       tos = 184
@@ -236,7 +250,8 @@ configs:
       table = -1
       listen-http = 0.0.0.0:9090
       listen-ng = 0.0.0.0:9910
-      interface = any
+      interfaces-config = interface
+      templates = templates
       timeout = 60
       silent-timeout = 3600
       tos = 184
@@ -247,6 +262,17 @@ configs:
       redis-subscribe = redis:6379/4
       redis-resolve-on-reconnect = true
 
+      [interface-internal]
+      address = any
+
+      [interface-external]
+      alias = internal
+
+      [templates]
+      internal = direction=internal direction=internal
+      outgoing = direction=internal direction=external
+      incoming = direction=external direction=internal
+
   dns:
     content: |
       . {
@@ -256,6 +282,17 @@ configs:
              lameduck 5s
           }
           ready
+          # ENUM (RFC 6116)
+          template IN NAPTR {
+              match ^([0-9]\.)+${DIALR}\.e164\.(?P<home>mnc\d{2,3}\.mcc\d{3}\.3gppnetwork\.org)\.$$
+              answer "{{ .Name }} 1D IN NAPTR 10 100 \"u\" \"E2U+sip\" \"!^\\+(.*)$$!sip:\\1@ims.{{ .Group.home }}!\" ."
+              fallthrough
+          }
+          # A number in the tree but outside the served range: no such name.
+          template IN NAPTR {
+              match ^([0-9]\.)+e164\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork\.org\.$$
+              rcode NXDOMAIN
+          }
           template IN SRV {
               match (?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
               answer "{{ .Name }} 1D SRV 0 0 5060 {{ or .Group.name \"icscf\" }}."

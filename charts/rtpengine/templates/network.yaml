@@ -1,0 +1,14 @@
+{{- range $if := .Values.media.interfaces }}
+{{- with $if.network }}
+{{- if .enabled }}
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ include "rtpengine.network.name" (dict "root" $ "name" .name) }}
+  labels: {{- include "rtpengine.labels" $ | nindent 4 }}
+spec:
+  config: {{ include "rtpengine.network.config" (dict "root" $ "network" .) | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

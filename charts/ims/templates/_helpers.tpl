@@ -25,6 +25,49 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+The Diameter identity, `<instance>.<ims realm>`: the pod name, or `instance`
+when given. A P-CSCF StatefulSet per Gm address passes its own name, so
+`<release>-pcscf-<index>` stays the identity core's ConnectPeer list
+enumerates rather than becoming `<release>-pcscf-<index>-0`.
+
+Call with (dict "root" $ "instance" <name or "">).
+*/}}
+{{- define "ims.identity" -}}
+{{- $root := .root -}}
+{{- with $root }}
+- name: identity
+  image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  {{- with .Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  env:
+  - name: INSTANCE
+    {{- with $.instance }}
+    value: {{ . | quote }}
+    {{- else }}
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+    {{- end }}
+  command:
+  - sh
+  - -ec
+  - |
+    sed "s/@IDENTITY@/$INSTANCE/" /tmpl/diameter.xml > /run/cscf/diameter.xml
+    if grep -q "@IDENTITY@" /run/cscf/diameter.xml; then
+      echo "identity substitution failed"; exit 1
+    fi
+    cat /run/cscf/diameter.xml
+  volumeMounts:
+  - name: diameter
+    mountPath: /tmpl
+  - name: identity
+    mountPath: /run/cscf
+{{- end }}
+{{- end }}
+
+{{/*
 Wait redis! db_redis opens its connection at module init and does not retry
 
 Call with (dict "root" $ "cscf" <role>).
@@ -33,6 +76,9 @@ Call with (dict "root" $ "cscf" <role>).
 {{- $valkey := printf "-h %s -p %v" (include "valkey.name" .root.Subcharts.rtpengine.Subcharts.valkey) .root.Values.rtpengine.valkey.ports.valkey }}
 - name: wait-store
   image: {{ .root.Values.rtpengine.valkey.image.repository }}:{{ .root.Values.rtpengine.valkey.image.tag }}
+  {{- with .root.Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
   command:
   - sh
   - -ec
@@ -47,21 +93,8 @@ Call with (dict "root" $ "cscf" <role>).
     {{- end }}
 {{- end }}
 
-{{/*
-S-CSCF register
-*/}}
-{{- define "ims.register" -}}
-- name: register
-  image: {{ .Values.rtpengine.valkey.image.repository }}:{{ .Values.rtpengine.valkey.image.tag }}
-  command:
-  - valkey-cli
-  - -c
-  - -u
-  - redis://{{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ .Values.db.interrogating }}
-  - HSET
-  - s_cscf:entry::1
-  - s_cscf_uri
-  - sip:scscf.{{ include "ims.realm.ims" . }}
+{{- define "ims.regsrv" -}}
+addr={{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }};port={{ .Values.rtpengine.valkey.ports.valkey }};db={{ .Values.db.interrogating }}
 {{- end }}
 
 {{/*
@@ -70,6 +103,10 @@ IPsec init
 {{- define "ims.ipsec" -}}
 - name: ipsec
   image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+  imagePullPolicy: {{ .Values.image.pullPolicy }}
+  {{- with .Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
   command:
   - modprobe
   - -a
@@ -133,12 +170,32 @@ both need tpl before anything can be appended.
 {{- end }}
 
 {{/*
+A NetworkAttachmentDefinition's `spec.config`: the CNI config verbatim, with
+`name` defaulted to the attachment's own so the two cannot drift. `merge` lets
+the config win, so an explicit `name` in it is still honoured, and deepCopy
+keeps it from writing back into .Values.
+
+The default is the release-prefixed name for the same reason the object carries
+it, and this one is the easier of the two to miss: the CNI network name is what
+host-local keys its allocations on -- /var/lib/cni/networks/<name> -- so two
+releases sharing it hand out addresses from one pool into two subnets.
+
+Call with the root context.
+*/}}
+{{- define "ims.network.config" -}}
+{{- toJson (merge (deepCopy .Values.gm.config) (dict "name" (printf "%s-gm" .Release.Name))) -}}
+{{- end }}
+
+{{/*
 The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
 */}}
 {{- define "ims.ueroute" -}}
 - name: ueroute
   image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
   imagePullPolicy: {{ .Values.image.pullPolicy }}
+  {{- with .Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
   securityContext:
     capabilities:
       add:
@@ -149,13 +206,59 @@ The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
   - |
     pool={{ .Values.global.ue.subnet }}
     mtu={{ .Values.global.ue.mtu }}
+    via={{ .Values.global.ue.via | quote }}
 
     while :; do
-      # "default via <gw> dev <dev>" -> "<gw> <dev>"
-      set -- $(ip route | awk '$1 == "default" { print $3, $5; exit }')
-      if [ -n "$1" ]; then
-        ip route replace "$pool" via "$1" dev "$2" mtu "$mtu"
+      if [ -n "$via" ]; then
+        # An explicit next hop: the kernel resolves the device from it, which
+        # is the Gm one whenever that is the interface the hop is on-link on.
+        ip route replace "$pool" via "$via" mtu "$mtu"
+      else
+        # "default via <gw> dev <dev>" -> "<gw> <dev>"
+        set -- $(ip route | awk '$1 == "default" { print $3, $5; exit }')
+        if [ -n "$1" ]; then
+          ip route replace "$pool" via "$1" dev "$2" mtu "$mtu"
+        fi
       fi
       sleep {{ .Values.reconcile }}
     done
+{{- end }}
+
+{{/*
+The test UE's environment: the access it attaches over (S5/S8 to the core's
+SMF, GTP-U on the pod's own interface) and the subscriber it registers as.
+Shared by every helm test hook, so they all attach the same way and as the
+same provisioned IMSI range -- the core provisions `subscribers.count` of
+them, one by default, and a hook that registered as anybody else would be
+testing the HSS rather than the IMS.
+*/}}
+{{- define "ims.test.env" -}}
+- {name: PGW_IP,           value: {{ .Values.global.core.release }}-smf.{{ .Release.Namespace }}.svc.cluster.local}
+- {name: GTPU_IFACE,       value: eth0}
+- {name: GTPU_INNER_IFACE, value: eth0}
+{{- with .Values.test.t3ms }}
+- {name: GTP_T3_MS,        value: {{ . | quote }}}
+{{- end }}
+- {name: IMS_K,     value: {{ .Values.test.k | quote }}}
+- {name: IMS_OPC,   value: {{ .Values.test.opc | quote }}}
+- {name: IMS_MCC,   value: {{ .Values.mcc | quote }}}
+- {name: IMS_MNC,   value: {{ .Values.mnc | quote }}}
+- {name: IMS_REALM, value: {{ include "ims.realm.ims" . | quote }}}
+- {name: IMS_IMSI,  value: {{ tpl .Values.test.imsi . | quote }}}
+- {name: IMS_MSISDN_CC,     value: {{ tpl .Values.test.msisdn.cc . | quote }}}
+- {name: IMS_MSISDN_DIGITS, value: {{ .Values.test.msisdn.digits | quote }}}
+- {name: CALL_URI, value: {{ .Values.test.uri | quote }}}
+{{- end }}
+
+{{/*
+What the test UE needs of the kernel: NET_ADMIN for the ESP SAs and policies,
+the transparent UE socket and the TC hook; BPF to load the GTP-U datapath the
+user plane rides.
+*/}}
+{{- define "ims.test.securityContext" -}}
+capabilities:
+  add:
+  - NET_ADMIN
+  - BPF
+  - PERFMON
 {{- end }}

@@ -1,0 +1,47 @@
+Tell FFmpeg how wide a G.726 sample is, or G.726 can only be encoded.
+
+avc_decoder_init() hands FFmpeg a codec context carrying the channel count and
+the clock rate and nothing else. That is enough for every other codec, but
+FFmpeg's G.726 decoder reads the ADPCM code width out of bits_per_coded_sample
+and refuses to open without it:
+
+    c->code_size = avctx->bits_per_coded_sample;
+    if (c->code_size < 2 || c->code_size > 5) {
+        av_log(avctx, AV_LOG_ERROR, "Invalid number of bits %d\n", c->code_size);
+        return AVERROR(EINVAL);
+    }
+
+so every attempt to decode G.726 ends as
+
+    ffmpeg: Invalid number of bits 0
+    Error returned from libav: Invalid argument
+    Error creating media decoder for codec G726-32: failed to open codec context
+
+The encoder side works only by accident of the other direction being derivable:
+g726_encode_init() computes the code width itself from bit_rate/sample_rate,
+which g726_encoder_init() does set. The result is a daemon that advertises
+G726-16/24/32/40, transcodes happily *into* them, and fails on the first packet
+that arrives *as* one.
+
+codec_def_t already carries the width -- bits_per_sample is 2, 3, 4 and 5 for
+the four G.726 variants, which is exactly what FFmpeg wants -- so pass it
+through. It is set on the ADPCM_G726 codec only, because the other decoders
+either overwrite the field themselves (the PCM family) or warn about a value
+they did not expect (G.722 forces it back to 8).
+
+diff --git a/lib/avc.c b/lib/avc.c
+--- a/lib/avc.c
++++ b/lib/avc.c
+@@ -55,6 +55,12 @@ const char *avc_decoder_init(decoder_t *dec, const str *extra_opts) {
+ 	dec->avc.avcctx->sample_rate = dec->in_format.clockrate;
+ 	dec->avc.avcctx->time_base = (AVRational){1, dec->in_format.time_base ?: dec->in_format.clockrate};
+ 
++	// FFmpeg's G.726 decoder takes the ADPCM code width from this field and
++	// refuses to open without it. Unlike the encoder, it will not work the
++	// width out from the bitrate.
++	if (dec->def->avcodec_id == AV_CODEC_ID_ADPCM_G726)
++		dec->avc.avcctx->bits_per_coded_sample = dec->def->bits_per_sample;
++
+ 	dec->avc.avcctx->width = dec->in_format.width;
+ 	dec->avc.avcctx->height = dec->in_format.height;
+ 	//dec->avc.avcctx->pix_fmt = dec->in_format.pix_fmt;

@@ -1,6 +1,8 @@
 logger:
   level: {{ .root.Values.logger.level }}
 global:
+  max:
+    ue: {{ .root.Values.maxUe }}
 upf:
   metrics:
     server:

@@ -21,6 +21,9 @@ spec:
       containers:
       - name: seed
         image: {{ .Values.subscribers.image }}
+        {{- with (.Values.subscribers.resources | default .Values.sidecar.resources) }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
         command: [bash, -ec]
         args:
         - |

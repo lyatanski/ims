@@ -1,6 +1,8 @@
 logger:
   level: {{ .root.Values.logger.level }}
 global:
+  max:
+    ue: {{ .root.Values.maxUe }}
 db_uri: mongodb://{{ .root.Release.Name }}-mongodb/open5gs
 pcrf:
   metrics:

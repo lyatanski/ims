@@ -1,0 +1,9 @@
+{{- if .Values.gm.enabled }}
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ .Release.Name }}-gm
+  labels: {{- include "ims.labels" . | nindent 4 }}
+spec:
+  config: {{ include "ims.network.config" . | quote }}
+{{- end }}

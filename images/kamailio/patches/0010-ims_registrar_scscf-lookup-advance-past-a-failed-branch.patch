@@ -1,0 +1,63 @@
+Let lookup() move on from a binding it could not append as a branch.
+
+After the first valid binding has become the Request-URI, lookup() appends
+every other valid binding of the IMPU as a branch, in a while loop that
+advances at the bottom of its body:
+
+	while(impucontact) {
+		ptr = impucontact->contact;
+		if(VALID_CONTACT(...)) {
+			if(... get_path_dst_uri(&ptr->path, &path_dst) < 0)
+				continue;
+			if(km_append_branch(...) == -1)
+				continue;   /* "Also give a chance to the next branches" */
+		}
+		impucontact = impucontact->next;
+	}
+
+Both continues jump past that advance, so the loop re-examines the same
+binding, fails the same way, and never terminates - with the udomain lock
+lookup() took for the IMPU still held, so every later request that hashes to
+that slot blocks behind it too. The comment says what was meant: skip this
+binding, try the rest.
+
+km_append_branch() fails deterministically once the transaction has
+max_branches destinations (12 by default, which serving.cfg does not raise),
+so the thirteenth valid binding of one IMPU is enough: the first becomes the
+Request-URI, the next eleven are appended, the twelfth append fails, and the
+worker spins. One REGISTER can bind that many - it may carry any number of
+Contacts, and route[REBIND] only retires bindings from earlier
+registrations, not siblings in the same one - after which the first
+terminating request to that identity takes a worker down with it. A Path
+that get_path_dst_uri() cannot parse does the same on any binding.
+
+Turned into a for loop, so the advance runs on continue too. Nothing else
+changes: a failed binding is still skipped with its error logged, and the
+bindings after it are still tried.
+
+diff --git a/src/modules/ims_registrar_scscf/lookup.c b/src/modules/ims_registrar_scscf/lookup.c
+--- a/src/modules/ims_registrar_scscf/lookup.c
++++ b/src/modules/ims_registrar_scscf/lookup.c
+@@ -216,9 +216,13 @@
+ 		goto done;
+ 
+ 	//the last i was the first valid contact we found - let's go through the rest of valid contacts and append the branches.
++	//
++	//A for, not a while: both failure paths below skip to the next contact
++	//with `continue`, and in a while that skips the advance at the bottom of
++	//the body too - the same contact is retried forever, udomain lock held.
+ 	if(impucontact)
+ 		impucontact = impucontact->next;
+-	while(impucontact) {
++	for(; impucontact; impucontact = impucontact->next) {
+ 		ptr = impucontact->contact;
+ 		if(VALID_UE_TYPE(ptr, ue_type) && VALID_CONTACT(ptr, act_time)
+ 				&& allowed_method(_m, ptr)) {
+@@ -240,7 +244,6 @@
+ 				continue;
+ 			}
+ 		}
+-		impucontact = impucontact->next;
+ 	}
+ 
+ done:

@@ -1,0 +1,482 @@
+Let the I-CSCF re-read the S-CSCF candidate table when a UAA leaves it to
+choose.
+
+ims_icscf reads the s_cscf and s_cscf_capabilities tables once, in mod_init,
+and closes the database connection on the next statement. From then on the
+candidate set is frozen: an S-CSCF that is started, scaled out, or taken away
+after the I-CSCF came up is invisible to I_get_capab_ordered() until the
+I-CSCF is restarted. In a deployment where the S-CSCF publishes its own row
+and the row carries a TTL, that is the whole membership mechanism and it only
+ever runs once.
+
+The moment where this matters is the UAA. When the HSS answers a UAR without
+naming an S-CSCF, the choice is the I-CSCF's to make out of its own table --
+3GPP TS 29.228 6.1.1, the DIAMETER_FIRST_REGISTRATION and
+DIAMETER_SERVER_SELECTION cases. That is the one point in the call flow where
+the I-CSCF is about to act on the table and can still be told it has changed,
+so that is where the re-read goes: at the success label of
+async_cdp_uar_callback, guarded by !server_name.len, before the list is built.
+
+The guard is deliberately the absence of a Server-Name and not the presence of
+a Server-Capabilities AVP. Verified against Open5GS v2.8.0: its UAA for a first
+registration carries Experimental-Result-Code 2001 and neither AVP --
+
+    Experimental-Result
+        Vendor-Id = 10415
+        Experimental-Result-Code = 2001
+    Origin-Host = hss.epc.<realm>
+    Auth-Session-State = 1
+
+-- so cxdx_get_capabilities() returns 0 with every count left at zero, and
+I_get_capab_ordered() then matches every cached row with score 0. The table
+decides the selection on its own. A trigger conditioned on the AVP would never
+fire there, while the staleness it is meant to fix is exactly what is deciding
+the outcome.
+
+The cache had to move into shared memory for this. SCSCF_Capabilities was a
+process global holding a shm pointer, written once before the fork, so every
+process inherited the same value and nothing ever wrote it again. A re-read
+from a worker breaks both halves of that: cdp forks its workers
+(diameter_peer.c diameter_peer_start(), fork_process("cdp_worker")), so the
+new array would be visible only to whichever worker happened to take the
+answer, and the shm_free() of the old one would leave every other process --
+and the SIP workers running I_scscf_select -- reading freed memory. The set
+now lives in a shm scscf_capabilities_cache behind a lock that
+I_get_capab_ordered() holds for its whole walk. Readers copy the names out
+into their own entries, so the critical section stays short and the returned
+list is independent of the cache.
+
+The new set is built into a private array and only swapped in once it is
+complete, so the database round trip happens with no lock held and the
+previous set keeps serving selections while it runs. The old array is freed
+after the lock is released, which is safe precisely because readers hold it: a
+reader that started before the swap has finished by then, and one that starts
+after it reads the new pointer.
+
+A read that fails or comes back empty leaves the cache alone. An S-CSCF that
+is up must not become unroutable because the store was briefly unreachable,
+and that is the difference between a table read once at startup, where an
+empty result is a configuration error worth shouting about, and one read
+repeatedly, where it is a transient.
+
+scscf_reload_interval bounds the cost. It is claimed before the database is
+touched rather than after, so a burst of answers spread over the cdp workers
+costs one read of the table and not one per answer; a failed read does not
+give the slot back, so an unreachable store is retried on the next interval
+rather than on the next registration. The default is 0 -- never re-read, which
+is what the module did before -- so nothing changes for an existing
+configuration that does not set it.
+
+Two leaks in db.c come along, because they are one-shot today and recurring
+once this path runs more than once. ims_icscf_db_get_scscf() abandons a
+partially built set on its error path while telling the caller 0, and
+ims_icscf_db_get_capabilities() returns early without freeing the result when
+the capabilities table is empty -- which is the normal case for a deployment
+that does not use capabilities at all. The free in I_get_capabilities() also
+never released scscf_name.s, only the capability arrays.
+
+One consequence worth stating: with the re-read enabled, an empty table at
+startup is no longer permanent. mod_init still logs it and carries on, and the
+first UAA that needs the table picks up whatever is in it by then. The
+ordering constraint that made the I-CSCF wait for an S-CSCF to publish its row
+before starting is relaxed, not the requirement itself.
+
+The LIA path has the same shape -- cxdx_lir.c selects from the table when the
+answer carries no Server-Name, for a terminating request to an unregistered
+user -- and is deliberately left alone here.
+
+diff --git a/src/modules/ims_icscf/cxdx_uar.c b/src/modules/ims_icscf/cxdx_uar.c
+index cec1ceadf4..d0fe0e427e 100644
+--- a/src/modules/ims_icscf/cxdx_uar.c
++++ b/src/modules/ims_icscf/cxdx_uar.c
+@@ -226,6 +226,15 @@ void async_cdp_uar_callback(
+ 
+ success:
+ 	LM_DBG("successful UAA response\n");
++	if(!server_name.len) {
++		/* The HSS did not name an S-CSCF, so the selection below is ours to
++		 * make out of the candidate table - the capabilities case.  That table
++		 * was read once at startup, so re-read it here: this is the one moment
++		 * where the I-CSCF is about to act on it and can still be told that
++		 * the set of S-CSCFs has changed.  Rate-limited, and a no-op unless
++		 * scscf_reload_interval is set. */
++		I_reload_capabilities();
++	}
+ 	list = I_get_capab_ordered(server_name, m_capab, m_capab_cnt, o_capab,
+ 			o_capab_cnt, p_server_names, p_server_names_cnt, 0);
+ 
+diff --git a/src/modules/ims_icscf/db.c b/src/modules/ims_icscf/db.c
+index 0adb8ed459..0602b32868 100644
+--- a/src/modules/ims_icscf/db.c
++++ b/src/modules/ims_icscf/db.c
+@@ -313,6 +313,16 @@ int ims_icscf_db_get_scscf(scscf_capabilities *cap[])
+ 	return i;
+ 
+ error:
++	/* The caller is told 0, so anything built so far is unreachable for it -
++	 * free it here.  Every entry was memset, so a name that was never filled
++	 * in is NULL and skipped. */
++	if(*cap && res) {
++		for(i = 0; i < res->n; i++)
++			if((*cap)[i].scscf_name.s)
++				shm_free((*cap)[i].scscf_name.s);
++		shm_free(*cap);
++		*cap = 0;
++	}
+ 	if(res)
+ 		dbf.free_result(hdl_db, res);
+ 	return 0;
+@@ -359,6 +369,7 @@ int ims_icscf_db_get_capabilities(scscf_capabilities *cap[], int cap_cnt)
+ 	if(res->n == 0) {
+ 		LM_DBG("DBG:ims_icscf_db_get_capabilities: No Capabilities found... "
+ 			   "not critical...\n");
++		dbf.free_result(hdl_db, res);
+ 		return 1;
+ 	} else {
+ 		for(i = 0; i < cap_cnt; i++) {
+diff --git a/src/modules/ims_icscf/doc/ims_icscf_admin.xml b/src/modules/ims_icscf/doc/ims_icscf_admin.xml
+index e3c552a1c5..781871dbbe 100644
+--- a/src/modules/ims_icscf/doc/ims_icscf_admin.xml
++++ b/src/modules/ims_icscf/doc/ims_icscf_admin.xml
+@@ -111,6 +111,34 @@ modparam("ims_icscf","scscf_entry_expiry", 300)
+       </example>
+     </section>
+ 
++    <section>
++      <title><varname>scscf_reload_interval</varname> (integer)</title>
++
++      <para>Seconds between two re-reads of the S-CSCF table from the database.
++      The table is otherwise read once, at module initialisation, and a S-CSCF
++      added or removed after that is invisible until the I-CSCF is
++      restarted.</para>
++
++      <para>When this is set, the table is re-read on receiving a UAA that does
++      not carry a Server-Name, which is the answer that leaves the choice of
++      S-CSCF to the I-CSCF and therefore the one moment where a stale table
++      changes the outcome. At most one re-read happens per interval however
++      many such answers arrive, and a database that cannot be reached leaves
++      the cached table in place.</para>
++
++      <para><emphasis> Default value is 0 (never re-read). </emphasis></para>
++
++      <example>
++        <title><varname>scscf_reload_interval</varname> parameter usage</title>
++
++        <programlisting format="linespecific">
++...
++modparam("ims_icscf","scscf_reload_interval", 30)
++...
++        </programlisting>
++      </example>
++    </section>
++
+     <section>
+       <title><varname>db_url</varname> (string)</title>
+ 
+diff --git a/src/modules/ims_icscf/ims_icscf_mod.c b/src/modules/ims_icscf/ims_icscf_mod.c
+index 29328735a1..684c46c092 100644
+--- a/src/modules/ims_icscf/ims_icscf_mod.c
++++ b/src/modules/ims_icscf/ims_icscf_mod.c
+@@ -81,6 +81,11 @@ char *ims_icscf_db_capabilities_table =
+ 
+ int ims_icscf_hash_size = 128;
+ int scscf_entry_expiry = 300;
++/**
++ * Seconds between two re-reads of the S-CSCF candidate table, 0 to never
++ * re-read it - which is what the module did before this was configurable.
++ */
++int scscf_reload_interval = 0;
+ 
+ /* parameters storage */
+ char *cxdx_dest_realm_s = "ims.smilecoms.com";
+@@ -135,6 +140,7 @@ static param_export_t params[] = {
+ 	{"route_lir_user_unknown", PARAM_STRING, &route_lir_user_unknown},
+ 	{"route_uar_user_unknown", PARAM_STRING, &route_uar_user_unknown},
+ 	{"scscf_entry_expiry", PARAM_INT, &scscf_entry_expiry},
++	{"scscf_reload_interval", PARAM_INT, &scscf_reload_interval},
+ 	{"db_url", PARAM_STRING, &ims_icscf_db_url},
+ 	{"db_nds_table", PARAM_STRING, &ims_icscf_db_nds_table},
+ 	{"db_scscf_table", PARAM_STRING, &ims_icscf_db_scscf_table},
+@@ -224,9 +230,17 @@ static int mod_init(void)
+ 	ims_icscf_db_init(ims_icscf_db_url, ims_icscf_db_nds_table,
+ 			ims_icscf_db_scscf_table, ims_icscf_db_capabilities_table);
+ 
++	if(!I_capabilities_cache_init()) {
++		LM_ERR("Error initializing the S-CSCF capability cache\n");
++		goto error;
++	}
++
+ 	I_NDS_get_trusted_domains();
+ 	I_get_capabilities();
+ 
++	/* Closed here, and re-opened on demand by the first process that reloads
++	 * the table - each cdp worker gets its own connection that way, which is
++	 * what keeps the reloads off a shared handle. */
+ 	ims_icscf_db_close();
+ 
+ 	if(!i_hash_table_init(ims_icscf_hash_size)) {
+diff --git a/src/modules/ims_icscf/scscf_list.c b/src/modules/ims_icscf/scscf_list.c
+index 36831b71f2..c67446d055 100644
+--- a/src/modules/ims_icscf/scscf_list.c
++++ b/src/modules/ims_icscf/scscf_list.c
+@@ -56,50 +56,154 @@ extern struct tm_binds tmb; //Structure with pointers to tm funcs
+ extern int use_preferred_scscf_uri;
+ extern str preferred_scscf_uri;
+ 
++extern int scscf_reload_interval;
++
+ int i_hash_size;
+ i_hash_slot *i_hash_table = 0;
+ 
+-scscf_capabilities *SCSCF_Capabilities = 0;
+-int SCSCF_Capabilities_cnt = 0;
++static scscf_capabilities_cache *scscf_cache = 0;
++
++/**
++ * Allocates the shared S-CSCF capability cache and its lock.
++ * @returns 1 on success, 0 on failure
++ */
++int I_capabilities_cache_init()
++{
++	if(scscf_cache)
++		return 1;
++
++	scscf_cache = shm_malloc(sizeof(scscf_capabilities_cache));
++	if(!scscf_cache) {
++		SHM_MEM_ERROR;
++		return 0;
++	}
++	memset(scscf_cache, 0, sizeof(scscf_capabilities_cache));
++
++	if(!lock_init(&scscf_cache->lock)) {
++		LM_ERR("Error initializing the S-CSCF capability cache lock\n");
++		shm_free(scscf_cache);
++		scscf_cache = 0;
++		return 0;
++	}
++
++	return 1;
++}
++
++/**
++ * Frees an S-CSCF set, with the names and the capability arrays in it.
++ */
++static void free_scscf_capabilities(scscf_capabilities *caps, int cnt)
++{
++	int i;
++
++	if(!caps)
++		return;
++	for(i = 0; i < cnt; i++) {
++		if(caps[i].scscf_name.s)
++			shm_free(caps[i].scscf_name.s);
++		if(caps[i].capabilities)
++			shm_free(caps[i].capabilities);
++	}
++	shm_free(caps);
++}
+ 
+ /**
+  * Refreshes the capabilities list reading them from the db.
+- * Drops the old cache and queries the db
+- * \todo - IMPLEMENT A WAY TO PUSH AN EXTERNAL EVENT FOR THIS
+- * \todo - SOLVE THE LOCKING PROBLEM - THIS IS A WRITER
++ *
++ * The new set is built into a private array first and only then swapped into
++ * the cache, so that the db round-trip happens with no lock held and the
++ * previous set keeps serving selections while it runs.  A read that comes back
++ * empty or fails leaves the cache alone: an S-CSCF that is still up must not
++ * become unroutable because the store was briefly unreachable.
++ *
+  * @returns 1 on success, 0 on failure
+  */
+ int I_get_capabilities()
+ {
+-	int i, j, r;
+-	/* free the old cache */
+-	if(SCSCF_Capabilities != 0) {
+-		for(i = 0; i < SCSCF_Capabilities_cnt; i++) {
+-			if(SCSCF_Capabilities[i].capabilities)
+-				shm_free(SCSCF_Capabilities[i].capabilities);
+-		}
+-		shm_free(SCSCF_Capabilities);
++	scscf_capabilities *caps = 0, *old = 0;
++	int cnt, old_cnt;
++	int i, j;
++
++	if(!scscf_cache) {
++		LM_ERR("S-CSCF capability cache not initialised\n");
++		return 0;
+ 	}
+ 
+-	SCSCF_Capabilities_cnt = ims_icscf_db_get_scscf(&SCSCF_Capabilities);
++	cnt = ims_icscf_db_get_scscf(&caps);
++	if(cnt <= 0) {
++		LM_ERR("No S-CSCF read from the db - keeping the cached set\n");
++		free_scscf_capabilities(caps, 0);
++		return 0;
++	}
+ 
+-	r = ims_icscf_db_get_capabilities(
+-			&SCSCF_Capabilities, SCSCF_Capabilities_cnt);
++	if(!ims_icscf_db_get_capabilities(&caps, cnt)) {
++		LM_ERR("Could not read the S-CSCF capabilities - keeping the cached "
++			   "set\n");
++		free_scscf_capabilities(caps, cnt);
++		return 0;
++	}
+ 
+ 	LM_DBG("DBG:------  S-CSCF Map with Capabilities  begin ------\n");
+-	if(SCSCF_Capabilities != 0) {
+-		for(i = 0; i < SCSCF_Capabilities_cnt; i++) {
+-			LM_DBG("DBG:S-CSCF [%d] <%.*s>\n", SCSCF_Capabilities[i].id_s_cscf,
+-					SCSCF_Capabilities[i].scscf_name.len,
+-					SCSCF_Capabilities[i].scscf_name.s);
+-			for(j = 0; j < SCSCF_Capabilities[i].cnt; j++)
+-				LM_DBG("DBG:       \t [%d]\n",
+-						SCSCF_Capabilities[i].capabilities[j]);
+-		}
++	for(i = 0; i < cnt; i++) {
++		LM_DBG("DBG:S-CSCF [%d] <%.*s>\n", caps[i].id_s_cscf,
++				caps[i].scscf_name.len, caps[i].scscf_name.s);
++		for(j = 0; j < caps[i].cnt; j++)
++			LM_DBG("DBG:       \t [%d]\n", caps[i].capabilities[j]);
+ 	}
+ 	LM_DBG("DBG:------  S-CSCF Map with Capabilities  end ------\n");
+ 
+-	return r;
++	lock_get(&scscf_cache->lock);
++	old = scscf_cache->caps;
++	old_cnt = scscf_cache->cnt;
++	scscf_cache->caps = caps;
++	scscf_cache->cnt = cnt;
++	scscf_cache->loaded = time(0);
++	lock_release(&scscf_cache->lock);
++
++	/* Safe outside the lock: every reader walks the set under it, so one that
++	 * started before the swap is done by the time we get here, and one that
++	 * starts after it reads the new pointer. */
++	free_scscf_capabilities(old, old_cnt);
++
++	return 1;
++}
++
++/**
++ * Re-reads the S-CSCF candidate table, at most once every
++ * scscf_reload_interval seconds.
++ *
++ * The interval is claimed before the db is touched rather than after, so a
++ * burst of answers spread over the cdp workers costs one read of the table and
++ * not one per answer.  A read that fails does not give the slot back either -
++ * an unreachable store is retried on the next interval, not on the next
++ * registration.
++ *
++ * @returns 1 if the table was re-read, 0 if it was not due or the read failed
++ */
++int I_reload_capabilities()
++{
++	time_t now;
++
++	if(scscf_reload_interval <= 0)
++		return 0;
++	if(!scscf_cache) {
++		LM_ERR("S-CSCF capability cache not initialised\n");
++		return 0;
++	}
++
++	now = time(0);
++
++	lock_get(&scscf_cache->lock);
++	if(scscf_cache->loaded + scscf_reload_interval > now) {
++		lock_release(&scscf_cache->lock);
++		return 0;
++	}
++	scscf_cache->loaded = now;
++	lock_release(&scscf_cache->lock);
++
++	LM_DBG("Re-reading the S-CSCF candidate table\n");
++
++	return I_get_capabilities();
+ }
+ 
+ /**
+@@ -207,17 +311,25 @@ scscf_entry *I_get_capab_ordered(str scscf_name, int *m, int mcnt, int *o,
+ 	for(i = 0; i < pcnt; i++)
+ 		list = I_add_to_scscf_list(list, p[i], INT_MAX - i, orig);
+ 
+-	for(i = 0; i < SCSCF_Capabilities_cnt; i++) {
+-		r = I_get_capab_match(SCSCF_Capabilities + i, m, mcnt, o, ocnt);
++	if(!scscf_cache)
++		return list;
++
++	/* Held for the whole walk: the names are copied out into the returned
++	 * entries, so a reload cannot free the set from under us. */
++	lock_get(&scscf_cache->lock);
++	for(i = 0; i < scscf_cache->cnt; i++) {
++		r = I_get_capab_match(scscf_cache->caps + i, m, mcnt, o, ocnt);
+ 		if(r != -1) {
+ 			list = I_add_to_scscf_list(
+-					list, SCSCF_Capabilities[i].scscf_name, r, orig);
++					list, scscf_cache->caps[i].scscf_name, r, orig);
+ 			LM_DBG("DBG:I_get_capab_ordered: <%.*s> Added to the list, "
+ 				   "orig=%d\n",
+-					SCSCF_Capabilities[i].scscf_name.len,
+-					SCSCF_Capabilities[i].scscf_name.s, orig);
++					scscf_cache->caps[i].scscf_name.len,
++					scscf_cache->caps[i].scscf_name.s, orig);
+ 		}
+ 	}
++	lock_release(&scscf_cache->lock);
++
+ 	return list;
+ }
+ 
+diff --git a/src/modules/ims_icscf/scscf_list.h b/src/modules/ims_icscf/scscf_list.h
+index 63f2bb5d04..3a494d22f1 100644
+--- a/src/modules/ims_icscf/scscf_list.h
++++ b/src/modules/ims_icscf/scscf_list.h
+@@ -96,6 +96,22 @@ typedef struct _scscf_capabilities
+ 	int cnt;		   /**< size of S-CSCF array of capabilities*/
+ } scscf_capabilities;
+ 
++/**
++ * The cached S-CSCF candidate set, in shared memory.
++ *
++ * It lives in shm and not in a process global because it is re-read at
++ * runtime: a reload happens in whichever cdp worker took the UAA, and every
++ * other process has to see the result - and must not be left pointing into the
++ * array the reloading process just freed.
++ */
++typedef struct _scscf_capabilities_cache
++{
++	scscf_capabilities *caps; /**< the S-CSCF set, replaced whole on reload */
++	int cnt;				  /**< number of S-CSCFs in caps */
++	time_t loaded;			  /**< when caps was last read from the db */
++	gen_lock_t lock;		  /**< guards all three fields above */
++} scscf_capabilities_cache;
++
+ 
+ extern struct tm_binds tmb;
+ 
+@@ -140,6 +156,21 @@ scscf_entry *new_scscf_entry(str name, int score, int orig);
+  * @returns - -1 if mandatory not satisfied, else count of matched optional capab
+  */
+ int I_get_capabilities();
++
++/**
++ * Allocates the shared S-CSCF capability cache and its lock.
++ * Must be called from mod_init, before I_get_capabilities().
++ * @returns 1 on success, 0 on failure
++ */
++int I_capabilities_cache_init();
++
++/**
++ * Re-reads the S-CSCF candidate table, at most once every
++ * scscf_reload_interval seconds.
++ * @returns 1 if the table was re-read, 0 if it was not due or the read failed
++ */
++int I_reload_capabilities();
++
+ int I_get_capab_match(
+ 		scscf_capabilities *c, int *m, int mcnt, int *o, int ocnt);
+ int add_scscf_list(str call_id, scscf_entry *sl);

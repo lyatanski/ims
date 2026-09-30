@@ -1,6 +1,5 @@
 replicaCount: 2
 
-# Each replica owns one valkey database -- `db.offset + <ordinal>`
 db:
   offset: 8
 
@@ -10,6 +9,93 @@ logLevel: 6
 media:
   portMin: 30000
   portMax: 40000
+
+  # Logical interfaces, rendered as the `[interface-<name>]` config sections
+  # rtpengine reads when `interfaces-config` is set. A logical interface is a
+  # name for a local address to answer offers with: rtpengine answers with the
+  # address of the interface it picks, and that address is what the far end
+  # sends RTP to, so it has to be one that end can reach. A call between two
+  # UEs and a call out to a trunk do not have the same answer, which is the
+  # whole reason there is more than one entry here.
+  #
+  # Nothing in this list decides which interface a given call gets. That is
+  # `templates` below, selected per call by the S-CSCF -- see it.
+  #
+  # Order matters: the first entry is rtpengine's default interface, the one a
+  # control message that names no direction lands on.
+  #
+  # Per entry:
+  #
+  #   name       the logical interface name. Templates name it in `direction=`,
+  #              and it is also the config section suffix, so it has to be
+  #              unique within this list. A `base:suffix` name puts the entry
+  #              in a round-robin group that `direction=base` selects from.
+  #   address    what rtpengine binds: a device name inside the pod, a literal
+  #              address, or `any` for every address the pod has. Required
+  #              unless `alias` is set. With `network` below this is the device
+  #              the attachment creates -- rtpengine resolves a device name to
+  #              an address itself, so nothing has to read the address out of
+  #              the pod and hand it over.
+  #   advertised optional. What to put in SDP when it differs from the address
+  #              bound, i.e. rtpengine behind a NAT.
+  #   alias      another entry's `name`, making this one a second name for that
+  #              interface rather than an interface of its own. Mutually
+  #              exclusive with `address`.
+  #   portMin    optional, overriding the range above for this interface only.
+  #   portMax
+  #   network    optional. A secondary network attached by Multus from a
+  #              NetworkAttachmentDefinition the chart renders, which is where
+  #              `address` comes from. Without one, `address` can still only be
+  #              an address the pod already has -- under Kubernetes that means
+  #              the pod address, routable from inside the cluster and nowhere
+  #              else.
+  #
+  # Only media moves onto these interfaces. The ng control socket stays on
+  # 0.0.0.0 behind the ClusterIP Service the S-CSCF addresses, which is the one
+  # part of rtpengine that wants Kubernetes load balancing.
+  interfaces:
+
+    # The UE side. On by default, for the same reason as the P-CSCF's Gm: the
+    # address rtpengine answers a UE's offer with has to be one the UE can
+    # reach, and the pod address is not.
+    #
+    # As with Gm, this does not by itself give an ordinal a media address it
+    # keeps across rescheduling, which is what HA-PLAN §5.5 needs for media to
+    # follow a takeover. It is the prerequisite for it, not the whole of it.
+  - name: internal
+    address: media0
+    network:
+      enabled: true
+      name: media
+      config:
+        cniVersion: 0.3.1
+        type: macvlan
+        master: eth0
+        mode: bridge
+        ipam:
+          type: whereabouts
+          range: 10.30.0.0/24
+          gateway: 10.30.0.1
+          routes:
+          - dst: 10.10.0.0/16
+            gw: 10.30.0.1
+
+  - name: external
+    alias: internal
+
+# Signalling templates, rendered as rtpengine's `[templates]` section: a name,
+# and the string of ng flags it stands for. A control message carrying
+# `template=<name>` is processed as if it had carried the flags.
+#
+#   internal   UE to UE, on-net, both legs inside
+#   outgoing   UE to the trunk, chosen where route[E164] hands the call to the
+#              BGCF next hop
+#   incoming   trunk to UE, chosen on the terminating leg of a call that
+#              entered from outside
+templates:
+  internal: direction=internal direction=internal
+  outgoing: direction=internal direction=external
+  incoming: direction=external direction=internal
 
 image:
   repository: ghcr.io/lyatanski/rtpengine
@@ -26,21 +112,12 @@ service:
 monitor:
   port: 9090
 
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+resources:
+  requests: {cpu: 500m, memory: 256Mi}
+  limits: {cpu: 2, memory: 512Mi}
 
 nodeSelector: {}
 
 tolerations: []
 
 affinity: {}
-

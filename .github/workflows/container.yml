@@ -80,3 +80,8 @@ jobs:
     - name: Tear Down
       run: docker compose --profile test --profile debug down --volumes
       if: always()
+
+  charts:
+    needs:
+    - test
+    uses: ./.github/workflows/charts.yml

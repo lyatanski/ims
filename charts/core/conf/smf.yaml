@@ -1,6 +1,8 @@
 logger:
   level: {{ .root.Values.logger.level }}
 global:
+  max:
+    ue: {{ .root.Values.maxUe }}
 smf:
   metrics:
     server:
@@ -40,6 +42,10 @@ smf:
   # P-CSCF Service is headless, so this resolves to the pod address the UE has
   # to reach directly -- a cluster IP would break the IPsec SA.
   p-cscf:
+  {{- with .root.Values.ims.pcscf }}
+  {{- toYaml . | nindent 2 }}
+  {{- else }}
   - {{ .root.Values.ims.release }}-pcscf
+  {{- end }}
   ctf:
     enabled: no

@@ -100,7 +100,11 @@ spec:
             fi
             sleep {{ .Values.reconcile }}
           done
-        {{- with .Values.resources }}
+        # This is a DaemonSet: whatever is set here is reserved on every node
+        # in the cluster, so it gets its own figure rather than inheriting the
+        # UPF-sized `resources` default. It runs `ip route` once per
+        # `reconcile` seconds and sleeps in between.
+        {{- with (.Values.route.resources | default .Values.resources) }}
         resources: {{- toYaml . | nindent 10 }}
         {{- end }}
       {{- with .Values.nodeSelector }}

@@ -5,6 +5,7 @@ metadata:
   labels: {{- include "rtpengine.labels" . | nindent 4 }}
 data:
   rtpengine.conf: |
+    {{- include "rtpengine.validate" . }}
     {{- $n := int .Values.replicaCount }}
     {{- $valkey := printf "%s:%v" (include "valkey.name" .Subcharts.valkey) .Values.valkey.ports.valkey }}
     {{- $off := int .Values.db.offset }}
@@ -18,14 +19,41 @@ data:
     table = -1
     listen-http = 0.0.0.0:{{ $.Values.monitor.port }}
     listen-ng = 0.0.0.0:{{ $.Values.service.port }}
-    interface = any
+    interfaces-config = interface
+    {{- if $.Values.templates }}
+    templates = templates
+    {{- end }}
     timeout = 60
     silent-timeout = 3600
     tos = 184
     port-min = {{ $.Values.media.portMin }}
     port-max = {{ $.Values.media.portMax }}
     no-redis-required = true
-    redis-write = {{ $valkey }}/{{ $i }}
-    redis-subscribe = {{ $valkey }}/{{ mod (add1 $i) $n }}
+    redis-write = {{ $valkey }}/{{ $own }}
+    redis-subscribe = {{ $valkey }}/{{ add $off (mod (add1 $i) $n) }}
     redis-resolve-on-reconnect = true
     {{ end }}
+    {{- range $if := .Values.media.interfaces }}
+    [interface-{{ $if.name }}]
+    {{- with $if.alias }}
+    alias = {{ . }}
+    {{- end }}
+    {{- with $if.address }}
+    address = {{ . }}
+    {{- end }}
+    {{- with $if.advertised }}
+    advertised = {{ . }}
+    {{- end }}
+    {{- with $if.portMin }}
+    port-min = {{ . }}
+    {{- end }}
+    {{- with $if.portMax }}
+    port-max = {{ . }}
+    {{- end }}
+    {{ end }}
+    {{- with .Values.templates }}
+    [templates]
+    {{- range $name, $flags := . }}
+    {{ $name }} = {{ $flags }}
+    {{- end }}
+    {{- end }}

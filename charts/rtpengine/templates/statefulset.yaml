@@ -10,9 +10,14 @@ spec:
   podManagementPolicy: Parallel
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
-      annotations: {{- toYaml . | nindent 8 }}
-      {{- end }}
+      annotations:
+        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with include "rtpengine.networks" . }}
+        k8s.v1.cni.cncf.io/networks: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       labels: {{- include "rtpengine.labels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}

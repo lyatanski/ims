@@ -18,6 +18,14 @@ Benefits of using this particular DNS include:
 - The configuration format is clean and flexible, allowing advanced service discovery patterns.
 The [official Docker Hub image](https://hub.docker.com/r/coredns/coredns) is already minimal and is a good choice.
 
+Every name the stack resolves is synthesised by `template` rules rather than
+written out, so nothing has to be regenerated when the PLMN changes: the SRV
+rule turns `_sip._udp.<role>.ims.<home domain>` into the container behind that
+role, the CNAME rules do the same for the EPC and IMS names, and the NAPTR rule
+serves the ENUM tree (RFC 6116) the S-CSCF queries to translate a dialled E.164
+number into a SIP URI. One NAPTR rule covers every number: the digits are only
+ever in the *name*, and the regexp inside the record does the rewriting.
+
 
 ## IMS DB
 Database is not strictly mandatory for IMS to function. Nevertheless, it could
@@ -41,15 +49,52 @@ No custom build is required as there is already [official Alpine-based image](ht
 ## [rtpengine](https://github.com/sipwise/rtpengine)
 Provides media relay functionality to the setup.
 
-Installation from the package management repository should be avoided.
-On Alpine it lacks some transcoding functionality.
-On Ubuntu based system the version could be quite old and lack convenient features.
+Installation from the package management repository should be avoided; the
+image is built from source (`images/rtpengine/`).
 
-Build from source ashould be preferred approach.
+Neither distribution package is usable here:
+- Ubuntu noble ships 11.5.1, fifteen major versions behind, missing
+  `redis-subscribe` among much else.
+- Alpine's own package builds without bcg729, so no G.729, and against an
+  ffmpeg carrying the AMR, GSM, iLBC and Speex *decoders* but none of their
+  *encoders* -- the daemon can receive those codecs and never produce one,
+  which is the wrong half for a relay whose day job is PCMA <-> AMR.
+
+So the image builds its own ffmpeg with the external codec libraries enabled by
+name, plus bcg729 and libilbc, which Alpine does not package at all. Everything
+with an RTP definition then transcodes both ways: PCMA, PCMU, G.722, G.723.1,
+G.726 at all four widths, G.729/G.729a, GSM, iLBC, Speex, Opus, AMR, AMR-WB,
+L16 and the supplemental CN, telephone-event and RED. EVRC, QCELP and ATRAC
+decode only -- no encoder for them exists anywhere. EVS is dlopen()ed at runtime
+from `evs-lib-path`; a build of the 3GPP TS 26.442 reference source is licensed
+per-user and cannot travel inside an image.
+
+Two properties the image is built to keep:
+- **Dependencies are discovered, not listed.** `deps.sh` reads the pkg-config
+  modules out of upstream's `utils/gen-*-flags` and the Build-Depends out of
+  `debian/control`, and resolves both against Alpine's `pc:<module>` provides.
+  A dependency the rtpengine developers add is installed without an edit here;
+  one that cannot be resolved fails the build by name. `runtime.sh` does the
+  same for the runtime image, reading the SONAMEs out of the binaries that were
+  just built, so the runtime package list cannot drift from the link line.
+- **Codec coverage is asserted, not assumed.** rtpengine's transcoding
+  libraries are all optional to its build system: lose one and the compile still
+  succeeds, the image still starts, and the missing codec is only discovered by
+  a call that needed it. `codecs.sh` diffs `rtpengine --codecs` against a
+  recorded baseline and fails the build on any regression.
+
+The kernel forwarding module is deliberately absent -- it has to match the host
+kernel, so it cannot ship in an image. Run with `table = -1`.
 
 
 ## [open5gs](https://github.com/open5gs/open5gs) (HSS/PCRF/PGW)
 There do not appear to be suitable prebuilt images for this use case, so the optimal approach would be to build from source.
+
+The build carries patches out of `images/open5gs/patches/`, applied with
+`git apply` so that one which stops applying fails the build rather than
+producing a silently unpatched image. Each patch header states what it fixes
+and why; today that is the HSS's Cx answer for a public identity it does not
+hold, which stock open5gs reports with a result code no I-CSCF can map.
 
 
 ## [freeDiameter](https://github.com/freeDiameter/freeDiameter) (DRA)
@@ -131,9 +176,17 @@ event loop and no per-subscriber thread or process. That is what makes the
 subscriber count a knob rather than a rewrite — and why the numbers it prints
 are the stack's rather than the tool's.
 
-The image builds the tree from source and bakes it, so a run is reproducible;
-`--build-arg PRO2CALL_REF=<sha>` pins it, which is the difference between a
-performance baseline and an anecdote. Its default `CMD` is the script above,
-but the whole `bindings/examples` directory is on board — `cx_hss.lua`,
-`ipsmgw.lua` and `smsc_stub.lua` stand in for the network around the part
-being measured.
+The image is built where the code is: pro2call's own `Dockerfile.test`, published
+to `ghcr.io/lyatanski/pro2call` by its `image` workflow on every push to `main`.
+Nothing in this repository builds it — `compose.yml`, `stub.yml` and the chart
+only reference the tag — so the examples and the image that ships them cannot
+drift apart. It bakes the tree it was built from and stamps the revision, so an
+image can be asked which tree that was:
+
+    docker run --rm --entrypoint cat ghcr.io/lyatanski/pro2call /opt/REVISION
+
+which is the difference between a performance baseline and an anecdote; pin one
+by building that checkout of pro2call yourself rather than by pulling the tag.
+Its default `CMD` is the script above, but the whole `bindings/examples`
+directory is on board — `cx_hss.lua`, `ipsmgw.lua` and `smsc_stub.lua` stand in
+for the network around the part being measured.

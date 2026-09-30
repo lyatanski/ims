@@ -56,8 +56,14 @@ TcTimer = {{ .root.Values.tcTimer }};
 LoadExtension = "/opt/lib/freeDiameter/{{ . }}.fdx";
 {{- end }}
 {{ range .c.peers }}
-{{- $peer := printf "%s.%s" .node (tpl (index $.root.Values.realm .realm) $.root) -}}
-ConnectPeer = "{{ $peer }}" { No_TLS; {{ if .connect }}ConnectTo = "{{ $.root.Release.Name }}-{{ .node }}"; {{ end }}};
+{{- $p := . -}}
+{{- $realm := tpl (index $.root.Values.realm $p.realm) $.root -}}
+ConnectPeer = "{{ $p.node }}.{{ $realm }}" { No_TLS; {{ if $p.connect }}ConnectTo = "{{ $.root.Release.Name }}-{{ $p.node }}"; {{ end }}};
+{{ if eq $p.realm "ims" -}}
+{{- range $i := until (int $.root.Values.ims.replicas) -}}
+ConnectPeer = "{{ $.root.Values.ims.release }}-{{ $p.node }}-{{ $i }}.{{ $realm }}" { No_TLS; };
+{{ end -}}
+{{- end -}}
 {{ end -}}
 {{- end }}
 
@@ -108,6 +114,9 @@ Call with (dict "root" $ "name" <component>).
 - name: tun
   image: {{ .root.Values.image.repository }}:{{ .root.Values.image.tag | default .root.Chart.AppVersion }}
   imagePullPolicy: {{ .root.Values.image.pullPolicy }}
+  {{- with .root.Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
   securityContext:
     capabilities:
       add:
@@ -135,6 +144,9 @@ Call with (dict "root" $ "name" <component>).
 - name: wait-pcscf
   image: {{ .root.Values.image.repository }}:{{ .root.Values.image.tag | default .root.Chart.AppVersion }}
   imagePullPolicy: {{ .root.Values.image.pullPolicy }}
+  {{- with .root.Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
   command:
   - sh
   - -ec
