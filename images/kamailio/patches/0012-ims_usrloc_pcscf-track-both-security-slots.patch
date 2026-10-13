@@ -1,0 +1,342 @@
+Track both of a contact's security slots in ims_usrloc_pcscf.
+
+A pcontact has two security slots, security and security_temp, with the
+unprefixed and the t_* columns behind them, for the handover TS 33.203 7.4
+describes: the SA set a 401 offers is only a candidate until a REGISTER over it
+is answered 200, and until then the one the UE registered over keeps carrying
+everything. Only security_temp has ever been used, and the code that looks at a
+contact's tunnel looks there alone:
+
+- get_all_ucontacts() lists one record per IPsec slot, so
+  delete_unused_tunnels() leaves the tunnel in either alone.
+- unreg_pending_contacts_cb() also matches a pending contact whose offer is
+  the registered contact's security, so that contact's expiry does not destroy
+  a tunnel promoted to security. A pending contact holds only the offer
+  save_pending() stored, so only its security_temp is compared.
+- db_update_pcontact_security() no longer writes the IPsec protocol into
+  "protocol". Unlike t_protocol, that column is not part of the security set
+  but the contact's transport, written by db_insert_pcontact(): writing "esp"
+  over it corrupts the contact.
+
+Nothing changes until something fills security. With ims_ipsec_pcscf as it is
+it stays NULL, and each of these reads exactly what it did before. Whatever
+starts filling it also has to tear it down on expiry and own the previous
+value, which update_security() does not free: patches 0013 and 0014.
+
+diff --git a/src/modules/ims_usrloc_pcscf/dlist.c b/src/modules/ims_usrloc_pcscf/dlist.c
+index a1982b4c37..bf793c47c1 100644
+--- a/src/modules/ims_usrloc_pcscf/dlist.c
++++ b/src/modules/ims_usrloc_pcscf/dlist.c
+@@ -80,6 +80,53 @@ static inline int find_dlist(str *_n, dlist_t **_d)
+ 	return 1;
+ }
+ 
++/*!
++ * \brief Append one tunnel of a contact to a get_all_ucontacts() buffer
++ *
++ * Writes the record described at get_all_mem_ucontacts() for an IPsec
++ * security, or adds what it would have needed to *shortage when it does not
++ * fit. Any other security, or none, appends nothing.
++ */
++static inline void append_tunnel(
++		void **cp, int *len, int *shortage, pcontact_t *c, security_t *sec)
++{
++	ipsec_t *s;
++	int needed;
++
++	if(!sec || sec->type != SECURITY_IPSEC || !sec->data.ipsec) {
++		return;
++	}
++	s = sec->data.ipsec;
++
++	needed = (int)(sizeof(c->received_host.len) + c->received_host.len
++				   + sizeof(s->spi_uc) + sizeof(s->spi_us) + sizeof(s->spi_pc)
++				   + sizeof(s->spi_ps) + sizeof(s->port_uc) + sizeof(s->port_us)
++				   + sizeof(s->port_pc) + sizeof(s->port_ps));
++	if(*len < needed) {
++		*shortage += needed;
++		return;
++	}
++
++#define APPEND(_p, _n)            \
++	do {                          \
++		memcpy(*cp, (_p), (_n));  \
++		*cp = (char *)*cp + (_n); \
++	} while(0)
++	APPEND(&c->received_host.len, sizeof(c->received_host.len));
++	APPEND(c->received_host.s, c->received_host.len);
++	APPEND(&s->spi_uc, sizeof(s->spi_uc));
++	APPEND(&s->spi_us, sizeof(s->spi_us));
++	APPEND(&s->spi_pc, sizeof(s->spi_pc));
++	APPEND(&s->spi_ps, sizeof(s->spi_ps));
++	APPEND(&s->port_uc, sizeof(s->port_uc));
++	APPEND(&s->port_us, sizeof(s->port_us));
++	APPEND(&s->port_pc, sizeof(s->port_pc));
++	APPEND(&s->port_ps, sizeof(s->port_ps));
++#undef APPEND
++
++	*len -= needed;
++}
++
+ /*!
+  * \brief Get all contacts from the usrloc, in partitions if wanted
+  *
+@@ -91,7 +138,8 @@ static inline int find_dlist(str *_n, dlist_t **_d)
+  * case the caller is expected to repeat the call using
+  * this value as the hint.
+  *
+- * Information is packed into the buffer as follows:
++ * Information is packed into the buffer as follows, one record per IPsec
++ * tunnel - a contact can hold two:
+  *
+  * +-----------------+---------------+------+------+------+------+-------+-------+-------+-------+
+  * |received host.len|received host.s|spi_uc|spi_us|spi_pc|spi_ps|port_uc|port_us|port_pc|port_ps|
+@@ -117,7 +165,6 @@ static inline int get_all_mem_ucontacts(void *buf, int len, unsigned int flags,
+ 	pcontact_t *c;
+ 	void *cp;
+ 	int shortage;
+-	int needed;
+ 	int i = 0;
+ 	cp = buf;
+ 	shortage = 0;
+@@ -138,78 +185,11 @@ static inline int get_all_mem_ucontacts(void *buf, int len, unsigned int flags,
+ 			}
+ 
+ 			for(c = p->d->table[i].first; c != NULL; c = c->next) {
+-				if(c->received_host.s && c->security_temp
+-						&& c->security_temp->type == SECURITY_IPSEC) {
+-					needed = (int)(sizeof(c->received_host.len)
+-								   + c->received_host.len
+-								   + sizeof(
+-										   c->security_temp->data.ipsec->spi_uc)
+-								   + sizeof(
+-										   c->security_temp->data.ipsec->spi_us)
+-								   + sizeof(
+-										   c->security_temp->data.ipsec->spi_pc)
+-								   + sizeof(
+-										   c->security_temp->data.ipsec->spi_ps)
+-								   + sizeof(c->security_temp->data.ipsec
+-													->port_uc)
+-								   + sizeof(c->security_temp->data.ipsec
+-													->port_us)
+-								   + sizeof(c->security_temp->data.ipsec
+-													->port_pc)
+-								   + sizeof(c->security_temp->data.ipsec
+-													->port_ps));
+-
+-					if(len >= needed) {
+-						memcpy(cp, &c->received_host.len,
+-								sizeof(c->received_host.len));
+-						cp = (char *)cp + sizeof(c->received_host.len);
+-						memcpy(cp, c->received_host.s, c->received_host.len);
+-						cp = (char *)cp + c->received_host.len;
+-
+-						memcpy(cp, &c->security_temp->data.ipsec->spi_uc,
+-								sizeof(c->security_temp->data.ipsec->spi_uc));
+-						cp = (char *)cp
+-							 + sizeof(c->security_temp->data.ipsec->spi_uc);
+-
+-						memcpy(cp, &c->security_temp->data.ipsec->spi_us,
+-								sizeof(c->security_temp->data.ipsec->spi_us));
+-						cp = (char *)cp
+-							 + sizeof(c->security_temp->data.ipsec->spi_us);
+-
+-						memcpy(cp, &c->security_temp->data.ipsec->spi_pc,
+-								sizeof(c->security_temp->data.ipsec->spi_pc));
+-						cp = (char *)cp
+-							 + sizeof(c->security_temp->data.ipsec->spi_pc);
+-
+-						memcpy(cp, &c->security_temp->data.ipsec->spi_ps,
+-								sizeof(c->security_temp->data.ipsec->spi_ps));
+-						cp = (char *)cp
+-							 + sizeof(c->security_temp->data.ipsec->spi_ps);
+-
+-						memcpy(cp, &c->security_temp->data.ipsec->port_uc,
+-								sizeof(c->security_temp->data.ipsec->port_uc));
+-						cp = (char *)cp
+-							 + sizeof(c->security_temp->data.ipsec->port_uc);
+-
+-						memcpy(cp, &c->security_temp->data.ipsec->port_us,
+-								sizeof(c->security_temp->data.ipsec->port_us));
+-						cp = (char *)cp
+-							 + sizeof(c->security_temp->data.ipsec->port_us);
+-
+-						memcpy(cp, &c->security_temp->data.ipsec->port_pc,
+-								sizeof(c->security_temp->data.ipsec->port_pc));
+-						cp = (char *)cp
+-							 + sizeof(c->security_temp->data.ipsec->port_pc);
+-
+-						memcpy(cp, &c->security_temp->data.ipsec->port_ps,
+-								sizeof(c->security_temp->data.ipsec->port_ps));
+-						cp = (char *)cp
+-							 + sizeof(c->security_temp->data.ipsec->port_ps);
+-
+-						len -= needed;
+-					} else {
+-						shortage += needed;
+-					}
++				// both of a contact's tunnels are in use: the one the UE
++				// registered over and the one being negotiated beside it
++				if(c->received_host.s) {
++					append_tunnel(&cp, &len, &shortage, c, c->security);
++					append_tunnel(&cp, &len, &shortage, c, c->security_temp);
+ 				}
+ 			}
+ 			unlock_ulslot(p->d, i);
+diff --git a/src/modules/ims_usrloc_pcscf/udomain.c b/src/modules/ims_usrloc_pcscf/udomain.c
+index 0da67ec9e9..b8f1c2df47 100644
+--- a/src/modules/ims_usrloc_pcscf/udomain.c
++++ b/src/modules/ims_usrloc_pcscf/udomain.c
+@@ -821,6 +821,25 @@ int delete_pcontact(udomain_t *_d,
+ 	return 0;
+ }
+ 
++/*!
++ * \brief Whether two securities describe the same IPsec tunnel
++ */
++static int same_ipsec(security_t *a, security_t *b)
++{
++	ipsec_t *x, *y;
++
++	if(!a || !b || a->type != SECURITY_IPSEC || b->type != SECURITY_IPSEC
++			|| !a->data.ipsec || !b->data.ipsec) {
++		return 0;
++	}
++	x = a->data.ipsec;
++	y = b->data.ipsec;
++	return x->port_pc == y->port_pc && x->port_ps == y->port_ps
++		   && x->port_uc == y->port_uc && x->port_us == y->port_us
++		   && x->spi_pc == y->spi_pc && x->spi_ps == y->spi_ps
++		   && x->spi_uc == y->spi_uc && x->spi_us == y->spi_us;
++}
++
+ int unreg_pending_contacts_cb(udomain_t *_d, pcontact_t *_c, int type)
+ {
+ 	pcontact_t *c;
+@@ -885,64 +904,24 @@ int unreg_pending_contacts_cb(udomain_t *_d, pcontact_t *_c, int type)
+ 					continue;
+ 				}
+ 
+-				// check for equal ipsec parameters
+-				if(c->security_temp == NULL || _c->security_temp == NULL) {
+-					LM_DBG("Invalid temp security\n");
+-					c = c->next;
+-					continue;
+-				}
+-
+-				if(c->security_temp->type != SECURITY_IPSEC) {
+-					LM_DBG("Invalid temp security type\n");
+-					c = c->next;
+-					continue;
+-				}
+-
+-				if(c->security_temp->data.ipsec == NULL
+-						|| _c->security_temp->data.ipsec == NULL) {
+-					LM_DBG("Invalid ipsec\n");
+-					c = c->next;
+-					continue;
+-				}
+-
+-				LM_DBG("=========== c->reg_state %s, %u-%u | %u-%u | %u-%u "
+-					   "| %u-%u | %u-%u | %u-%u | %u-%u | %u-%u |",
+-						reg_state_to_string(c->reg_state),
+-						c->security_temp->data.ipsec->port_pc,
+-						_c->security_temp->data.ipsec->port_pc,
+-						c->security_temp->data.ipsec->port_ps,
+-						_c->security_temp->data.ipsec->port_ps,
+-						c->security_temp->data.ipsec->port_uc,
+-						_c->security_temp->data.ipsec->port_uc,
+-						c->security_temp->data.ipsec->port_us,
+-						_c->security_temp->data.ipsec->port_us,
+-						c->security_temp->data.ipsec->spi_pc,
+-						_c->security_temp->data.ipsec->spi_pc,
+-						c->security_temp->data.ipsec->spi_ps,
+-						_c->security_temp->data.ipsec->spi_ps,
+-						c->security_temp->data.ipsec->spi_uc,
+-						_c->security_temp->data.ipsec->spi_uc,
+-						c->security_temp->data.ipsec->spi_us,
+-						_c->security_temp->data.ipsec->spi_us);
+-
+-				if(c->security_temp->data.ipsec->port_pc
+-								== _c->security_temp->data.ipsec->port_pc
+-						&& c->security_temp->data.ipsec->port_ps
+-								   == _c->security_temp->data.ipsec->port_ps
+-						&& c->security_temp->data.ipsec->port_uc
+-								   == _c->security_temp->data.ipsec->port_uc
+-						&& c->security_temp->data.ipsec->port_us
+-								   == _c->security_temp->data.ipsec->port_us
+-						&& c->security_temp->data.ipsec->spi_pc
+-								   == _c->security_temp->data.ipsec->spi_pc
+-						&& c->security_temp->data.ipsec->spi_ps
+-								   == _c->security_temp->data.ipsec->spi_ps
+-						&& c->security_temp->data.ipsec->spi_uc
+-								   == _c->security_temp->data.ipsec->spi_uc
+-						&& c->security_temp->data.ipsec->spi_us
+-								   == _c->security_temp->data.ipsec->spi_us) {
+-					// deregister user callback only for contacts with exact sec parameters like registerd contact
++				// A pending contact holds only the offer save_pending() stored,
++				// in security_temp. Deregister its callback when that offer is
++				// either of the registered contact's tunnels, so its expiry
++				// does not destroy a tunnel in use.
++				if(same_ipsec(c->security_temp, _c->security_temp)
++						|| same_ipsec(c->security_temp, _c->security)) {
++					LM_DBG("pending contact [%.*s] (%s) holds a tunnel of "
++						   "[%.*s], removing its callback\n",
++							c->aor.len, c->aor.s,
++							reg_state_to_string(c->reg_state), _c->aor.len,
++							_c->aor.s);
+ 					delete_ulcb(c, type);
++				} else {
++					LM_DBG("pending contact [%.*s] (%s) holds no tunnel of "
++						   "[%.*s]\n",
++							c->aor.len, c->aor.s,
++							reg_state_to_string(c->reg_state), _c->aor.len,
++							_c->aor.s);
+ 				}
+ 			}
+ 		}
+diff --git a/src/modules/ims_usrloc_pcscf/usrloc_db.c b/src/modules/ims_usrloc_pcscf/usrloc_db.c
+index 9005a0a054..047bcab26d 100644
+--- a/src/modules/ims_usrloc_pcscf/usrloc_db.c
++++ b/src/modules/ims_usrloc_pcscf/usrloc_db.c
+@@ -493,11 +493,15 @@ int db_update_pcontact_security(
+ 	db_key_t match_keys[2] = {&aor_col, &received_port_col};
+ 	db_op_t op[2];
+ 
+-	db_key_t update_keys[15] = {&security_type_col, &protocol_col, &mode_col,
+-			&ck_col, &ik_col, &ealg_col, &ialg_col, &port_pc_col, &port_ps_col,
+-			&port_uc_col, &port_us_col, &spi_pc_col, &spi_ps_col, &spi_uc_col,
+-			&spi_us_col};
+-	db_val_t values[15];
++	// No protocol column: unlike t_protocol, "protocol" is not part of the
++	// security set but the contact's own transport, written by
++	// db_insert_pcontact() and read back by preload_udomain(). Writing the
++	// IPsec protocol ("esp") over it corrupts the contact. The tunnel is always
++	// esp, so nothing is lost.
++	db_key_t update_keys[14] = {&security_type_col, &mode_col, &ck_col, &ik_col,
++			&ealg_col, &ialg_col, &port_pc_col, &port_ps_col, &port_uc_col,
++			&port_us_col, &spi_pc_col, &spi_ps_col, &spi_uc_col, &spi_us_col};
++	db_val_t values[14];
+ 
+ 	LM_DBG("updating security for pcontact: aor[%.*s], received port %u\n",
+ 			_c->aor.len, _c->aor.s, _c->received_port);
+@@ -530,10 +534,6 @@ int db_update_pcontact_security(
+ 			str s_empty = {0, 0};
+ 			VAL_TYPE(values + i) = DB1_STR;
+ 			VAL_NULL(values + i) = ipsec ? 0 : 1;
+-			VAL_STR(values + i) = ipsec ? ipsec->prot : s_empty;
+-
+-			VAL_TYPE(values + ++i) = DB1_STR;
+-			VAL_NULL(values + i) = ipsec ? 0 : 1;
+ 			VAL_STR(values + i) = ipsec ? ipsec->mod : s_empty;
+ 
+ 			VAL_TYPE(values + ++i) = DB1_STR;
+@@ -585,7 +585,7 @@ int db_update_pcontact_security(
+ 			VAL_BIGINT(values + i) = ipsec ? ipsec->spi_us : 0;
+ 
+ 			if((ul_dbf.update(ul_dbh, match_keys, op, match_values, update_keys,
+-					   values, 2, 15))
++					   values, 2, 14))
+ 					!= 0) {
+ 				LM_ERR("could not update database info\n");
+ 				return -1;

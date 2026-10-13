@@ -1,0 +1,73 @@
+Promote the IPsec tunnel a REGISTER came in over.
+
+ims_ipsec_pcscf keeps a contact's offered tunnel beside the one the UE is
+registered over until the UE has registered over the offer (TS 33.203 7.4),
+and leaves the handover to ipsec_promote(). update_contacts() calls it for each
+contact a 200 to a REGISTER updates, with the REGISTER's receive info: only one
+that came in over the offer promotes it, so a refresh that was not challenged,
+or another contact's REGISTER, changes nothing.
+
+checkcontact() accepts the protected client port of either tunnel: until the
+200, the UE still sends over the one it is registered over.
+
+diff --git a/src/modules/ims_registrar_pcscf/save.c b/src/modules/ims_registrar_pcscf/save.c
+index 6e697c03b9..98acf96464 100644
+--- a/src/modules/ims_registrar_pcscf/save.c
++++ b/src/modules/ims_registrar_pcscf/save.c
+@@ -321,6 +321,14 @@ static inline int update_contacts(struct sip_msg *req, struct sip_msg *rpl,
+ 								LM_DBG("Error subscribing for contact\n");
+ 							}
+ 
++							// A REGISTER answered over the tunnel the last 401
++							// offered makes it the one the UE is registered
++							// over, and retires the one it replaces
++							if(ipsec_pcscf.ipsec_promote != NULL) {
++								ipsec_pcscf.ipsec_promote(
++										_d, pcontact, &req->rcv);
++							}
++
+ 							// After successful registration try to unregister all callbacks for pending contacts related to this contact.
+ 							ul.unreg_pending_contacts_cb(
+ 									_d, pcontact, PCSCF_CONTACT_EXPIRE);
+diff --git a/src/modules/ims_registrar_pcscf/service_routes.c b/src/modules/ims_registrar_pcscf/service_routes.c
+index cde4d18e94..8072e61cef 100644
+--- a/src/modules/ims_registrar_pcscf/service_routes.c
++++ b/src/modules/ims_registrar_pcscf/service_routes.c
+@@ -162,25 +162,18 @@ int checkcontact(struct sip_msg *_m, pcontact_t *c)
+ 	if(ipsec_pcscf.ipsec_on_expire == NULL) {
+ 		LM_DBG("ims_ipsec_pcscf module not loaded - skipping port-uc checks\n");
+ 	} else if(!ignore_contact_rxport_check) {
+-		if(c->security) {
+-			switch(c->security->type) {
+-				case SECURITY_IPSEC:
+-					security_server_port = c->security->data.ipsec->port_uc;
+-					break;
+-				case SECURITY_TLS:
+-				case SECURITY_NONE:
+-					break;
+-			}
+-		} else if(c->security_temp) {
+-			switch(c->security_temp->type) {
+-				case SECURITY_IPSEC:
+-					security_server_port =
+-							c->security_temp->data.ipsec->port_uc;
+-					break;
+-				case SECURITY_TLS:
+-				case SECURITY_NONE:
+-					break;
+-			}
++		// either of the contact's tunnels: the UE keeps sending over the
++		// one it is registered over while it answers the next offer
++		if(c->security && c->security->type == SECURITY_IPSEC
++				&& c->security->data.ipsec) {
++			security_server_port = c->security->data.ipsec->port_uc;
++		}
++		if(c->security_temp && c->security_temp->type == SECURITY_IPSEC
++				&& c->security_temp->data.ipsec
++				&& (security_server_port == -1
++						|| c->security_temp->data.ipsec->port_uc
++								   == received_port)) {
++			security_server_port = c->security_temp->data.ipsec->port_uc;
+ 		}
+ 
+ 		if(c->received_port != received_port
