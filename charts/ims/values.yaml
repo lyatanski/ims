@@ -33,6 +33,10 @@ global:
     subnet: 10.10.0.0/16
     mtu: 1452
     via: ""
+    # The IPv6 UE pool (core's session.subnet6) and its next hop, routed the
+    # same way as the IPv4 one above; empty subnet6 routes none.
+    subnet6: fd10:10::/48
+    via6: ""
 
 gm:
   # On by default: Gm is IPsec in transport mode, and transport mode does not
@@ -48,6 +52,12 @@ gm:
   # has to be at least the number of entries or the PCRF refuses Rx.
   addresses:
   - 10.20.0.10/24
+  # The IPv6 Gm address of the same P-CSCF, by index: entry i is the second
+  # address of the P-CSCF that `addresses` entry i names, and where the UEs on
+  # an IPv6 PDN register. Keep it in core's `ims.pcscf` beside the IPv4 one.
+  # Without an entry that P-CSCF is IPv4-only. With one, its IPsec port pool
+  # halves (see ipsec_max_connections in cscf/proxy.cfg).
+  addresses6: []
   # `static` with the `ips` capability: the address is the one the pod's
   # networks annotation names. Nothing tracks what is in use, so keep the
   # addresses above out of any other pool on this subnet.
@@ -96,6 +106,9 @@ test:
     cc: "{{ .Values.global.e164.home }}"
     digits: 9
   uri: tel
+  # ipv4 | ipv6 | ipv4v6: the PDN the UE asks for. ipv6 and ipv4v6 register
+  # and call over IPv6, which needs gm.addresses6 and a dual-stack cluster.
+  pdnType: ipv4
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: 2, memory: 1Gi}

@@ -98,6 +98,51 @@ once, at startup, so a rescheduled UPF also strands the SMF on the address that
 is gone — `Retry association with peer failed`, and a Create Session Response
 that names a PGW-U which no longer exists. Restart the SMF after moving it.
 
+### IPv6
+
+`session.subnet6` is the IPv6 pool beside it, on by default: a UE asking for an
+IPv6 or IPv4v6 PDN gets a /64 of it, and the UPF routes the downlink by that
+/64. Its traffic takes the IPv4 pool's path, so each of the pieces above has an
+IPv6 half, and the cluster has to be dual-stack for them to have anything to
+work with:
+
+- the TUN sidecar adds `session.gateway6`, and an init container turns on IPv6
+  forwarding in the UPF's namespace. A new namespace inherits the node's IPv4
+  settings, `ip_forward` included, but starts IPv6 from the kernel defaults --
+  forwarding off -- and `net.ipv6.conf.*` is outside Kubernetes' safe sysctls,
+  so it cannot be a pod sysctl without the kubelet's allowlist;
+- the node route resolves the UPF through `core-upf-node`, a headless
+  `PreferDualStack` Service of its own. The component Services stay
+  single-stack on purpose: open5gs resolves `gtpu.server.advertise` with
+  `AF_UNSPEC`, and a dual-stack `-gtpu` would put an IPv6 address in every
+  F-TEID;
+- the P-CSCF's `ueroute` sidecar routes `global.ue.subnet6`, through
+  `global.ue.via6` when the pool is reached over Gm's router.
+
+The P-CSCF registers those UEs on an IPv6 Gm address, `gm.addresses6`, entry
+*i* being the second address of the P-CSCF `gm.addresses` entry *i* names. It
+becomes `IPSEC6`, which `ims_ipsec_pcscf` binds its protected ports on, and
+goes into `ims.pcscf` beside the IPv4 one -- the SMF sorts the list into the
+PCO's IPv4 and IPv6 containers. With it set, the P-CSCF's IPsec port pool
+halves: every port is bound once per family, and the socket budget is what
+`ipsec_max_connections` in `cscf/proxy.cfg` explains.
+
+```yaml
+gm:
+  addresses:
+  - 10.20.0.10/24
+  addresses6:
+  - fd20::10/64
+global:
+  ue:
+    via6: fd20::1
+```
+
+`test.pdnType` (`ipv4`, `ipv6`, `ipv4v6`) is what the helm test's UE asks for.
+`./kind.sh` makes the cluster dual-stack (`IP_FAMILY`), gives Gm and media an
+IPv6 subnet each, exempts both from kindnet's IPv6 masquerade too, and takes
+`PDN_TYPE` and `PRO2CALL` for the test.
+
 
 ## Common Challenges
 Determination of when instance has calls running on it. This is necessary to know when it is safe to terminate instance.

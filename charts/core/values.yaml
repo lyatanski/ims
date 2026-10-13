@@ -114,9 +114,16 @@ subscribers:
 iface: eth0
 
 # The UE address pool: handed out by the SMF, routed by the UPF.
+#
+# subnet6 is the IPv6 pool next to it, for a UE that asks for an IPv6 or
+# IPv4v6 PDN: open5gs hands each one a /64 of it, and the UPF routes downlink
+# by that /64. Empty leaves the PDN IPv4-only. Reaching a P-CSCF over it needs
+# a dual-stack cluster, since the UPF forwards it out of the pod's own eth0.
 session:
   subnet: 10.10.0.0/16
   gateway: 10.10.0.1
+  subnet6: fd10:10::/48
+  gateway6: fd10:10::1
   dnn: ims
   dev: tunue
 

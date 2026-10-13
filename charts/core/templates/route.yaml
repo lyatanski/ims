@@ -72,6 +72,8 @@ spec:
           # spelling it out costs nothing and survives a resolver that does not.
           upf={{ .Release.Name }}-upf-gtpu.{{ .Release.Namespace }}.svc.cluster.local
           pool={{ .Values.session.subnet }}
+          pool6={{ .Values.session.subnet6 | quote }}
+          upf6={{ .Release.Name }}-upf-node.{{ .Release.Namespace }}.svc.cluster.local
 
           while :; do
             # The headless Service resolves to the UPF pod itself. It has to:
@@ -98,6 +100,20 @@ spec:
                 ;;
               esac
             fi
+            # The IPv6 pool the same way, through the UPF's IPv6 address --
+            # which only a dual-stack cluster gives it. On a single-stack one
+            # there is nothing to resolve and nothing to route.
+            addr6=$(getent ahostsv6 "$upf6" 2>/dev/null | awk '$1 !~ /^::ffff:/ {print $1; exit}')
+            if [ -n "$pool6" ] && [ -n "$addr6" ]; then
+              r=$(ip -6 route get "$addr6" 2>/dev/null | head -1)
+              dev=$(echo "$r" | sed -n 's/.* dev \([^ ]*\).*/\1/p')
+              via=$(echo "$r" | sed -n 's/.* via \([^ ]*\).*/\1/p')
+              case "$r" in
+              "local "*) ;;
+              *" via "*) ip -6 route replace "$pool6" via "$via" dev "$dev" ;;
+              *" dev "*) ip -6 route replace "$pool6" via "$addr6" dev "$dev" onlink ;;
+              esac
+            fi
             sleep {{ .Values.reconcile }}
           done
         # This is a DaemonSet: whatever is set here is reserved on every node
@@ -110,4 +126,27 @@ spec:
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- if .Values.session.subnet6 }}
+---
+# The UPF pod's own addresses, both families, for the route above and nothing
+# else. The Services the components publish are single-stack, and they stay
+# that way: open5gs resolves `gtpu.server.advertise` with AF_UNSPEC, so a
+# dual-stack -gtpu would put an IPv6 address in every F-TEID it sends.
+# PreferDualStack is single-stack on a single-stack cluster, so this costs
+# nothing there.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-upf-node
+  labels: {{- include "core.labels" (dict "root" . "name" "upf") | nindent 4 }}
+spec:
+  clusterIP: None
+  ipFamilyPolicy: PreferDualStack
+  ports:
+  - name: gtpu
+    port: 2152
+    protocol: UDP
+  publishNotReadyAddresses: true
+  selector: {{- include "core.selectorLabels" (dict "root" . "name" "upf") | nindent 4 }}
+{{- end }}
 {{- end }}

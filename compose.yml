@@ -18,7 +18,15 @@ x-kamailio: &kamailio
 
 x-route: &route
   image: alpine
-  command: sh -c "gw=$$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1); test -n \"$$gw\" && ip route replace ${UENET} via $$gw mtu 1450"
+  command:
+  - sh
+  - -c
+  - |
+    gw=$$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1)
+    gw6=$$(getent ahostsv6 upf | cut -d' ' -f1 | sort -u | head -1)
+    test -n "$$gw" && test -n "$$gw6" &&
+    ip route replace ${UENET} via $$gw mtu 1450 &&
+    ip -6 route replace ${UENETv6} via $$gw6 mtu 1450
   cap_add:
   - NET_ADMIN
   restart: on-failure
@@ -31,6 +39,7 @@ services:
       REALM: ${REALM}
       DBURL: redis:6379/1
       IPSEC: ${IPSEC}
+      IPSEC6: ${IPSECv6}
     configs:
     - source: pcscf.xml
       target: /etc/cscf/diameter.xml
@@ -39,6 +48,7 @@ services:
     networks:
       default:            # Mw
         ipv4_address: ${IPSEC}
+        ipv6_address: ${IPSECv6}
     depends_on:
       kmod:
         condition: service_completed_successfully
@@ -85,6 +95,7 @@ services:
     networks:
       default:
         ipv4_address: ${DNSv4}
+        ipv6_address: ${DNSv6}
 
   rtpengine:
     image: ghcr.io/lyatanski/rtpengine
@@ -145,6 +156,7 @@ services:
     image: ghcr.io/lyatanski/pro2call
     environment:
       PGW_IP:            smf
+      IMS_PDN_TYPE:      ${PDN_TYPE:-ipv4}   # ipv6 / ipv4v6 run SIP and media over IPv6
       GTPU_IFACE:        eth0
       GTPU_INNER_IFACE:  eth0
       GTP_T3_MS:  ${GTP_T3_MS:-3000}
@@ -163,6 +175,13 @@ services:
     - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
     - BPF         # loading the GTP-U datapath
     - PERFMON     # privileged verifier: skip the Spectre passes
+    sysctls:
+      # The UE starts sending the moment it has a PDN, while eth0's link-local
+      # address is still in DAD: the first neighbour solicitation for the
+      # P-CSCF then waits out the 1 s retransmit, and every IPv6 registration
+      # measures it
+      net.ipv6.conf.all.accept_dad: 0
+      net.ipv6.conf.default.accept_dad: 0
     depends_on:
       pcscf:
         condition: service_healthy
