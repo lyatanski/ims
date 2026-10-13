@@ -36,8 +36,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # Dual-stack: a UE on an IPv6 PDN rides the UPF's own eth0 and the node's
+    # routes on to Gm, so both need IPv6 of their own.
+    - name: KinD Config
+      run: |
+        cat > kind.yaml <<'EOF'
+        kind: Cluster
+        apiVersion: kind.x-k8s.io/v1alpha4
+        networking:
+          ipFamily: dual
+        EOF
+
     - name: Create KinD Cluster
       uses: helm/kind-action@v1
+      with:
+        config: kind.yaml
 
     # KinD ships neither the bridge plugin nor Multus. v4.3.0 because the thin
     # image is published up to v4.3.0 only, and pinned by name because the
@@ -97,12 +110,15 @@ jobs:
     # kindnet SNATs anything leaving the pod CIDR, and transport-mode ESP does
     # not survive that: the plain REGISTER and the 401 ride through and only
     # the protected REGISTER disappears. The Gm and media subnets from the IMS
-    # values below.
+    # values below, and the same again for IPv6.
     - name: Exempt the secondary subnets from masquerading
       run: |
         NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
         for net in 10.20.0.0/24 10.30.0.0/24; do
           docker exec "$NODE" iptables -t nat -I KIND-MASQ-AGENT 1 -d "$net" -j RETURN
+        done
+        for net in fd20::/64 fd30::/64; do
+          docker exec "$NODE" ip6tables -t nat -I KIND-MASQ-AGENT 1 -d "$net" -j RETURN
         done
 
     # The chart defaults request 5.8 cores between them -- the measured demand
@@ -120,6 +136,7 @@ jobs:
         ims:
           pcscf:
           - 10.20.0.10
+          - fd20::10
         components:
           hss:
             resources:
@@ -159,6 +176,8 @@ jobs:
         helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m -f - <<'EOF'
         gm:
           enabled: true
+          addresses6:
+          - fd20::10/64
           config:
             cniVersion: 0.3.1
             type: bridge
@@ -169,6 +188,7 @@ jobs:
         global:
           ue:
             via: 10.20.0.1
+            via6: fd20::1
         cscf:
           proxy:
             resources:
@@ -197,13 +217,20 @@ jobs:
                   isGateway: true
                   ipam:
                     type: host-local
-                    subnet: 10.30.0.0/24
-                    gateway: 10.30.0.1
-                    rangeStart: 10.30.0.10
-                    rangeEnd: 10.30.0.250
+                    ranges:
+                    - - subnet: 10.30.0.0/24
+                        gateway: 10.30.0.1
+                        rangeStart: 10.30.0.10
+                        rangeEnd: 10.30.0.250
+                    - - subnet: fd30::/64
+                        gateway: fd30::1
+                        rangeStart: fd30::10
+                        rangeEnd: fd30::fa
                     routes:
                     - dst: 10.10.0.0/16
                       gw: 10.30.0.1
+                    - dst: fd10:10::/48
+                      gw: fd30::1
             - name: external
               alias: internal
           resources:

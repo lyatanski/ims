@@ -13,6 +13,10 @@ pod template. `$gm` is that address, empty everywhere else.
 {{- $gms = required "gm.addresses: one address per P-CSCF" .Values.gm.addresses }}
 {{- end }}
 {{- range $i, $gm := $gms }}
+{{- $gm6 := "" }}
+{{- if and $gm (lt $i (len ($dot.Values.gm.addresses6 | default list))) }}
+{{- $gm6 = index $dot.Values.gm.addresses6 $i }}
+{{- end }}
 {{- with $dot }}
 ---
 apiVersion: apps/v1
@@ -38,7 +42,7 @@ spec:
       annotations:
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- if $gm }}
-        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" (list $gm)) | toJson | quote }}
+        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" (compact (list $gm $gm6))) | toJson | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -78,6 +82,10 @@ spec:
           value: {{ .Values.gm.interface | quote }}
         - name: IPSEC
           value: {{ (split "/" $gm)._0 | quote }}
+        {{- with $gm6 }}
+        - name: IPSEC6
+          value: {{ (split "/" .)._0 | quote }}
+        {{- end }}
         {{- else }}
         - name: IPSEC
           valueFrom:

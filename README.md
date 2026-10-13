@@ -55,6 +55,13 @@ CSCF chain instead — point `$CORE` at [stub.yml](stub.yml)
 
     CORE=stub.yml docker compose up -d --remove-orphans
 
+The setup is dual-stack: the CSCFs listen on both families, and the UE pool
+has an IPv6 half (`UENETv6`) next to the IPv4 one. The test UE asks for an IPv4
+PDN unless told otherwise; `ipv6` and `ipv4v6` register, subscribe and call
+over the P-CSCF's IPv6 Gm address (`IPSECv6`), IPsec and media included
+
+    PDN_TYPE=ipv6 docker compose --profile test up -d
+
 To observe the packets
 
     wireshark -i any --display-filter 'gtpv2 or sip or diameter.cmd.code != 280'
