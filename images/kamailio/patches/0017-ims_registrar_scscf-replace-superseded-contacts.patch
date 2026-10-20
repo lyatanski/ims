@@ -49,10 +49,10 @@ other two producers, the de-REGISTER in save.c and reg_rpc_dereg_impu()
 5.4.2.1.2 / 5.4.1.5 call that.
 
 diff --git a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
-index 1cf9ab1a7c..877412a5d9 100644
+index b134a00865..d5a31324ae 100644
 --- a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
 +++ b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
-@@ -470,6 +470,39 @@
+@@ -506,6 +506,39 @@ modparam("ims_registrar_scscf", "scscf_restoration_info_enabled", 1)
        </example>
      </section>
  
@@ -132,7 +132,7 @@ index 73428a8723..3bfb336d44 100644
  	pad->len = strlen(pad->s);
  	STR_APPEND(*buf, *pad);
 diff --git a/src/modules/ims_registrar_scscf/save.c b/src/modules/ims_registrar_scscf/save.c
-index 8fa9168c7a..5433816180 100644
+index 24cca9272f..69e52839cc 100644
 --- a/src/modules/ims_registrar_scscf/save.c
 +++ b/src/modules/ims_registrar_scscf/save.c
 @@ -87,6 +87,7 @@ extern int
@@ -143,8 +143,8 @@ index 8fa9168c7a..5433816180 100644
  
  #define DO_NOT_USE_REALM_FOR_PRIVATE_IDENTITY 0x01
  
-@@ -514,6 +515,229 @@ static inline int is_impu_registered(udomain_t *_d, str *public_identity)
- 	return ret;
+@@ -535,6 +536,229 @@ static int get_restored_ucontact(str *uri, str *path, struct ucontact **c)
+ 	return 1;
  }
  
 +/*!
@@ -373,7 +373,7 @@ index 8fa9168c7a..5433816180 100644
  /**
   * update the contacts for a public identity. Make sure you have the lock on the domain before calling this
   * returns 0 on success, -1 on failure
-@@ -618,6 +842,9 @@ static inline int update_contacts_helper(struct sip_msg *msg,
+@@ -642,6 +866,9 @@ static inline int update_contacts_helper(struct sip_msg *msg,
  					}
  				}
  			}
