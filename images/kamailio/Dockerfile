@@ -40,7 +40,7 @@ RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
             ims_icscf \
             ims_registrar_scscf ims_usrloc_scscf ims_auth ims_isc ims_charging \
             presence \
-            dispatcher \
+            dispatcher htable \
             rtpengine \
             userblocklist acc \
             http_client nghttp2" \
@@ -64,8 +64,13 @@ RUN --mount=type=bind,from=build,source=/kamailio/utils/kamctl/db_redis/kamailio
     && cp /dbmap/dialog_in /dbmap/dialog_out /dbmap/dialog_vars /etc/cscf/schema/serving \
     && cp /dbmap/contact /dbmap/impu /dbmap/impu_contact /dbmap/subscriber_scscf /dbmap/impu_subscriber /etc/cscf/schema/serving \
     && cp /dbmap/ro_session /etc/cscf/schema/serving \
-    && cp /dbmap/rtpengine /etc/cscf/schema/serving
+    && cp /dbmap/rtpengine /etc/cscf/schema/serving \
+    && mkdir -p /etc/as/schema/telephony \
+    && cp /dbmap/userblocklist /etc/as/schema/telephony/ocb \
+    && cp /dbmap/userblocklist /etc/as/schema/telephony/icb \
+    && cp /dbmap/globalblocklist /etc/as/schema/telephony
 COPY cscf/ /etc/cscf
+COPY as/ /etc/as
 
 ENTRYPOINT ["kamailio", "-DD", "-E"]
 

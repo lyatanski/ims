@@ -93,6 +93,17 @@ Call with (dict "root" $ "cscf" <role>).
     {{- end }}
 {{- end }}
 
+{{/*
+The emergency numbers the P-CSCF and the E-CSCF share (cscf/sos.cfg), left
+out when unset so the cfg's own default (112, 911) applies.
+*/}}
+{{- define "ims.sosnum" -}}
+{{- with .Values.cscf.emergency.numbers }}
+- name: SOSNUM
+  value: {{ join " " . | quote }}
+{{- end }}
+{{- end }}
+
 {{- define "ims.regsrv" -}}
 addr={{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }};port={{ .Values.rtpengine.valkey.ports.valkey }};db={{ .Values.db.interrogating }}
 {{- end }}

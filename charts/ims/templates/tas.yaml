@@ -1,0 +1,108 @@
+{{- /*
+The TAS (as/telephony.cfg), an AS on ISC. No Diameter, so no identity to
+render, but a wait for the state store: db_redis connects at startup or not at
+all, so /check has nothing more to report once the TAS runs. The Service name
+is what the iFC's tas.<ims realm> resolves to.
+*/}}
+{{- with .Values.cscf.telephony }}
+{{- if .enabled }}
+{{- $e := . }}
+{{- with $ }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-tas
+  labels: {{- include "ims.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - port: {{ .Values.service.port }}
+    targetPort: {{ .Values.service.port }}
+    protocol: TCP
+    name: tcp
+  - port: {{ .Values.service.port }}
+    targetPort: {{ .Values.service.port }}
+    protocol: UDP
+    name: udp
+  publishNotReadyAddresses: true
+  selector: {{- include "ims.selectorLabels" . | nindent 4 }}
+    role: tas
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-tas
+  labels: {{- include "ims.labels" . | nindent 4 }}
+    role: tas
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: {{ .Release.Name }}-tas
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels: {{- include "ims.selectorLabels" . | nindent 6 }}
+      role: tas
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels: {{- include "ims.labels" . | nindent 8 }}
+        role: tas
+    spec:
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+        - {{ include "ims.dnsIP" . }}
+        searches:
+        - {{ .Release.Namespace }}.svc.cluster.local
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+      {{- include "ims.waitdb" (dict "root" . "cscf" "telephony") | nindent 6 }}
+      containers:
+      - name: cscf
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: ["-f", "/etc/as/telephony.cfg"]
+        env:
+        - name: REALM
+          value: {{ tpl .Values.domain . }}
+        - name: DBURL
+          value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ .Values.db.telephony }}
+        ports:
+        - name: tcp
+          containerPort: {{ .Values.service.port }}
+          protocol: TCP
+        - name: udp
+          containerPort: {{ .Values.service.port }}
+          protocol: UDP
+        - name: mon
+          containerPort: 9090
+          protocol: TCP
+        readinessProbe:
+          httpGet: {path: /check, port: mon}
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: {path: /metrics, port: mon}
+          periodSeconds: 20
+          failureThreshold: 6
+        {{- with $e.resources }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -92,6 +92,13 @@ spec:
             fieldRef:
               fieldPath: status.podIP
         {{- end }}
+        {{- if .Values.cscf.emergency.enabled }}
+        - name: ECSCF
+          value: {{ printf "sip:ecscf.%s" (include "ims.realm.ims" .) | quote }}
+        {{- with include "ims.sosnum" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- end }}
         {{- end }}
         - name: DBURL
           value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ index .Values.db $cscf }}

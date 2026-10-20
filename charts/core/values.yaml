@@ -99,6 +99,9 @@ subscribers:
   k: "3919F39741B626604B4BACE23ACFB094"
   opc: "177FAD988A964A3AD0421B4693257056"
   dial: "359"
+  # The AS every subscriber's iFC sends its INVITEs to, originating and
+  # terminating: the ims chart's TAS. Empty seeds no iFC.
+  tas: sip:tas.{{ tpl .Values.realm.ims . }}
   image: docker.io/bitnami/mongodb:latest
   # mongosh is a Node runtime: it peaks at ~160 MiB evaluating `print(1+1)`,
   # before it has inserted a single subscriber. The sidecar default would

@@ -39,9 +39,6 @@ global:
     via6: ""
 
 gm:
-  # On by default: Gm is IPsec in transport mode, and transport mode does not
-  # survive the DNAT a Service does, so the secondary interface is the shape
-  # this chart assumes rather than an opt-in.
   enabled: true
   # The device name inside the pod.
   interface: gm0
@@ -52,15 +49,7 @@ gm:
   # has to be at least the number of entries or the PCRF refuses Rx.
   addresses:
   - 10.20.0.10/24
-  # The IPv6 Gm address of the same P-CSCF, by index: entry i is the second
-  # address of the P-CSCF that `addresses` entry i names, and where the UEs on
-  # an IPv6 PDN register. Keep it in core's `ims.pcscf` beside the IPv4 one.
-  # Without an entry that P-CSCF is IPv4-only. With one, its IPsec port pool
-  # halves (see ipsec_max_connections in cscf/proxy.cfg).
   addresses6: []
-  # `static` with the `ips` capability: the address is the one the pod's
-  # networks annotation names. Nothing tracks what is in use, so keep the
-  # addresses above out of any other pool on this subnet.
   config:
     cniVersion: 0.3.1
     type: macvlan
@@ -80,6 +69,8 @@ db:
   proxy: 2
   interrogating: 3
   serving: 4
+  # the TAS's barring lists
+  telephony: 5
 
 replicaCount: 1
 
@@ -136,6 +127,31 @@ cscf:
       requests: {cpu: 400m, memory: 256Mi}
       limits: {cpu: 2, memory: 768Mi}
 
+  emergency:
+    enabled: true
+    # The PSAP table, <service>[@<cell prefix>]=<uri> each: the service URN
+    # less "urn:service:" (sos, sos.fire), an optional prefix of the
+    # utran-cell-id-3gpp the UE is in (MCC MNC TAC cell, hex), and a sip: URI
+    # for a PSAP over IP or a tel: URI for one in the PSTN. Templated. Nothing
+    # answers at the default: point it at a PSAP.
+    psap:
+    - sos=sip:psap.{{ include "ims.realm.ims" . }}
+    # The next hop for a tel: PSAP. Unset, those requests are refused.
+    bgcf: ""
+    # Emergency numbers, <number>=<service URN>, for the P-CSCF and the
+    # E-CSCF. Empty keeps 112 and 911, both urn:service:sos.
+    numbers: []
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 1, memory: 256Mi}
+
+  # TAS: call barring by number
+  telephony:
+    enabled: true
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 1, memory: 256Mi}
+
 sidecar:
   resources:
     requests: {cpu: 10m, memory: 16Mi}
@@ -170,7 +186,7 @@ dns:
     - name: template
       parameters: IN SRV
       configBlock: |-
-        match "(?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
+        match "(?P<name>.cscf|tas)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
         answer "{{`{{ .Name }}`}} 30 SRV 0 0 5060 {{ .Release.Name }}-{{`{{ or .Group.name \"icscf\" }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
         fallthrough
     # ENUM (RFC 6116)

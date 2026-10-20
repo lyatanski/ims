@@ -123,6 +123,8 @@ See [Tracing](doc/trace.md) for what each of those gives you.
     - [x] Proxy
     - [x] Interrogating
     - [x] Serving
+    - [x] Emergency — PSAP chosen from local configuration by service URN and cell, no LRF ([TS 24.229 5.11](images/kamailio/cscf/emergency.cfg))
+  - [x] TAS — call barring by number prefix, outgoing and incoming, per subscriber in valkey ([TS 24.611](images/kamailio/as/telephony.cfg))
   - [x] [DB](doc/images.md#ims-db)
   - [x] [rtpengine](doc/images.md#rtpengine)
   - [x] [DNS](doc/images.md#coredns)

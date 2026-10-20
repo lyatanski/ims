@@ -40,6 +40,7 @@ services:
       DBURL: redis:6379/1
       IPSEC: ${IPSEC}
       IPSEC6: ${IPSECv6}
+      ECSCF: sip:ecscf.ims.${REALM}
     configs:
     - source: pcscf.xml
       target: /etc/cscf/diameter.xml
@@ -82,6 +83,25 @@ services:
     configs:
     - source: scscf.xml
       target: /etc/cscf/diameter.xml
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ecscf:
+    << : *kamailio
+    command: -f /etc/cscf/emergency.cfg
+    environment:
+      REALM: ${REALM}
+      # <service>[@<cell prefix>]=<uri> entries (cscf/emergency.cfg). Nothing
+      # answers at the default: point it at a PSAP, and set BGCF for tel URIs
+      PSAP: ${PSAP:-sos=sip:psap.ims.${REALM}}
+
+  tas:
+    << : *kamailio
+    command: -f /etc/as/telephony.cfg
+    environment:
+      REALM: ${REALM}
+      DBURL: redis:6379/6
     depends_on:
       redis:
         condition: service_healthy
@@ -313,7 +333,7 @@ configs:
               rcode NXDOMAIN
           }
           template IN SRV {
-              match (?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
+              match (?P<name>.cscf|tas)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
               answer "{{ .Name }} 1D SRV 0 0 5060 {{ or .Group.name \"icscf\" }}."
               fallthrough
           }
