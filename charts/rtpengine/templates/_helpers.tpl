@@ -140,6 +140,26 @@ Call with the root context. Renders nothing.
 {{- end -}}
 {{- $nets = append $nets $if.network.name -}}
 {{- end -}}
+{{- if or $if.vips $if.vips6 -}}
+{{- if $if.alias }}
+{{- fail (printf "rtpengine: interface %q is an alias and cannot carry vips; put them on %q instead" $if.name $if.alias) }}
+{{- end -}}
+{{- /* the rest of the group would be handed out to a replica's calls too */ -}}
+{{- if contains ":" $if.name }}
+{{- fail (printf "rtpengine: interface %q is in a round-robin group and cannot carry vips" $if.name) }}
+{{- end -}}
+{{- if $if.advertised }}
+{{- fail (printf "rtpengine: interface %q has both vips and an advertised address" $if.name) }}
+{{- end -}}
+{{- if or (eq "any" $if.address) (regexMatch "^[0-9.]+$|:" $if.address) }}
+{{- fail (printf "rtpengine: interface %q has vips, so its address has to name the device they go on, not %q" $if.name $if.address) }}
+{{- end -}}
+{{- range $l := list $if.vips $if.vips6 -}}
+{{- if and $l (ne (len $l) (int $.Values.replicaCount)) }}
+{{- fail (printf "rtpengine: interface %q needs one vip per replica (%d), has %v" $if.name (int $.Values.replicaCount) $l) }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $names = append $names $if.name -}}
 {{- end -}}
 {{- /* `direction=` also takes the base of a `base:suffix` round-robin group */ -}}
@@ -152,5 +172,109 @@ Call with the root context. Renders nothing.
 {{- fail (printf "rtpengine: template %q sends %q to interface %q, which media.interfaces does not define" $name $flag $want) }}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The interfaces split into one logical interface per owner: every one with
+`vips` or `vips6`, and every alias of one. A JSON list of names; read it back
+with fromJsonArray.
+
+Call with the root context.
+*/}}
+{{- define "rtpengine.vip.names" -}}
+{{- $per := list -}}
+{{- range $if := .Values.media.interfaces -}}
+{{- if or $if.vips $if.vips6 (and $if.alias (has $if.alias $per)) -}}
+{{- $per = append $per $if.name -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $per -}}
+{{- end }}
+
+{{/*
+The first interface with `vips` or `vips6`, the one the ng control socket is
+addressed on: as JSON, `{}` when there is none.
+
+Call with the root context.
+*/}}
+{{- define "rtpengine.vip.control" -}}
+{{- $ctl := dict -}}
+{{- range $if := .Values.media.interfaces -}}
+{{- if and (not $ctl) (or $if.vips $if.vips6) }}{{ $ctl = $if }}{{ end -}}
+{{- end -}}
+{{- toJson $ctl -}}
+{{- end }}
+
+{{/*
+kamailio's `rtpengine_sock`: one node per replica on its control address when
+the interfaces carry `vips` (IPv4 preferred), the ClusterIP Service otherwise.
+A call stays on the node it was hashed to for its whole life, so the node has
+to be an address that moves with the call rather than a pod.
+
+Call with this chart's context -- from a parent, `.Subcharts.rtpengine`.
+*/}}
+{{- define "rtpengine.ng" -}}
+{{- $ctl := include "rtpengine.vip.control" . | fromJson -}}
+{{- $port := .Values.service.port -}}
+{{- if $ctl -}}
+{{- $nodes := list -}}
+{{- range $a := $ctl.vips }}{{ $nodes = append $nodes (printf "udp:%s:%v" $a $port) }}{{ end -}}
+{{- if not $nodes -}}
+{{- range $a := $ctl.vips6 }}{{ $nodes = append $nodes (printf "udp6:%s:%v" $a $port) }}{{ end -}}
+{{- end -}}
+{{- join " " $nodes -}}
+{{- else -}}
+udp:{{ include "rtpengine.name" . }}:{{ $port }}
+{{- end -}}
+{{- end }}
+
+{{/*
+The `k8s.v1.cni.cncf.io/networks` entry a client of the ng socket needs to
+reach the control addresses -- the control interface's attachment, on a device
+of the same name -- or nothing when the control socket is behind the Service.
+
+Call with this chart's context.
+*/}}
+{{- define "rtpengine.ng.network" -}}
+{{- $ctl := include "rtpengine.vip.control" . | fromJson -}}
+{{- if and $ctl $ctl.network $ctl.network.enabled -}}
+{{- toJson (dict "name" (include "rtpengine.network.name" (dict "root" . "name" $ctl.network.name)) "interface" $ctl.address) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The init script that puts a replica's own `vips` on their devices, before
+rtpengine binds them. ip_nonlocal_bind first, because the replica also binds
+the addresses of the one it is standby for, which are not on this pod. DAD off
+on the device, or the IPv6 address is tentative -- unusable -- for its first
+second. The unsolicited ARP replaces whatever MAC the network still has for
+the address, which after a reschedule is the previous pod's.
+
+Call with the root context. Empty when no interface has `vips`.
+*/}}
+{{- define "rtpengine.vip.script" -}}
+{{- $root := . -}}
+{{- $ifs := list -}}
+{{- range $if := .Values.media.interfaces }}{{ if or $if.vips $if.vips6 }}{{ $ifs = append $ifs $if }}{{ end }}{{ end -}}
+{{- if $ifs -}}
+set -e
+sysctl -w net.ipv4.ip_nonlocal_bind=1 net.ipv6.ip_nonlocal_bind=1
+case "$HOSTNAME" in
+{{- range $i := until (int .Values.replicaCount) }}
+{{ include "rtpengine.name" $root }}-{{ $i }})
+{{- range $if := $ifs }}
+{{- with $if.vips }}
+	ip addr add {{ index . $i }}/32 dev {{ $if.address }}
+	arping -U -c 1 -I {{ $if.address }} {{ index . $i }} || :
+{{- end }}
+{{- with $if.vips6 }}
+	sysctl -w net.ipv6.conf.{{ $if.address }}.accept_dad=0
+	ip -6 addr add {{ index . $i }}/128 dev {{ $if.address }}
+{{- end }}
+{{- end }}
+	;;
+{{- end }}
+esac
 {{- end -}}
 {{- end }}

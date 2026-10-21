@@ -19,6 +19,12 @@ ports:
   valkey: 6379
   bus: 16379
 
+# valkey's `notify-keyspace-events`: the event classes it publishes on the
+# __keyspace@<db>__ channels, empty for none. A client subscribing to those
+# channels is not told when this is off -- the subscribe succeeds and nothing
+# ever arrives -- so whatever subscribes has to set it here.
+notifyKeyspaceEvents: ""
+
 cluster:
   primaries: 1
   replicas: 0

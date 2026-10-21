@@ -44,6 +44,12 @@ spec:
         {{- if $gm }}
         k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" (compact (list $gm $gm6))) | toJson | quote }}
         {{- end }}
+        {{- /* rtpengine's control addresses, when they are its media vips */}}
+        {{- if eq "serving" $cscf }}
+        {{- with include "rtpengine.ng.network" .Subcharts.rtpengine }}
+        k8s.v1.cni.cncf.io/networks: {{ printf "[%s]" . | quote }}
+        {{- end }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -106,7 +112,7 @@ spec:
         - name: REGSRV
           value: {{ include "ims.regsrv" . | quote }}
         - name: RTPADR
-          value: udp:{{ template "rtpengine.name" .Subcharts.rtpengine }}:{{ .Values.rtpengine.service.port }}
+          value: {{ include "rtpengine.ng" .Subcharts.rtpengine | quote }}
         {{- with .Values.enum }}
         # The ENUM tree, left out entirely when unset -- an empty value would
         # still count as defined in the cfg and take the module with it. Same

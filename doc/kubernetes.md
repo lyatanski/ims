@@ -277,15 +277,15 @@ Could not parse 'media0' as network address, checking to see if it's an interfac
 Determined address 10.30.0.5 for interface 'media0'
 ```
 
-Only media moves. The ng control socket stays on `0.0.0.0` behind the ClusterIP
-Service the S-CSCF addresses, which is the one part of rtpengine that wants
-Kubernetes load balancing. Without an attachment the interface binds whatever
+Only media moves. Without `vips` (below) the ng control socket stays on
+`0.0.0.0` behind the ClusterIP Service the S-CSCF addresses. Without an attachment the interface binds whatever
 its `address` names on the pod itself — `any` being every address it has, which
 under Kubernetes is the pod address.
 
 Unlike Gm, an address out of a whereabouts pool is reachable from the UE but
 is not one the ordinal keeps across rescheduling, which is what HA-PLAN §5.5
-needs before media can follow a takeover.
+needs before media can follow a takeover. `vips` is that address — see
+[Per-owner addresses](#per-owner-addresses-implemented).
 
 The one thing that is not optional is the **return route**, which is why the
 shipped `config` carries an `ipam.routes` entry for the UE pool. rtpengine
@@ -310,12 +310,12 @@ it; it wants isolating separately.
 
 `media.interfaces` is a list because a call between two UEs and a call out to
 the trunk are not answered with the same address. rtpengine calls these
-*logical interfaces*, renders them as `[interface-<name>]` sections, and picks
+*logical interfaces*, renders them as `[interface-<i>-<name>]` sections (one set per replica), and picks
 one per side of a call from `direction=`.
 
 Naming them at every `rtpengine_manage()` in the S-CSCF would put media policy
 in the dial plan, so the chart puts it in `templates` instead — rtpengine's own
-`[templates]` section, a name for a string of ng flags. The S-CSCF then sends
+`[templates-<i>]` section, a name for a string of ng flags. The S-CSCF then sends
 only the name:
 
 | call | template | interfaces (offerer → answerer) |
@@ -350,3 +350,77 @@ leave `external` as an `alias` of `internal` and lose nothing but the second
 address.
 
 
+
+### Standby copy of a peer's calls (implemented)
+
+Replica `i` writes its calls to valkey database `db.offset + i` and keeps a
+*foreign* copy of replica `(i + 1) mod replicaCount`'s, built from the keyspace
+notifications on that database — the 1&1 active-active scheme (Kuzak, Kamailio
+World 2016, slide 18). It was configured before and did nothing: valkey
+publishes no keyspace events unless told to, and rtpengine never asks. The
+chart now sets `notify-keyspace-events K$g` on its valkey (`$` the SET that
+writes a call, `g` the DEL that ends it, the only two rtpengine acts on), adds
+`redis =` without which a restart restores nothing, not even its own calls, and
+`active-switchover`, which turns a foreign call into an own one on its first
+packet or ng command. A lone replica gets neither the subscription nor the
+switchover; it would subscribe to itself.
+
+Measured against the daemon (27.0) with the rendered config, two replicas and
+a valkey, driven over the ng socket:
+
+| step | replica 0 own / foreign | replica 1 own / foreign |
+| --- | --- | --- |
+| offer + answer `c1` on 0 | 1 / 0 | 0 / 1 |
+| restart 0 | 1 / 0 (restored) | 0 / 1 |
+| kill 0, `answer` `c2` on 1 | — | 1 / 1 (`c2` promoted, written to db 9) |
+| 0 comes back | 0 / 1 | 1 / 0 |
+| `delete` with no delay on 0 | dropped | dropped |
+| notifications off, offer on 0 | +1 own | no copy |
+
+On its own this does not give media that survives the takeover. A restored
+call keeps its ports but is bound by logical interface name and position, not
+address, so replica 1 rebinds replica 0's call on *its own* address — 31244 on
+172.19.0.4 where the far end is still sending to 172.19.0.3. That is what
+per-owner addresses below are for. Two more things seen on the way: a failed-back replica leaves its
+stale key for a promoted call in its own database, and the first answer on a
+restored call logs `List of codecs empty`.
+
+rtpengine cannot use a valkey cluster — it has no MOVED handling and keyspace
+notifications are node-local — so the chart refuses `valkey.cluster.primaries > 1`.
+
+### Per-owner addresses (implemented)
+
+An interface with `vips` (and/or `vips6`) — one address per replica, outside
+the attachment's IPAM range — answers offers from that address rather than
+the pool's, and becomes one logical interface per owner, `<name>-<k>`. Each
+replica configures two of them: its own first, which makes it its default,
+and the one of the replica it is standby for. Every `direction=<name>` in
+`templates` is rewritten per replica (`[templates-<i>]`), so the S-CSCF still
+names only `internal`/`outgoing`/`incoming`. A privileged init container
+(`vip.sh` in the ConfigMap) sets `ip_nonlocal_bind` — the standby binds the
+peer's address before it has it — and puts the replica's own address on the
+device, with an unsolicited ARP for the MAC the previous pod left behind.
+
+The ng control address follows: kamailio's rtpengine module keeps a call on
+the node it was hashed to and never moves an existing call elsewhere, so
+`RTPADR` becomes one node per replica on the control interface's VIP, and the
+S-CSCF is attached to that interface's network to reach it. rtpengine answers
+from the address a command arrived on, so `listen-ng = 0.0.0.0` already
+serves a VIP that has moved.
+
+Nothing here moves an address yet. Measured with the rendered config in docker,
+the address moved by hand (`ip addr add` + `arping -U` in the standby's netns)
+in place of the failover that will do it:
+
+| step | result |
+| --- | --- |
+| offer/answer on VIP0, RTP both ways | 20/20 each way from 172.30.0.251:36376 / :30284 |
+| standby (replica 1) | foreign copy, and `netstat` shows it bound on 172.30.0.251:30284/36376 |
+| replica 0 and its netns removed | 0/5 |
+| VIP0 added to replica 1 | 20/20 each way, same address and ports; call promoted to own on the first packet |
+| `query`/`delete` to 172.30.0.251:9910 | answered by replica 1 |
+
+The validation refuses an interface whose vips are not one per replica, one
+that is an alias or in a `base:suffix` round-robin group (the rest of the
+group would be handed to its calls), one with an `advertised` address, and one
+whose `address` is not a device.

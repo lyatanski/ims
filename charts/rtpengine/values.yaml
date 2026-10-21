@@ -1,7 +1,16 @@
 replicaCount: 2
 
+# Each replica writes its calls to valkey database `offset + i` and keeps a
+# standby copy of replica `(i + 1) mod replicaCount`'s, from the keyspace
+# notifications on that database. A replica that restarts restores both.
 db:
   offset: 8
+
+valkey:
+  # The two notifications rtpengine acts on: `$` for the SET that writes or
+  # updates a call, `g` for the DEL that ends it. Without them the standby
+  # subscribes, is never told anything, and has no copy to take over from.
+  notifyKeyspaceEvents: K$g
 
 # rtpengine log level: 7 is debug, 6 info
 logLevel: 6
@@ -10,7 +19,7 @@ media:
   portMin: 30000
   portMax: 40000
 
-  # Logical interfaces, rendered as the `[interface-<name>]` config sections
+  # Logical interfaces, rendered as the `[interface-<i>-<name>]` config sections
   # rtpengine reads when `interfaces-config` is set. A logical interface is a
   # name for a local address to answer offers with: rtpengine answers with the
   # address of the interface it picks, and that address is what the far end
@@ -49,19 +58,38 @@ media:
   #              an address the pod already has -- under Kubernetes that means
   #              the pod address, routable from inside the cluster and nowhere
   #              else.
+  #   vips       optional. One address per replica, in ordinal order, outside
+  #   vips6      the attachment's IPAM range: the address replica `i` answers
+  #              offers with instead of whatever the pod was handed. `address`
+  #              is then the device it goes on. Each replica also binds the
+  #              address of the replica it is standby for -- `(i + 1) mod
+  #              replicaCount`, the one whose calls it copies -- so a call it
+  #              takes over keeps the address the far end is sending to. The
+  #              interface becomes one logical interface per owner,
+  #              `<name>-<k>`, and every `direction=<name>` in `templates` is
+  #              rewritten per replica to its own, so the S-CSCF goes on
+  #              naming templates only.
   #
-  # Only media moves onto these interfaces. The ng control socket stays on
-  # 0.0.0.0 behind the ClusterIP Service the S-CSCF addresses, which is the one
-  # part of rtpengine that wants Kubernetes load balancing.
+  # Media moves onto these interfaces. The ng control socket listens on
+  # 0.0.0.0, and answers from the address it was addressed on. Without `vips`
+  # the S-CSCF reaches it through the ClusterIP Service; with them, on the
+  # first such interface's addresses, one rtpengine node per replica, over an
+  # attachment of its own to that interface's network -- a call's commands then
+  # follow its media address, which is what lets a standby that takes the
+  # address over answer for the call too. The S-CSCF has no other way to move
+  # an existing call to another node.
   interfaces:
 
     # The UE side. On by default, for the same reason as the P-CSCF's Gm: the
     # address rtpengine answers a UE's offer with has to be one the UE can
     # reach, and the pod address is not.
     #
-    # As with Gm, this does not by itself give an ordinal a media address it
-    # keeps across rescheduling, which is what HA-PLAN §5.5 needs for media to
-    # follow a takeover. It is the prerequisite for it, not the whole of it.
+    # The pool address alone is not one an ordinal keeps across
+    # rescheduling; `vips` is. Off by default because it takes a privileged
+    # init container -- ip_nonlocal_bind is outside Kubernetes' safe sysctls
+    # -- and two addresses per replica kept out of the pool, e.g. with
+    # `exclude: [10.30.0.240/28]` in the whereabouts ipam below and
+    # `vips: [10.30.0.241, 10.30.0.242]`.
   - name: internal
     address: media0
     network:
@@ -83,7 +111,7 @@ media:
   - name: external
     alias: internal
 
-# Signalling templates, rendered as rtpengine's `[templates]` section: a name,
+# Signalling templates, rendered as rtpengine's `[templates-<i>]` section: a name,
 # and the string of ng flags it stands for. A control message carrying
 # `template=<name>` is processed as if it had carried the flags.
 #

@@ -8,6 +8,9 @@ data:
     loglevel debug
     enable-debug-command yes
     hide-user-data-from-log no
+    {{- with .Values.notifyKeyspaceEvents }}
+    notify-keyspace-events {{ . }}
+    {{- end }}
 
     {{- if false }}
     masterauth {dynamically-substituted-dont-change-manually}

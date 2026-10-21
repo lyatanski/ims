@@ -207,6 +207,9 @@ jobs:
             interfaces:
             - name: internal
               address: media0
+              # one per replica, past the host-local rangeEnd below
+              vips: [10.30.0.251, 10.30.0.252]
+              vips6: [fd30::fb, fd30::fc]
               network:
                 enabled: true
                 name: media
