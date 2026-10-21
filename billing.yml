@@ -4,16 +4,29 @@ services:
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
+    - source: Rates.csv
+      target: /etc/cgrates/tp/Rates.csv
+    - source: Accounts.csv
+      target: /etc/cgrates/tp/Accounts.csv
     expose:
     - 3868/tcp
     - 2012/tcp
+    - 2080/tcp
 
+  # LoaderS reads the tariff plan (the *.csv configs below) into the engine's
+  # internal DB. It is told to once: a periodic run would put every balance
+  # back to its initial value, and an inotify one never sees files that were
+  # there before it started.
   preload:
-    image: python:alpine
-    command: python /opt/preload.py
-    configs:
-    - source: preload.py
-      target: /opt/preload.py
+    image: alpine
+    command:
+    - sh
+    - -c
+    - |
+      until wget -qO- --header 'Content-Type: application/json' \
+          --post-data '{"jsonrpc":"2.0","id":1,"method":"LoaderSv1.Run","params":[{"LoaderID":"*default"}]}' \
+          http://ocs:2080/jsonrpc | tee /dev/stderr | grep -q '"error":null'
+      do sleep 1; done
     depends_on:
       ocs:
         condition: service_started
@@ -22,7 +35,7 @@ services:
     profiles:
     - debug
     network_mode: service:ocs
-    command: -d any port 2012 or port 2014
+    command: -d any port 2012 or port 2014 or port 2080
     build:
       context: .
       dockerfile_inline: |
@@ -30,286 +43,272 @@ services:
         RUN apk add ngrep
         ENTRYPOINT ["ngrep"]
 
-
 configs:
   cgrates.json:
     content: |
       {
-          "general": {
-              "log_level": 7,
-          },
-          "data_db": {
-              "db_type": "*internal",
-          },
-          "stor_db": {
-              "db_type": "*internal",
+          "logger": {
+              "level": 7,
           },
           "listen": {
-              "rpc_json": ":2012",
-              //"rpc_gob": "",    // turn off 2013
+              "rpcJSON": ":2012",
+              "http": ":2080",
           },
-          "apiers": {
+          "db": {
+              "dbConns": {
+                  "*default": {
+                      "dbType": "*internal",
+                      // nothing to dump into: the image has no
+                      // /var/lib/cgrates, and the engine refuses to start
+                      // without it
+                      "opts": {
+                          "internalDBDumpInterval": "0s",
+                          "internalDBRewriteInterval": "0s",
+                      },
+                  },
+              },
+          },
+          "admins": {
               "enabled": true,
-              "caches_conns":["*localhost"],
+          },
+          "loaders": [
+              {
+                  "id": "*default",
+                  "enabled": true,
+                  "runDelay": "0",    // run by `preload`, through LoaderSv1.Run
+                  "lockfilePath": "/etc/cgrates/.cgr.lck",
+                  "tpInPath": "/etc/cgrates/tp",
+                  "tpOutPath": "",
+              },
+          ],
+          "rates": {
+              "enabled": true,
+          },
+          "accounts": {
+              "enabled": true,
+              // the account is picked by a *prefix filter, and with indexed
+              // selects one only matches over an indexed field
+              "prefixIndexedFields": ["*req.Account"],
+              "conns": {
+                  "*rates": [{ "connIDs": ["*internal"] }],
+              },
           },
           "sessions": {
               "enabled": true,
-              //"listen_bijson": "",    // turn off 2014
-              "chargers_conns": ["*localhost"],
-              "rals_conns": ["*localhost"],
-              "thresholds_conns": [],
+              "conns": {
+                  "*accounts": [{ "connIDs": ["*internal"] }],
+                  "*rates": [{ "connIDs": ["*internal"] }],
+                  "*ees": [{ "connIDs": ["*internal"] }],
+              },
           },
-          "rals": {
+          // one line per call in the log: what was charged for it
+          "ees": {
               "enabled": true,
-              "thresholds_conns": [],
-              "sessions_conns": ["*localhost"],
-          },
-          "schedulers": {
-              "enabled": true,
-          },
-          "chargers": {
-              "enabled": true,
-              "indexed_selects": false,
-          },
-          "thresholds": {
-              "enabled": false,
-              "store_interval": "-1",
-              "sessions_conns": ["*localhost"],
+              "exporters": [
+                  {
+                      "id": "usage_log",
+                      "type": "*log",
+                      "fields": [
+                          { "tag": "OriginID", "path": "*exp.OriginID", "type": "*variable", "value": "~*req.OriginID" },
+                          { "tag": "Account", "path": "*exp.Account", "type": "*variable", "value": "~*req.Account" },
+                          { "tag": "Destination", "path": "*exp.Destination", "type": "*variable", "value": "~*req.Destination" },
+                          { "tag": "Usage", "path": "*exp.Usage", "type": "*variable", "value": "~*opts.*accountsCost.Abstracts{*duration}" },
+                          { "tag": "Cost", "path": "*exp.Cost", "type": "*variable", "value": "~*opts.*accountsCost.Concretes" },
+                      ],
+                  },
+              ],
           },
           "templates": {
               "*ccr": [
-                  {
-                      "tag": "ToR", "path": "*cgreq.ToR",
-                      "type": "*constant", "value": "*voice",
-                  },
-                  {
-                      "tag": "Category", "path": "*cgreq.Category",
-                      "type": "*constant", "value": "call"
-                  },
-                  {
-                      "tag": "RequestType", "path": "*cgreq.RequestType",
-                      "type": "*constant", "value": "*prepaid",
-                  },
+                  { "tag": "ToR", "path": "*cgreq.ToR", "type": "*constant", "value": "*voice" },
+                  { "tag": "Category", "path": "*cgreq.Category", "type": "*constant", "value": "call" },
+                  { "tag": "RequestType", "path": "*cgreq.RequestType", "type": "*constant", "value": "*prepaid" },
                   {
                       "tag": "OriginID", "path": "*cgreq.OriginID",
                       "type": "*variable", "mandatory": true,
                       "value": "~*req.Session-Id",
                   },
+                  // SessionS keys the session on the option, not the field
+                  {
+                      "tag": "*originID", "path": "*opts.*originID",
+                      "type": "*variable", "mandatory": true,
+                      "value": "~*req.Session-Id",
+                  },
+                  {
+                      "tag": "OriginHost", "path": "*cgreq.OriginHost",
+                      "type": "*variable", "value": "~*vars.RemoteHost",
+                  },
+                  // sip:<number>@<domain> or tel:+<number> to the number
+                  {
+                      "tag": "Account", "path": "*cgreq.Account",
+                      "type": "*variable", "mandatory": true,
+                      "value": "~*req.Subscription-Id.Subscription-Id-Data:s/^(?:sip:|tel:)?\\+?([0-9]+).*/$${1}/",
+                  },
                   {
                       "tag": "Destination", "path": "*cgreq.Destination",
                       "type": "*variable", "mandatory": true,
-                      "value": "~*req.Service-Information.IMS-Information.Called-Party-Address",
+                      "value": "~*req.Service-Information.IMS-Information.Called-Party-Address:s/^(?:sip:|tel:)?\\+?([0-9]+).*/$${1}/",
                   },
+                  { "tag": "OptAccounts", "path": "*opts.*accounts", "type": "*constant", "value": "true" },
+              ],
+              "*cca": [
+                  { "tag": "SessionId", "path": "*rep.Session-Id", "type": "*variable", "value": "~*req.Session-Id", "mandatory": true },
+                  { "tag": "OriginHost", "path": "*rep.Origin-Host", "type": "*variable", "value": "~*vars.OriginHost", "mandatory": true },
+                  { "tag": "OriginRealm", "path": "*rep.Origin-Realm", "type": "*variable", "value": "~*vars.OriginRealm", "mandatory": true },
+                  { "tag": "AuthApplicationId", "path": "*rep.Auth-Application-Id", "type": "*variable", "value": "~*vars.*appid", "mandatory": true },
+                  { "tag": "CCRequestType", "path": "*rep.CC-Request-Type", "type": "*variable", "value": "~*req.CC-Request-Type", "mandatory": true },
+                  { "tag": "CCRequestNumber", "path": "*rep.CC-Request-Number", "type": "*variable", "value": "~*req.CC-Request-Number", "mandatory": true },
                   {
-                      "tag": "Account", "path": "*cgreq.Account",
-                      //"type": "*variable",
-                      //"value": "~*req.Service-Information.Subscription-Id.Subscription-Id-Data",
-                      "type": "*constant", "value": "Test",
+                      "tag": "ResultCode", "path": "*rep.Result-Code",
+                      "filters": ["*notempty:~*cgrep.Error:"],
+                      "type": "*constant", "value": "5030", "blocker": true,
                   },
+              ],
+              // after *cca: what the account can still pay for, up to what
+              // was asked. *cgrep.MaxUsage is keyed by run ID, and with no
+              // chargers there is the one, *primary. (The other agents also
+              // copy the smallest into *vars.MaxUsage; DiameterAgent doesn't.)
+              "*grant": [
                   {
-                      "tag": "Usage", "path": "*cgreq.Usage",
-                      "type": "*variable", //"mandatory": true,
-                      "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time:s/(.*)/$${1}s/",
+                      "tag": "ResultCode", "path": "*rep.Result-Code",
+                      "filters": ["*lte:~*cgrep.MaxUsage.*primary{*durationSeconds}:0"],
+                      "type": "*constant", "value": "4012", "blocker": true,
                   },
+                  { "tag": "ResultCode", "path": "*rep.Result-Code", "type": "*constant", "value": "2001" },
                   {
-                      "tag": "SubscriberID", "path": "*cgreq.SubscriberId",
-                      "type": "*variable", "mandatory": true,
-                      "value": "~*req.Subscription-Id.Subscription-Id-Data",
+                      "tag": "GrantedUnits",
+                      "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
+                      "type": "*variable", "value": "~*cgrep.MaxUsage.*primary{*durationSeconds}",
+                      "mandatory": true,
                   },
               ],
           },
-          "diameter_agent": {
+          // Prepaid without a reservation: a CCR asks AccountS how much of
+          // the Requested-Service-Unit the account can pay for and grants
+          // that, and the Used-Service-Unit of the next CCR is what gets
+          // debited. Debiting the request up front and refunding the unused
+          // part on CCR-T is what TS 32.299 describes, but the refund of a
+          // charge from a *concrete balance panics this engine (EventCharges
+          // Truncate, cgrates main as of 2026-10-19).
+          "diameterAgent": {
               "enabled": true,
-              "sessions_conns": ["*localhost"],
-              // v0.11 dev replaced the scalar "listen"/"listen_net" pair with
-              // this array, and an unknown key in a known section is dropped
-              // in silence
               "listeners": [
                   { "address": ":3868", "network": "tcp" },
               ],
-              "origin_host": "ocs.${REALM}",
-              "origin_realm": "${REALM}",
-              "request_processors": [
+              "conns": {
+                  "*sessions": [{ "connIDs": ["*internal"] }],
+              },
+              "originHost": "ocs.${REALM}",
+              "originRealm": "${REALM}",
+              "requestProcessors": [
+                  // the called party is not charged: grant what it asks for
+                  {
+                      "id": "VoiceTerminating",
+                      "filters": [
+                          "*string:~*vars.*cmd:CCR",
+                          "*notstring:~*req.Service-Information.IMS-Information.Role-Of-Node:0",
+                      ],
+                      "flags": ["*none"],
+                      "requestFields": [],
+                      "replyFields": [
+                          { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
+                          { "tag": "ResultCode", "path": "*rep.Result-Code", "type": "*constant", "value": "2001" },
+                          {
+                              "tag": "GrantedUnits",
+                              "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
+                              "type": "*variable",
+                              "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time",
+                              "filters": ["*exists:~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time:"],
+                          },
+                      ],
+                  },
                   {
                       "id": "VoiceInit",
-                      "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:1" ],
-                      "flags": [ "*initiate", "*accounts" ],
-                      "request_fields": [
+                      "filters": ["*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:1"],
+                      "flags": ["*sessions"],
+                      "requestFields": [
                           { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
-                      ],
-                      "reply_fields": [
-                          { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
+                          { "tag": "OptAuthorize", "path": "*opts.*authorize", "type": "*constant", "value": "true" },
                           {
-                              "tag": "GrantedUnits",
-                              "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
-                              "type": "*constant",
-                              "value": "30",
-                              "mandatory": true,
+                              "tag": "OptUsage", "path": "*opts.*usage", "type": "*variable", "mandatory": true,
+                              "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time:s/(.*)/$${1}s/",
                           },
-                      ]
-                  },
-                  {
-                      "id": "VoiceUpdate",
-                      "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:2" ],
-                      "flags": [ "*update", "*accounts" ],
-                      "request_fields": [
-                          { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
                       ],
-                      "reply_fields": [
+                      "replyFields": [
                           { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
-                          {
-                              "tag": "GrantedUnits",
-                              "path": "*rep.Multiple-Services-Credit-Control.Granted-Service-Unit.CC-Time",
-                              "type": "*constant",
-                              "value": "30",
-                              "mandatory": true,
-                          },
-                      ]
+                          { "tag": "Grant", "type": "*template", "value": "*grant" },
+                      ],
                   },
+                  // CCR-U: debit what was used, then grant the next slice
                   {
-                      "id": "VoiceTerm",
-                      "filters": [ "*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:3" ],
-                      "flags": [ "*terminate", "*accounts" ],
-                      "request_fields": [
+                      "id": "VoiceUpdateDebit",
+                      "filters": ["*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:2"],
+                      "flags": ["*sessions", "*continue"],
+                      "requestFields": [
                           { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
+                          { "tag": "OptSession", "path": "*opts.*session", "type": "*constant", "value": "true" },
+                          { "tag": "OptDebit", "path": "*opts.*debit", "type": "*constant", "value": "true" },
                           {
-                              "tag": "Usage", "path": "*cgreq.Usage",
-                              "type": "*variable", //"mandatory": true,
+                              "tag": "OptUsage", "path": "*opts.*usage", "type": "*variable", "mandatory": true,
                               "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time:s/(.*)/$${1}s/",
                           },
                       ],
-                      "reply_fields": [
-                          { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
-                      ]
+                      "replyFields": [],
                   },
-              ]
-          }
+                  {
+                      "id": "VoiceUpdateGrant",
+                      "filters": ["*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:2"],
+                      "flags": ["*sessions"],
+                      "requestFields": [
+                          { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
+                          // the processors of one message share their opts:
+                          // without these the grant is debited as well
+                          { "tag": "OptSession", "path": "*opts.*session", "type": "*constant", "value": "false" },
+                          { "tag": "OptDebit", "path": "*opts.*debit", "type": "*constant", "value": "false" },
+                          { "tag": "OptAuthorize", "path": "*opts.*authorize", "type": "*constant", "value": "true" },
+                          {
+                              "tag": "OptUsage", "path": "*opts.*usage", "type": "*variable", "mandatory": true,
+                              "value": "~*req.Multiple-Services-Credit-Control.Requested-Service-Unit.CC-Time:s/(.*)/$${1}s/",
+                          },
+                      ],
+                      "replyFields": [
+                          { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
+                          { "tag": "Grant", "type": "*template", "value": "*grant" },
+                      ],
+                  },
+                  {
+                      "id": "VoiceTerm",
+                      "filters": ["*string:~*vars.*cmd:CCR", "*string:~*req.CC-Request-Type:3"],
+                      "flags": ["*sessions"],
+                      "requestFields": [
+                          { "tag": "CCRTemplate", "type": "*template", "value": "*ccr" },
+                          { "tag": "OptSession", "path": "*opts.*session", "type": "*constant", "value": "true" },
+                          { "tag": "OptDebit", "path": "*opts.*debit", "type": "*constant", "value": "true" },
+                          { "tag": "OptTerminate", "path": "*opts.*terminate", "type": "*constant", "value": "true" },
+                          { "tag": "OptEEs", "path": "*opts.*ees", "type": "*constant", "value": "true" },
+                          {
+                              "tag": "OptUsage", "path": "*opts.*usage", "type": "*variable", "mandatory": true,
+                              "value": "~*req.Multiple-Services-Credit-Control.Used-Service-Unit.CC-Time:s/(.*)/$${1}s/",
+                          },
+                      ],
+                      "replyFields": [
+                          { "tag": "CCATemplate", "type": "*template", "value": "*cca" },
+                          { "tag": "ResultCode", "path": "*rep.Result-Code", "type": "*constant", "value": "2001" },
+                      ],
+                  },
+              ],
+          },
       }
 
-  preload.py:
+  # The tariff plan LoaderS reads. Every subscriber shares account IMS: five
+  # free minutes, then 0.22 a minute billed by the second out of 10.00.
+  Rates.csv:
     content: |
-      import json, socket, itertools
+      #Tenant,ID,FilterIDs,Weights,MinCost,MaxCost,MaxCostStrategy,RateID,RateFilterIDs,RateActivationStart,RateWeights,RateBlocker,RateIntervalStart,RateFixedFee,RateRecurrentFee,RateUnit,RateIncrement
+      cgrates.org,RP_VOICE,*string:~*req.ToR:*voice,;0,0,0,*free,RT_ANY,,"* * * * *",;0,false,0s,0,0.22,1m,1s
 
-      class JSONClient(object):
-
-          def __init__(self, addr):
-              self._socket = socket.create_connection(addr)
-              self._id_iter = -1
-
-          def _message(self, name, *params):
-              self._id_iter += 1
-              return dict(id=self._id_iter,
-                          params=list(params),
-                          method=name)
-
-          def call(self, name, *params):
-              request = self._message(name, *params)
-              msg = json.dumps(request)
-              self._socket.sendall(msg.encode())
-
-              response = self._socket.recv(4096)
-              response = json.loads(response.decode())
-
-              if response['id'] != request['id']:
-                  raise Exception(f"id expected:{request['id']}, received:{response['id']}")
-
-              if response.get('error') is not None:
-                  raise Exception(response.get('error'))
-
-              print(name, response.get('result'))
-              return response.get('result')
-
-          def close(self):
-              self._socket.close()
-
-
-      rpc =JSONClient(("ocs", 2012))
-
-      #rpc.call("ApierV2.Ping", {'Tenant':'cgrates.org'})
-      rpc.call("ApierV2.SetTPDestination", {
-          "TPid": "cgrates.org",
-          "ID": "DST_TEST",
-          "Prefixes": ["614"]
-      })
-      rpc.call("ApierV2.SetTPRate", {
-          "TPid":"cgrates.org",
-          "ID":"RT_TEST",
-          "RateSlots":[
-              {"ConnectFee":0,"Rate":22,"RateUnit":"60s","RateIncrement":"60s","GroupIntervalStart":"0s"}
-          ]
-      })
-      rpc.call("ApierV2.SetTPDestinationRate", {
-          "TPid": "cgrates.org",
-          "ID": "DR_TEST",
-          "DestinationRates": [
-              {
-                  "DestinationId": "DST_TEST",
-                  "RateId": "RT_TEST",
-                  "Rate": None,
-                  "RoundingMethod": "*up",
-                  "RoundingDecimals": 4,
-                  "MaxCost": 0,
-                  "MaxCostStrategy": ""
-              }
-          ]
-      })
-      rpc.call("ApierV2.SetTPRatingPlan", {
-          "TPid": "cgrates.org",
-          "ID": "RatingPlan_VoiceCalls",
-          "RatingPlanBindings": [
-              {
-                  "DestinationRatesId": "DR_TEST",
-                  "TimingId": "*any",
-                  "Weight": 10
-              }
-          ]
-      })
-      rpc.call("ApierV2.LoadTariffPlanFromStorDb", {
-          "TPid": "cgrates.org",
-          "DryRun": False,
-          "Validate": True,
-          "APIOpts": None,
-          "Caching": None
-      })
-      rpc.call("ApierV2.SetRatingProfile", {
-          "TPid": "RP_TEST",
-          "Overwrite": True,
-          "LoadId" : "APItest",
-          "Tenant": "cgrates.org",
-          "Category": "call",
-          "Subject": "*any",
-          "RatingPlanActivations": [
-              {
-                  "ActivationTime": "2014-01-14T00:00:00Z",
-                  "RatingPlanId": "RatingPlan_VoiceCalls",
-                  "FallbackSubjects": ""
-              }
-          ]
-      })
-      rpc.call("ApierV2.SetChargerProfile", {
-          "Tenant": "cgrates.org",
-          "ID": "DEFAULT",
-          'FilterIDs': [],
-          'AttributeIDs' : ['*none'],
-          'Weight': 0,
-      })
-      rpc.call("ApierV2.SetAccount", {
-          "Tenant": "cgrates.org",
-          "Account": "Test"
-      })
-      rpc.call("ApierV2.SetBalance", {
-          "Tenant": "cgrates.org",
-          "Account": "Test",
-          "BalanceType": "*voice",
-          "Categories": "*any",
-          "Balance": {
-              "ID": "5minute",
-              "Value": "5m",
-              "Weight": 25
-          }
-      })
-      rpc.call("ApierV2.GetAccount",{
-          'Tenant': 'cgrates.org',
-          'Account': 'Test'
-      })
-
+  Accounts.csv:
+    content: |
+      #Tenant,ID,FilterIDs,Weights,Blockers,Opts,BalanceID,BalanceFilterIDs,BalanceWeights,BalanceBlockers,BalanceType,BalanceUnits,BalanceUnitFactors,BalanceOpts,BalanceCostIncrements,BalanceAttributeIDs,BalanceRateProfileIDs,ThresholdIDs
+      cgrates.org,IMS,*prefix:~*req.Account:${DIAL}|${MCC}${MNC},;10,,,VOICE_5M,*string:~*req.ToR:*voice,;20,,*abstract,5m,,,;1s;0;0,,,*none
+      cgrates.org,IMS,,,,,MONETARY,,;10,,*concrete,10,,,;1s;;,,RP_VOICE,
