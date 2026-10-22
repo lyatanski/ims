@@ -107,7 +107,9 @@ services:
       REALM: ${REALM}
       ICI: ${ICI}
       ICINET: ${NETICI}
-      RTPADR: udp:trgw:9910
+      # By address: the name resolves to the IPv6 one first, and the ng
+      # socket is on RTPv4 only
+      RTPADR: udp:${RTPv4}:9910
       ECSCF: sip:ecscf.ims.${REALM}
       # Which peers.list set a destination goes to: the peer network's
       # domain, and the number range behind it
@@ -143,8 +145,8 @@ services:
 
   # The IBCF's TrGW (TS 23.228 Annex I), rtpengine: `internal` faces the
   # network, `external` the peers. Named devices, as rtpengine binds an
-  # interface by name, and a static Mx address because the ng socket listens
-  # on that one only -- not on Ici, where the peers are
+  # interface by name, and a static Mx address because the ng socket and the
+  # HTTP port listen on that one only -- not on Ici, where the peers are
   trgw:
     image: ghcr.io/lyatanski/rtpengine
     command: --no-log-timestamps 
@@ -162,7 +164,7 @@ services:
         interface_name: ici0
         ipv4_address: ${ICIRTP}
     healthcheck:
-      test: wget -qO- 127.0.0.1:9090/ping
+      test: wget -qO- ${RTPv4}:9090/ping
       retries: 60
       interval: 5s
       start_period: 5s
@@ -339,7 +341,8 @@ configs:
       [rtpengine]
       log-level = 7
       table = -1
-      listen-http = 0.0.0.0:9090
+      # Both on Mx only: POST /ng-plain on the HTTP port is ng as well
+      listen-http = ${RTPv4}:9090
       listen-ng = ${RTPv4}:9910
       interfaces-config = interface
       templates = templates

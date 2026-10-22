@@ -30,9 +30,9 @@ media:
   # Nothing in this list decides which interface a given call gets. That is
   # `templates` below, selected per call by the control client -- see it.
   #
-  # The client is the IBCF, rtpengine being its TrGW (TS 23.228 Annex I). The
-  # S-CSCF no longer anchors media, and this chart has no IBCF yet, so until
-  # it does nothing here carries a call.
+  # The client is the IBCF, rtpengine being its TrGW (TS 23.228 Annex I):
+  # `internal` faces the network, `external` the peers on Ici. The S-CSCF no
+  # longer anchors media, so with the IBCF off nothing here carries a call.
   #
   # Order matters: the first entry is rtpengine's default interface, the one a
   # control message that names no direction lands on.
@@ -74,14 +74,15 @@ media:
   #              rewritten per replica to its own, so the client goes on
   #              naming templates only.
   #
-  # Media moves onto these interfaces. The ng control socket listens on
-  # 0.0.0.0, and answers from the address it was addressed on. Without `vips`
-  # the client reaches it through the ClusterIP Service; with them, on the
-  # first such interface's addresses, one rtpengine node per replica, over an
-  # attachment of its own to that interface's network -- a call's commands then
-  # follow its media address, which is what lets a standby that takes the
-  # address over answer for the call too. The client has no other way to move
-  # an existing call to another node.
+  # Media moves onto these interfaces; control stays off them. Without `vips`
+  # the client reaches the ng socket through the ClusterIP Service, and it is
+  # bound to the pod address. With them it is bound to the first such
+  # interface's addresses, one rtpengine node per replica, and the client is
+  # given an attachment of its own to that interface's network -- a call's
+  # commands then follow its media address, which is what lets a standby that
+  # takes the address over answer for the call too. The client has no other
+  # way to move an existing call to another node. Either way nothing on an
+  # interface facing elsewhere (`external` on Ici) answers ng, UDP or HTTP.
   interfaces:
 
     # The UE side. On by default, for the same reason as the P-CSCF's Gm: the
@@ -123,10 +124,20 @@ media:
 #   outgoing   an offer from inside on its way out, as the IBCF names it for
 #              a call leaving the network
 #   incoming   an offer from outside on its way in
+#
+# strict-source: once latched, a stream is only taken from that source.
+# replace-origin: the o= line names the TrGW too, not the side behind it.
 templates:
   internal: direction=internal direction=internal
-  outgoing: direction=internal direction=external
-  incoming: direction=external direction=internal
+  outgoing: direction=internal direction=external strict-source replace-origin
+  incoming: direction=external direction=internal strict-source replace-origin
+
+# Where rtpengine reports a call whose media stopped (its `timeout`, 60 s):
+# an XMLRPC URL, `%%` standing for the address the call's offer came from.
+# The IBCF's is http://%%:9090/RPC2, and it ends such a call towards both
+# sides (dlg.terminate_dlg, xmlrpc-format 2). Empty: rtpengine drops the call
+# on its own and no one is told.
+b2bUrl: ""
 
 image:
   repository: ghcr.io/lyatanski/rtpengine

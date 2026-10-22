@@ -20,11 +20,22 @@ data:
     {{- $per := include "rtpengine.vip.names" . | fromJsonArray }}
     {{- range $i := until $n }}
     {{- $own := add $off $i }}
-    [{{ include "rtpengine.name" $ }}-{{ $i }}]
+    {{- $pod := printf "%s-%d" (include "rtpengine.name" $) $i }}
+    [{{ $pod }}]
     log-level = {{ $.Values.logLevel }}
     table = -1
-    listen-http = 0.0.0.0:{{ $.Values.monitor.port }}
-    listen-ng = 0.0.0.0:{{ $.Values.service.port }}
+    {{- /*
+    This replica's own addresses, not 0.0.0.0: an interface on another
+    network (the TrGW's on Ici) would otherwise take ng commands from it, over
+    UDP and over HTTP alike (POST /ng-plain). The pod name is the pod address
+    (/etc/hosts), which is what the probes and the Service reach.
+    */}}
+    listen-http = {{ $pod }}:{{ $.Values.monitor.port }}
+    listen-ng = {{ include "rtpengine.ng.listen" (dict "root" $ "i" $i) }}
+    {{- with $.Values.b2bUrl }}
+    b2b-url = {{ . }}
+    xmlrpc-format = 2
+    {{- end }}
     interfaces-config = interface-{{ $i }}
     {{- if $.Values.templates }}
     templates = templates-{{ $i }}

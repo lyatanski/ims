@@ -166,11 +166,17 @@ jobs:
     # and with no gateway to take from it the bridge's own address is the
     # subnet's first, 10.20.0.1. The `null`s drop macvlan's keys, which Helm's
     # map merge would otherwise keep beside these. rtpengine's interfaces are a
-    # list, which Helm replaces whole, so `external` is restated and no `null`s
-    # are needed there.
+    # list, which Helm replaces whole, so both are given in full and no
+    # `null`s are needed there. `external` is the TrGW's side of Ici, on the
+    # IBCF's bridge, its vips past rangeEnd like media's.
     #
     # The default `gm.addresses` is what makes the P-CSCF .10 -- move it
     # together with ims.pcscf above.
+    #
+    # The IBCF is on, with one peer that nothing plays: its Ready only needs
+    # the peer loaded. The test that plays it (test.border) needs a pro2call
+    # with ibcf_peer.lua, which the published one is not yet; kind.sh runs it
+    # against a local build.
     - name: Install IMS
       run: |
         helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m -f - <<'EOF'
@@ -185,11 +191,27 @@ jobs:
             isGateway: true
             master: null
             mode: null
+        ici:
+          config:
+            cniVersion: 0.3.1
+            type: bridge
+            bridge: ici0
+            master: null
+            mode: null
         global:
           ue:
             via: 10.20.0.1
             via6: fd20::1
         cscf:
+          border:
+            enabled: true
+            peers:
+            - name: peer
+              entry: [sip:10.40.0.30:5060]
+              routes: [ims.mnc099.mcc001.3gppnetwork.org, "+999"]
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 1, memory: 256Mi}
           proxy:
             resources:
               requests: {cpu: 50m, memory: 64Mi}
@@ -235,7 +257,23 @@ jobs:
                     - dst: fd10:10::/48
                       gw: fd30::1
             - name: external
-              alias: internal
+              address: ici0
+              vips: [10.40.0.251, 10.40.0.252]
+              network:
+                enabled: true
+                name: ici
+                config:
+                  cniVersion: 0.3.1
+                  type: bridge
+                  bridge: ici0
+                  isGateway: true
+                  ipam:
+                    type: host-local
+                    ranges:
+                    - - subnet: 10.40.0.0/24
+                        gateway: 10.40.0.1
+                        rangeStart: 10.40.0.100
+                        rangeEnd: 10.40.0.250
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 2, memory: 512Mi}

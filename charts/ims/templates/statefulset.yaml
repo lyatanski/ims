@@ -112,7 +112,15 @@ spec:
         - name: ENUM
           value: {{ tpl . $ | quote }}
         {{- end }}
-        {{- with .Values.trunk }}
+        {{- $ibcf := "" }}
+        {{- if .Values.cscf.border.enabled }}
+        # The exit point for other networks' domains, and with no trunk of
+        # its own the BGCF next hop as well
+        {{- $ibcf = printf "sip:ibcf.%s" (include "ims.realm.ims" .) }}
+        - name: IBCF
+          value: {{ $ibcf | quote }}
+        {{- end }}
+        {{- with .Values.trunk | default $ibcf }}
         - name: TRUNK
           value: {{ tpl . $ | quote }}
         {{- end }}

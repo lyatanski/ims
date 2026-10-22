@@ -18,7 +18,8 @@ dialplan:
   idd: "00"
   ndd: "0"
 
-# BGCF next hop (TS 23.228 4.3.4) for a number the ENUM tree does not claim
+# BGCF next hop (TS 23.228 4.3.4) for a number the ENUM tree does not claim.
+# Empty with cscf.border on: the IBCF, which routes it by its peers' `routes`.
 trunk: ""
 
 # Under `global` because Helm passes that -- and only that -- down to the
@@ -50,6 +51,26 @@ gm:
   addresses:
   - 10.20.0.10/24
   addresses6: []
+  config:
+    cniVersion: 0.3.1
+    type: macvlan
+    master: eth0
+    mode: bridge
+    capabilities:
+      ips: true
+    ipam:
+      type: static
+
+# Ici, the interconnect (TS 23.228 Annex K) the IBCF meets the peers on, used
+# with cscf.border only. One IBCF per entry, `<release>-ibcf-<index>`, each
+# keeping its address across restarts and rescheduling -- the address the
+# peers' own configuration names. IPv4, and the prefix length is required: it
+# is also what tells the IBCF which sources are on Ici.
+ici:
+  # The device name inside the pod.
+  interface: ici0
+  addresses:
+  - 10.40.0.10/24
   config:
     cniVersion: 0.3.1
     type: macvlan
@@ -103,6 +124,21 @@ test:
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: 2, memory: 1Gi}
+  # The interconnect check, a helm test of its own: pro2call's ibcf_peer.lua
+  # as the peer network on Ici and an S-CSCF on the pod network, driving the
+  # IBCF from both sides. Needs cscf.border, a test.image that carries the
+  # script, this `address` among a peer's `entry` and `+<dial>` among its
+  # `routes`, and rtpengine `vips` on `internal` and `external` -- the TrGW
+  # addresses the SDP has to name, one pair per replica.
+  border:
+    enabled: false
+    # The peer's Ici address, on the first IBCF's attachment
+    address: 10.40.0.30/24
+    # The peer network's E.164 country code
+    dial: "999"
+    # rtpengine's `timeout`, how long a call without media lasts; 0 skips
+    # the check that waits it out
+    mediaTimeout: 60
 
 podAnnotations: {}
 
@@ -152,6 +188,37 @@ cscf:
       requests: {cpu: 50m, memory: 64Mi}
       limits: {cpu: 1, memory: 256Mi}
 
+  # IBCF (cscf/border.cfg): the entry and exit point on Ici, with rtpengine
+  # as its TrGW, and the S-CSCF's next hop for other networks' domains and,
+  # unless `trunk` says otherwise, off-net numbers. Off by default, as there
+  # is nothing for it to do without an interconnect agreement. On, it needs
+  # a peer, the `ici` attachment, and rtpengine's `external` interface where
+  # the peers can reach it -- on Ici, through an attachment of its own (the
+  # rtpengine chart's media.interfaces).
+  border:
+    enabled: false
+    # The peer networks, one dispatcher set each in this order; the IBCF is
+    # Ready once the first is loaded.
+    #   name    for the logs and the CDRs
+    #   trust   inside this network's trust domain (TS 24.229 4.4), which
+    #           keeps P-Asserted-Identity, the charging headers and the like
+    #           in both directions
+    #   entry   its entry points, SIP URIs by address, tried in this order. A
+    #           request on Ici is taken only from one of these addresses
+    #   routes  what goes to it: Request-URI domains, E.164 prefixes ("+44"),
+    #           or "*" for anything else; the longest matching prefix wins
+    peers: []
+    # - name: peer
+    #   trust: false
+    #   entry: [sip:10.40.0.30:5060]
+    #   routes: [ims.mnc099.mcc001.3gppnetwork.org, "+999"]
+    # The topology hiding key, which every IBCF has to share. Empty: one is
+    # generated at install and kept in a Secret across upgrades.
+    thkey: ""
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 1, memory: 256Mi}
+
 sidecar:
   resources:
     requests: {cpu: 10m, memory: 16Mi}
@@ -170,6 +237,10 @@ affinity: {}
 dra:
   enabled: false
 
+rtpengine:
+  # The IBCF ends a call whose media stopped (cscf/border.cfg route[XMLRPC])
+  b2bUrl: http://%%:9090/RPC2
+
 dns:
   service:
     spec:
@@ -186,7 +257,7 @@ dns:
     - name: template
       parameters: IN SRV
       configBlock: |-
-        match "(?P<name>.cscf|tas)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
+        match "(?P<name>.cscf|ibcf|tas)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org"
         answer "{{`{{ .Name }}`}} 30 SRV 0 0 5060 {{ .Release.Name }}-{{`{{ or .Group.name \"icscf\" }}`}}.{{ .Release.Namespace }}.svc.cluster.local"
         fallthrough
     # ENUM (RFC 6116)

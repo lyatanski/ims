@@ -261,6 +261,42 @@ prerequisite for HA-PLAN Tier 1's takeover, not the whole of it.
 S-CSCF to PSTN connectivity. When S-CSCF is sending packet it will be sent by default from the worker node host IP. When receiving response on the same IP, Service type NodePort on the 5060 port is required. This is a problem as this requires system k8s reconfiguration as the port is not allowed by default for this Service type allocation.
 
 
+## IBCF
+
+`cscf.border` (off by default) runs `images/kamailio/cscf/border.cfg`, the
+entry and exit point on Ici, with rtpengine as its TrGW:
+
+- **Ici** is an attachment of its own, `ici` in the values, the Gm pattern
+  again: one single-replica StatefulSet per `ici.addresses` entry,
+  `<release>-ibcf-<i>`. The cfg binds the address by value, and it is the one
+  the peers' configuration names, so each pod has to know it at start.
+  `ICINET` is that address with its prefix, which is how the IBCF tells
+  sources on Ici from the rest (metrics, rtpengine's teardown RPC).
+- **Mx** is the pod network: the Service `<release>-ibcf` is what
+  `ibcf.ims.<realm>` resolves to (the CoreDNS SRV template has to list
+  `ibcf`, or the name falls through to the I-CSCF). With the IBCF on, the
+  S-CSCF gets `IBCF`, and `TRUNK` too unless `trunk` names another.
+- **Peers** are `cscf.border.peers`, rendered as dispatcher's `peers.list`
+  (one set each, `entry` order as priority) and `ROUTES`. Ready means the
+  first set loaded. The topology hiding key is a Secret, generated once and
+  kept across upgrades.
+- **The TrGW** is rtpengine's `external` interface, which has to be where the
+  peers can reach it: on Ici, through an attachment of its own to the same
+  network (`bridge`/`master`), with an IPAM range clear of the IBCF and peer
+  addresses. The IBCF reaches the ng socket the way any client does, Service
+  or control VIPs, and `b2bUrl` points rtpengine's media timeout back at the
+  IBCF (`dlg.terminate_dlg`).
+
+`test.border` is a helm test of its own: pro2call's `ibcf_peer.lua`, the
+check `border.sh` runs under compose, as the peer on Ici and an S-CSCF on the
+pod network. It needs a pro2call that carries the script, the published one
+does not yet, so `kind.sh` runs it only when `$PRO2CALL` has it and CI leaves
+it off. In KinD two things are test plumbing rather than the chart: the
+rtpengine Ici attachment's `isGateway`, which gives the node an address on
+the Ici bridge so the stand-in S-CSCF on the pod network can reach Ici at
+all, and a loose `rp_filter` on the node, as the IBCF and the TrGW answer it
+from their Ici and media addresses over their pods' eth0.
+
 ## rtpengine
 The same challenges as the Proxy-CSCF apply. [whereabouts](https://github.com/k8snetworkplumbingwg/whereabouts) with host device/macvlan could be utilised as the IP in the SDP is assigned by the rtpengine when offer/answer is forwarded to it. IP allocation pool could be used for these cases.
 
@@ -328,8 +364,9 @@ The client is the IBCF, rtpengine being its TrGW (TS 23.228 Annex I): it names
 the template on a call's initial offer by the side the offer came from
 (`images/kamailio/cscf/border.cfg`, `route[ENTRY]` and `route[EXIT]`). The
 S-CSCF anchored every call here until it was moved, which put the TrGW in the
-wrong place and on-net media through a relay it does not need. The chart has
-no IBCF yet, so for now nothing in it sends rtpengine a call.
+wrong place and on-net media through a relay it does not need. With
+`cscf.border` off nothing in the chart sends rtpengine a call; see
+[IBCF](#ibcf) for what `external` has to be for it.
 
 Measured against the daemon (26.3) with a rendered config, one advertised
 address on `external` to make the choice visible:
@@ -405,9 +442,14 @@ device, with an unsolicited ARP for the MAC the previous pod left behind.
 The ng control address follows: kamailio's rtpengine module keeps a call on
 the node it was hashed to and never moves an existing call elsewhere, so
 `RTPADR` becomes one node per replica on the control interface's VIP, and the
-client has to be attached to that interface's network to reach it. rtpengine answers
-from the address a command arrived on, so `listen-ng = 0.0.0.0` already
-serves a VIP that has moved.
+client has to be attached to that interface's network to reach it. Each
+replica's `listen-ng` binds its own control VIP and its standby peer's, the
+latter before it is on the pod (`ip_nonlocal_bind` again), so a VIP that has
+moved is answered from where it now is. Without vips it binds the pod address
+the Service leads to. It used to be `0.0.0.0`, which is how the table below
+was measured; that also answered ng on every other interface, the TrGW's
+on Ici included, and the HTTP port (`listen-http`, now the pod address too)
+takes ng as well, at `POST /ng-plain`.
 
 Nothing here moves an address yet. Measured with the rendered config in docker,
 the address moved by hand (`ip addr add` + `arping -U` in the standby's netns)

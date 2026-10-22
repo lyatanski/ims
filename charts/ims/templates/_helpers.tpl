@@ -191,10 +191,10 @@ it, and this one is the easier of the two to miss: the CNI network name is what
 host-local keys its allocations on -- /var/lib/cni/networks/<name> -- so two
 releases sharing it hand out addresses from one pool into two subnets.
 
-Call with the root context.
+Call with (dict "root" $ "name" <gm|ici> "config" <its config>).
 */}}
 {{- define "ims.network.config" -}}
-{{- toJson (merge (deepCopy .Values.gm.config) (dict "name" (printf "%s-gm" .Release.Name))) -}}
+{{- toJson (merge (deepCopy .config) (dict "name" (printf "%s-%s" .root.Release.Name .name))) -}}
 {{- end }}
 
 {{/*

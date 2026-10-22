@@ -230,6 +230,34 @@ udp:{{ include "rtpengine.name" . }}:{{ $port }}
 {{- end }}
 
 {{/*
+What replica `i`'s ng socket binds, as rtpengine's `listen-ng` list: the pod
+address behind the Service, or with `vips` the control interface's addresses
+of this replica and of the one it is standby for. The standby's are not on
+the pod until it takes them over; ip_nonlocal_bind (vip.sh) lets it bind them
+beforehand, and its answers then leave from the address the command came to.
+
+Call with (dict "root" $ "i" <ordinal>).
+*/}}
+{{- define "rtpengine.ng.listen" -}}
+{{- $root := .root -}}
+{{- $n := int $root.Values.replicaCount -}}
+{{- $port := $root.Values.service.port -}}
+{{- $ctl := include "rtpengine.vip.control" $root | fromJson -}}
+{{- if $ctl -}}
+{{- $owners := uniq (list (int .i) (int (mod (add1 .i) $n))) -}}
+{{- $binds := list -}}
+{{- range $k := $owners -}}
+{{- with $ctl.vips }}{{ $binds = append $binds (printf "%s:%v" (index . $k) $port) }}{{ end -}}
+{{- with $ctl.vips6 }}{{ $binds = append $binds (printf "[%s]:%v" (index . $k) $port) }}{{ end -}}
+{{- end -}}
+{{- /* `;` and no space: rtpengine takes the space as part of the next address */ -}}
+{{- join ";" $binds -}}
+{{- else -}}
+{{- printf "%s-%d:%v" (include "rtpengine.name" $root) (int .i) $port -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 The `k8s.v1.cni.cncf.io/networks` entry a client of the ng socket needs to
 reach the control addresses -- the control interface's attachment, on a device
 of the same name -- or nothing when the control socket is behind the Service.
