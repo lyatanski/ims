@@ -278,7 +278,7 @@ Determined address 10.30.0.5 for interface 'media0'
 ```
 
 Only media moves. Without `vips` (below) the ng control socket stays on
-`0.0.0.0` behind the ClusterIP Service the S-CSCF addresses. Without an attachment the interface binds whatever
+`0.0.0.0` behind the ClusterIP Service its client addresses. Without an attachment the interface binds whatever
 its `address` names on the pod itself — `any` being every address it has, which
 under Kubernetes is the pod address.
 
@@ -313,22 +313,23 @@ the trunk are not answered with the same address. rtpengine calls these
 *logical interfaces*, renders them as `[interface-<i>-<name>]` sections (one set per replica), and picks
 one per side of a call from `direction=`.
 
-Naming them at every `rtpengine_manage()` in the S-CSCF would put media policy
-in the dial plan, so the chart puts it in `templates` instead — rtpengine's own
-`[templates-<i>]` section, a name for a string of ng flags. The S-CSCF then sends
-only the name:
+Naming them at every `rtpengine_manage()` would put media policy in the
+routing script, so the chart puts it in `templates` instead — rtpengine's own
+`[templates-<i>]` section, a name for a string of ng flags. The client then
+sends only the name:
 
-| call | template | interfaces (offerer → answerer) |
+| offer | template | interfaces (offerer → answerer) |
 | --- | --- | --- |
-| UE to UE | `internal` | internal → internal |
-| UE to the trunk | `outgoing` | internal → external |
-| trunk to a UE | `incoming` | external → internal |
+| both legs inside | `internal` | internal → internal |
+| from inside, on its way out | `outgoing` | internal → external |
+| from outside, on its way in | `incoming` | external → internal |
 
-`images/kamailio/cscf/serving.cfg` chooses in `route[E164]`, which is where the
-breakout decision is already made, and hands the name over in `route[MORIG]`.
-An incoming call is anchored on its terminating leg instead, and only where a
-trunk is configured — see `route[MTERM]` for why anchoring an on-net call there
-as well would loop its media back on itself.
+The client is the IBCF, rtpengine being its TrGW (TS 23.228 Annex I): it names
+the template on a call's initial offer by the side the offer came from
+(`images/kamailio/cscf/border.cfg`, `route[ENTRY]` and `route[EXIT]`). The
+S-CSCF anchored every call here until it was moved, which put the TrGW in the
+wrong place and on-net media through a relay it does not need. The chart has
+no IBCF yet, so for now nothing in it sends rtpengine a call.
 
 Measured against the daemon (26.3) with a rendered config, one advertised
 address on `external` to make the choice visible:
@@ -395,7 +396,7 @@ the attachment's IPAM range — answers offers from that address rather than
 the pool's, and becomes one logical interface per owner, `<name>-<k>`. Each
 replica configures two of them: its own first, which makes it its default,
 and the one of the replica it is standby for. Every `direction=<name>` in
-`templates` is rewritten per replica (`[templates-<i>]`), so the S-CSCF still
+`templates` is rewritten per replica (`[templates-<i>]`), so the client still
 names only `internal`/`outgoing`/`incoming`. A privileged init container
 (`vip.sh` in the ConfigMap) sets `ip_nonlocal_bind` — the standby binds the
 peer's address before it has it — and puts the replica's own address on the
@@ -404,7 +405,7 @@ device, with an unsolicited ARP for the MAC the previous pod left behind.
 The ng control address follows: kamailio's rtpengine module keeps a call on
 the node it was hashed to and never moves an existing call elsewhere, so
 `RTPADR` becomes one node per replica on the control interface's VIP, and the
-S-CSCF is attached to that interface's network to reach it. rtpengine answers
+client has to be attached to that interface's network to reach it. rtpengine answers
 from the address a command arrived on, so `listen-ng = 0.0.0.0` already
 serves a VIP that has moved.
 

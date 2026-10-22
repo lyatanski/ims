@@ -43,6 +43,7 @@ RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
             dispatcher htable \
             rtpengine \
             userblocklist acc \
+            topoh dialog uac pike xmlrpc ipops \
             http_client nghttp2" \
     && cmake --build /out --target install
 
@@ -64,7 +65,6 @@ RUN --mount=type=bind,from=build,source=/kamailio/utils/kamctl/db_redis/kamailio
     && cp /dbmap/dialog_in /dbmap/dialog_out /dbmap/dialog_vars /etc/cscf/schema/serving \
     && cp /dbmap/contact /dbmap/impu /dbmap/impu_contact /dbmap/subscriber_scscf /dbmap/impu_subscriber /etc/cscf/schema/serving \
     && cp /dbmap/ro_session /etc/cscf/schema/serving \
-    && cp /dbmap/rtpengine /etc/cscf/schema/serving \
     && mkdir -p /etc/as/schema/telephony \
     && cp /dbmap/userblocklist /etc/as/schema/telephony/ocb \
     && cp /dbmap/userblocklist /etc/as/schema/telephony/icb \

@@ -28,7 +28,11 @@ media:
   # whole reason there is more than one entry here.
   #
   # Nothing in this list decides which interface a given call gets. That is
-  # `templates` below, selected per call by the S-CSCF -- see it.
+  # `templates` below, selected per call by the control client -- see it.
+  #
+  # The client is the IBCF, rtpengine being its TrGW (TS 23.228 Annex I). The
+  # S-CSCF no longer anchors media, and this chart has no IBCF yet, so until
+  # it does nothing here carries a call.
   #
   # Order matters: the first entry is rtpengine's default interface, the one a
   # control message that names no direction lands on.
@@ -67,16 +71,16 @@ media:
   #              takes over keeps the address the far end is sending to. The
   #              interface becomes one logical interface per owner,
   #              `<name>-<k>`, and every `direction=<name>` in `templates` is
-  #              rewritten per replica to its own, so the S-CSCF goes on
+  #              rewritten per replica to its own, so the client goes on
   #              naming templates only.
   #
   # Media moves onto these interfaces. The ng control socket listens on
   # 0.0.0.0, and answers from the address it was addressed on. Without `vips`
-  # the S-CSCF reaches it through the ClusterIP Service; with them, on the
+  # the client reaches it through the ClusterIP Service; with them, on the
   # first such interface's addresses, one rtpengine node per replica, over an
   # attachment of its own to that interface's network -- a call's commands then
   # follow its media address, which is what lets a standby that takes the
-  # address over answer for the call too. The S-CSCF has no other way to move
+  # address over answer for the call too. The client has no other way to move
   # an existing call to another node.
   interfaces:
 
@@ -115,11 +119,10 @@ media:
 # and the string of ng flags it stands for. A control message carrying
 # `template=<name>` is processed as if it had carried the flags.
 #
-#   internal   UE to UE, on-net, both legs inside
-#   outgoing   UE to the trunk, chosen where route[E164] hands the call to the
-#              BGCF next hop
-#   incoming   trunk to UE, chosen on the terminating leg of a call that
-#              entered from outside
+#   internal   both legs inside
+#   outgoing   an offer from inside on its way out, as the IBCF names it for
+#              a call leaving the network
+#   incoming   an offer from outside on its way in
 templates:
   internal: direction=internal direction=internal
   outgoing: direction=internal direction=external

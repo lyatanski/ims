@@ -74,9 +74,11 @@ services:
       REALM: ${REALM}
       #DBURL: redis:6379/3
       REGSRV: addr=redis;port=6379;db=2
-      RTPADR: udp:rtpengine:9910
       ENUM: e164.${REALM}.
-      TRUNK:
+      # Off-net numbers (the BGCF role) and other networks' domains both
+      # leave through the IBCF, which anchors their media
+      TRUNK: sip:ibcf.ims.${REALM}
+      IBCF: sip:ibcf.ims.${REALM}
       E164CC: ${DIAL}
       E164IDD:
       E164NDD:
@@ -95,6 +97,28 @@ services:
       # <service>[@<cell prefix>]=<uri> entries (cscf/emergency.cfg). Nothing
       # answers at the default: point it at a PSAP, and set BGCF for tel URIs
       PSAP: ${PSAP:-sos=sip:psap.ims.${REALM}}
+
+  # Interconnection Border Control Function: the network's entry and exit
+  # point on Ici (TS 23.228 4.14, Annex I), with rtpengine as its TrGW
+  ibcf:
+    << : *kamailio
+    command: -f /etc/cscf/border.cfg
+    environment:
+      REALM: ${REALM}
+      ICI: ${ICI}
+      ICINET: ${NETICI}
+      RTPADR: udp:trgw:9910
+      ECSCF: sip:ecscf.ims.${REALM}
+      # Which peers.list set a destination goes to: the peer network's
+      # domain, and the number range behind it
+      ROUTES: ${PEERDOMAIN}=1 +${PEERDIAL}=1
+    configs:
+    - source: peers.list
+      target: /etc/cscf/peers.list
+    networks:
+      default:            # Mx
+      ici:                # Ici
+        ipv4_address: ${ICI}
 
   tas:
     << : *kamailio
@@ -117,7 +141,11 @@ services:
         ipv4_address: ${DNSv4}
         ipv6_address: ${DNSv6}
 
-  rtpengine:
+  # The IBCF's TrGW (TS 23.228 Annex I), rtpengine: `internal` faces the
+  # network, `external` the peers. Named devices, as rtpengine binds an
+  # interface by name, and a static Mx address because the ng socket listens
+  # on that one only -- not on Ici, where the peers are
+  trgw:
     image: ghcr.io/lyatanski/rtpengine
     command: --no-log-timestamps 
     configs:
@@ -126,6 +154,13 @@ services:
     expose:
     - 9910/udp
     scale: 1
+    networks:
+      default:
+        interface_name: mx0
+        ipv4_address: ${RTPv4}
+      ici:
+        interface_name: ici0
+        ipv4_address: ${ICIRTP}
     healthcheck:
       test: wget -qO- 127.0.0.1:9090/ping
       retries: 60
@@ -138,7 +173,7 @@ services:
 
   route-rtp:
     << : *route
-    network_mode: service:rtpengine
+    network_mode: service:trgw
 
   kmod:
     image: alpine
@@ -210,6 +245,40 @@ services:
       scscf:
         condition: service_healthy
 
+  # Another operator's network across Ici, and in the same process a
+  # stand-in for this network's S-CSCF behind the IBCF: the interconnect
+  # check (border.sh). Every check is a line in its log; the exit status is
+  # the number that failed
+  peer:
+    profiles:
+    - border
+    image: ${PRO2CALL:-ghcr.io/lyatanski/pro2call}
+    command: ibcf_peer.lua
+    environment:
+      PEER_ICI: ${ICIPEER}
+      PEER_IBCF: ${ICI}
+      PEER_IBCF_MX: ibcf
+      PEER_TRGW: ${ICIRTP}
+      PEER_TRGW_MX: ${RTPv4}
+      PEER_REALM: ${REALM}
+      PEER_DIAL: ${PEERDIAL}
+      # In the home range, provisioned or not: the answer is the home
+      # network's either way
+      PEER_HOME: tel:+${DIAL}000000099
+      # rtpengine's `timeout`: how long a call without media lasts
+      PEER_MEDIA_TIMEOUT_S: 60
+    networks:
+      default:
+        interface_name: mx0
+      ici:
+        interface_name: ici0
+        ipv4_address: ${ICIPEER}
+    depends_on:
+      ibcf:
+        condition: service_healthy
+      trgw:
+        condition: service_healthy
+
 
 configs:
   pcscf.xml:
@@ -271,7 +340,7 @@ configs:
       log-level = 7
       table = -1
       listen-http = 0.0.0.0:9090
-      listen-ng = 0.0.0.0:9910
+      listen-ng = ${RTPv4}:9910
       interfaces-config = interface
       templates = templates
       timeout = 60
@@ -280,6 +349,10 @@ configs:
       port-min = 30000
       port-max = 40000
       no-redis-required = true
+      # A call whose media stops is ended by the IBCF that set it up:
+      # dlg.terminate_dlg over XMLRPC, %% being the address the offer came from
+      b2b-url = http://%%:9090/RPC2
+      xmlrpc-format = 2
       #redis-write = redis:6379/4
       #redis-subscribe = redis:6379/5
       #redis-resolve-on-reconnect = true
@@ -302,15 +375,24 @@ configs:
       redis-resolve-on-reconnect = true
 
       [interface-internal]
-      address = any
+      address = mx0
 
       [interface-external]
-      alias = internal
+      address = ici0
 
+      # Named by the IBCF on the initial offer, by the side it came from.
+      # strict-source: once latched, a stream is only taken from that source.
+      # replace-origin: the o= line names the TrGW too, not the side behind it
       [templates]
-      internal = direction=internal direction=internal
-      outgoing = direction=internal direction=external
-      incoming = direction=external direction=internal
+      outgoing = direction=internal direction=external strict-source replace-origin
+      incoming = direction=external direction=internal strict-source replace-origin
+
+  # The peer networks, one dispatcher set each: their entry points, and
+  # whether they are inside this network's trust domain (TS 24.229 4.4)
+  peers.list:
+    content: |
+      # setid destination flags priority attributes
+      1 sip:${ICIPEER}:5060 0 0 peer=peer;trust=0;sockname=Ici
 
   dns:
     content: |
@@ -333,7 +415,7 @@ configs:
               rcode NXDOMAIN
           }
           template IN SRV {
-              match (?P<name>.cscf|tas)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
+              match (?P<name>.cscf|ibcf|tas)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
               answer "{{ .Name }} 1D SRV 0 0 5060 {{ or .Group.name \"icscf\" }}."
               fallthrough
           }
@@ -359,4 +441,12 @@ networks:
       config:
       - subnet: ${NETv4}
       - subnet: ${NETv6}
+  # The interconnect, II-NNI (TS 23.228 Annex K): the IBCF and the TrGW on
+  # this network's side, peers on the other
+  ici:
+    driver_opts:
+      com.docker.network.bridge.name: ici0
+    ipam:
+      config:
+      - subnet: ${NETICI}
 
