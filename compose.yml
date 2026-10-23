@@ -144,9 +144,10 @@ services:
         ipv6_address: ${DNSv6}
 
   # The IBCF's TrGW (TS 23.228 Annex I), rtpengine: `internal` faces the
-  # network, `external` the peers. Named devices, as rtpengine binds an
-  # interface by name, and a static Mx address because the ng socket and the
-  # HTTP port listen on that one only -- not on Ici, where the peers are
+  # network, `external` the peers. Static addresses, as rtpengine binds each
+  # interface by one (interface_name would pin the device, but needs Docker
+  # Engine 28.1), and the ng socket and the HTTP port listen on Mx only --
+  # not on Ici, where the peers are
   trgw:
     image: ghcr.io/lyatanski/rtpengine
     command: --no-log-timestamps 
@@ -158,10 +159,8 @@ services:
     scale: 1
     networks:
       default:
-        interface_name: mx0
         ipv4_address: ${RTPv4}
       ici:
-        interface_name: ici0
         ipv4_address: ${ICIRTP}
     healthcheck:
       test: wget -qO- ${RTPv4}:9090/ping
@@ -255,7 +254,14 @@ services:
     profiles:
     - border
     image: ${PRO2CALL:-ghcr.io/lyatanski/pro2call}
-    command: ibcf_peer.lua
+    # Its Mx device is whichever does not hold the Ici address: without
+    # interface_name (Docker Engine 28.1) the eth<n> order is not fixed
+    entrypoint:
+    - sh
+    - -c
+    - |
+      export PEER_MX_IF=$$(ip -o -4 addr show scope global | awk '$$4 !~ "^${ICIPEER}/" {print $$2; exit}')
+      exec lua ibcf_peer.lua
     environment:
       PEER_ICI: ${ICIPEER}
       PEER_IBCF: ${ICI}
@@ -271,9 +277,7 @@ services:
       PEER_MEDIA_TIMEOUT_S: 60
     networks:
       default:
-        interface_name: mx0
       ici:
-        interface_name: ici0
         ipv4_address: ${ICIPEER}
     depends_on:
       ibcf:
@@ -378,10 +382,10 @@ configs:
       redis-resolve-on-reconnect = true
 
       [interface-internal]
-      address = mx0
+      address = ${RTPv4}
 
       [interface-external]
-      address = ici0
+      address = ${ICIRTP}
 
       # Named by the IBCF on the initial offer, by the side it came from.
       # strict-source: once latched, a stream is only taken from that source.
