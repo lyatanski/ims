@@ -1,0 +1,194 @@
+{{- /*
+The IBCF (cscf/border.cfg), TS 23.228 4.14: the entry and exit point on Ici,
+with rtpengine as its TrGW. One single-replica StatefulSet per
+`ici.addresses` entry, for the P-CSCF's reason: the cfg binds its Ici address
+by value, and that is also the address the peers' configuration names, so each
+pod has to know its own at start. No Diameter and no state store; Ready once
+the peers are loaded. The Service is what the S-CSCF's ibcf.<ims realm>
+resolves to.
+*/}}
+{{- with .Values.cscf.border }}
+{{- if .enabled }}
+{{- $b := . }}
+{{- with $ }}
+{{- $peers := $b.peers }}
+{{- if not $peers }}{{ fail "cscf.border.peers: at least one peer network" }}{{ end }}
+{{- /* `<match>=<set>` per route, the set being the peer's position */}}
+{{- $routes := list }}
+{{- range $i, $p := $peers }}
+{{- if not $p.name }}{{ fail (printf "cscf.border.peers[%d] has no name" $i) }}{{ end }}
+{{- if not $p.entry }}{{ fail (printf "cscf.border.peers[%d] (%s) has no entry point" $i $p.name) }}{{ end }}
+{{- range $r := $p.routes }}{{ $routes = append $routes (printf "%s=%d" $r (add1 $i)) }}{{ end }}
+{{- end }}
+{{- $secret := lookup "v1" "Secret" .Release.Namespace (printf "%s-ibcf" .Release.Name) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-ibcf
+  labels: {{- include "ims.labels" . | nindent 4 }}
+data:
+  {{- if $b.thkey }}
+  thkey: {{ $b.thkey | b64enc }}
+  {{- else if and $secret $secret.data $secret.data.thkey }}
+  # Kept: a new key would make the masked headers of every call in progress
+  # undecodable
+  thkey: {{ $secret.data.thkey }}
+  {{- else }}
+  thkey: {{ randAlphaNum 32 | b64enc }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-ibcf
+  labels: {{- include "ims.labels" . | nindent 4 }}
+data:
+  # setid destination flags priority attributes. A set's destinations are
+  # tried highest priority first, which is `entry` order
+  peers.list: |
+    {{- range $i, $p := $peers }}
+    {{- range $j, $d := $p.entry }}
+    {{ add1 $i }} {{ $d }} 0 {{ sub (len $p.entry) $j }} peer={{ $p.name }};trust={{ ternary 1 0 (eq true $p.trust) }};sockname=Ici
+    {{- end }}
+    {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ibcf
+  labels: {{- include "ims.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - port: {{ .Values.service.port }}
+    targetPort: {{ .Values.service.port }}
+    protocol: TCP
+    name: tcp
+  - port: {{ .Values.service.port }}
+    targetPort: {{ .Values.service.port }}
+    protocol: UDP
+    name: udp
+  publishNotReadyAddresses: true
+  selector: {{- include "ims.selectorLabels" . | nindent 4 }}
+    role: ibcf
+{{- range $i, $ici := required "ici.addresses: one address per IBCF" .Values.ici.addresses }}
+{{- if or (not (contains "/" $ici)) (contains ":" $ici) }}
+{{- fail (printf "ici.addresses: %q is not an IPv4 address with its prefix length" $ici) }}
+{{- end }}
+{{- with $ }}
+{{- /* Ici, and the control interface's network when rtpengine's ng socket is on its vips */}}
+{{- $nets := list (dict "name" (printf "%s-ici" .Release.Name) "interface" .Values.ici.interface "ips" (list $ici)) }}
+{{- with include "rtpengine.ng.network" .Subcharts.rtpengine }}
+{{- $nets = append $nets (fromJson .) }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-ibcf-{{ $i }}
+  labels: {{- include "ims.labels" . | nindent 4 }}
+    role: ibcf
+spec:
+  replicas: 1
+  serviceName: {{ .Release.Name }}-ibcf
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels: {{- include "ims.selectorLabels" . | nindent 6 }}
+      role: ibcf
+      ici: {{ $i | quote }}
+  template:
+    metadata:
+      annotations:
+        # peers.list is read at startup only
+        checksum/peers: {{ toJson $peers | sha256sum }}
+        k8s.v1.cni.cncf.io/networks: {{ toJson $nets | quote }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels: {{- include "ims.labels" . | nindent 8 }}
+        role: ibcf
+        ici: {{ $i | quote }}
+    spec:
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+        - {{ include "ims.dnsIP" . }}
+        searches:
+        - {{ .Release.Namespace }}.svc.cluster.local
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: cscf
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: ["-f", "/etc/cscf/border.cfg"]
+        env:
+        - name: REALM
+          value: {{ tpl .Values.domain . }}
+        - name: ICI
+          value: {{ (split "/" $ici)._0 | quote }}
+        # The Ici sources: the IBCF's own address with its prefix, which
+        # is_in_subnet masks the same way as the source
+        - name: ICINET
+          value: {{ $ici | quote }}
+        - name: RTPADR
+          value: {{ include "rtpengine.ng" .Subcharts.rtpengine | quote }}
+        - name: ROUTES
+          value: {{ join " " $routes | quote }}
+        - name: THKEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-ibcf
+              key: thkey
+        {{- if .Values.cscf.emergency.enabled }}
+        - name: ECSCF
+          value: {{ printf "sip:ecscf.%s" (include "ims.realm.ims" .) | quote }}
+        {{- end }}
+        ports:
+        - name: tcp
+          containerPort: {{ .Values.service.port }}
+          protocol: TCP
+        - name: udp
+          containerPort: {{ .Values.service.port }}
+          protocol: UDP
+        - name: mon
+          containerPort: 9090
+          protocol: TCP
+        # /check is `ds_list_exists("1")`
+        readinessProbe:
+          httpGet: {path: /check, port: mon}
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: {path: /metrics, port: mon}
+          periodSeconds: 20
+          failureThreshold: 6
+        {{- with $b.resources }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
+        volumeMounts:
+        - name: peers
+          mountPath: /etc/cscf/peers.list
+          subPath: peers.list
+      volumes:
+      - name: peers
+        configMap:
+          name: {{ .Release.Name }}-ibcf
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
