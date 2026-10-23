@@ -604,7 +604,7 @@ configs:
         sip:  { n: 'SIP',  c: '#73bf69' },  // Gm / Mw
         pfcp: { n: 'PFCP', c: '#f2cc0c' },  // N4 / Sxa
         rtp:  { n: 'RTP',  c: '#ff9830' },  // media
-        ng:   { n: 'NG',   c: '#ffffff' },  // rtpengine control protocol, S-CSCF <-> rtpengine
+        ng:   { n: 'NG',   c: '#ffffff' },  // rtpengine control protocol, IBCF <-> TrGW
       };
       local legend = [{ n: 'Diameter', c: diam }, proto.sip, proto.pfcp, proto.rtp, proto.ng];
 
@@ -977,7 +977,7 @@ configs:
         honor_timestamps: false
         static_configs:
         - targets:
-          - rtpengine:9090
+          - trgw:9090
       # open5gs EPC/IMS core. NB: the HSS Cx counters (cx_rx_uar/mar/sar) update
       # with a lag/batch — trustworthy cumulatively, not for real-time windows.
       - job_name: hss

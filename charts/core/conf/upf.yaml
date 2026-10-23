@@ -24,3 +24,9 @@ upf:
     gateway: {{ .root.Values.session.gateway }}
     dnn: {{ .root.Values.session.dnn }}
     dev: {{ .root.Values.session.dev }}
+  {{- with .root.Values.session.subnet6 }}
+  - subnet: {{ . }}
+    gateway: {{ $.root.Values.session.gateway6 }}
+    dnn: {{ $.root.Values.session.dnn }}
+    dev: {{ $.root.Values.session.dev }}
+  {{- end }}

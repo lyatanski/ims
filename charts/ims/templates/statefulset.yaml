@@ -13,6 +13,10 @@ pod template. `$gm` is that address, empty everywhere else.
 {{- $gms = required "gm.addresses: one address per P-CSCF" .Values.gm.addresses }}
 {{- end }}
 {{- range $i, $gm := $gms }}
+{{- $gm6 := "" }}
+{{- if and $gm (lt $i (len ($dot.Values.gm.addresses6 | default list))) }}
+{{- $gm6 = index $dot.Values.gm.addresses6 $i }}
+{{- end }}
 {{- with $dot }}
 ---
 apiVersion: apps/v1
@@ -38,7 +42,7 @@ spec:
       annotations:
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- if $gm }}
-        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" (list $gm)) | toJson | quote }}
+        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" (compact (list $gm $gm6))) | toJson | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -78,11 +82,22 @@ spec:
           value: {{ .Values.gm.interface | quote }}
         - name: IPSEC
           value: {{ (split "/" $gm)._0 | quote }}
+        {{- with $gm6 }}
+        - name: IPSEC6
+          value: {{ (split "/" .)._0 | quote }}
+        {{- end }}
         {{- else }}
         - name: IPSEC
           valueFrom:
             fieldRef:
               fieldPath: status.podIP
+        {{- end }}
+        {{- if .Values.cscf.emergency.enabled }}
+        - name: ECSCF
+          value: {{ printf "sip:ecscf.%s" (include "ims.realm.ims" .) | quote }}
+        {{- with include "ims.sosnum" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
         {{- end }}
         {{- end }}
         - name: DBURL
@@ -90,8 +105,6 @@ spec:
         {{- if eq "serving" $cscf }}
         - name: REGSRV
           value: {{ include "ims.regsrv" . | quote }}
-        - name: RTPADR
-          value: udp:{{ template "rtpengine.name" .Subcharts.rtpengine }}:{{ .Values.rtpengine.service.port }}
         {{- with .Values.enum }}
         # The ENUM tree, left out entirely when unset -- an empty value would
         # still count as defined in the cfg and take the module with it. Same
@@ -99,7 +112,15 @@ spec:
         - name: ENUM
           value: {{ tpl . $ | quote }}
         {{- end }}
-        {{- with .Values.trunk }}
+        {{- $ibcf := "" }}
+        {{- if .Values.cscf.border.enabled }}
+        # The exit point for other networks' domains, and with no trunk of
+        # its own the BGCF next hop as well
+        {{- $ibcf = printf "sip:ibcf.%s" (include "ims.realm.ims" .) }}
+        - name: IBCF
+          value: {{ $ibcf | quote }}
+        {{- end }}
+        {{- with .Values.trunk | default $ibcf }}
         - name: TRUNK
           value: {{ tpl . $ | quote }}
         {{- end }}

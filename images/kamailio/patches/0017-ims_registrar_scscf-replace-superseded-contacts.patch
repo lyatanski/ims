@@ -1,0 +1,385 @@
+Let a REGISTER replace the earlier bindings of the same UE (TS 24.229 5.4.1.2.1).
+
+ims_usrloc_scscf matches a binding by its Contact URI only (contact_match()
+and friends); +sip.instance and reg-id are stored with the binding's params
+but nothing reads them. A UE that registers again from a new IP address or
+port therefore gets a second binding, and the old one stays until it
+expires: lookup() forks terminating requests to it, the 200 OK lists it,
+and the P-CSCF keeps its contact and IPsec tunnel, since only a terminated
+reg-event contact removes those.
+
+New modparam replace_contacts, default 0. With it set, once the Contacts of
+a REGISTER are inserted or updated, every other valid binding of the IMPU
+that one of them replaces is de-registered:
+
+- A Contact with a reg-id (multiple registrations, RFC 5626) replaces the
+  registration flow with the same +sip.instance (URN compared without its
+  angle brackets) and reg-id - step 3.
+- A Contact without one replaces every earlier registration of the private
+  user identity with another contact address - step 2 - whatever its
+  +sip.instance, or none: a UE that sends no instance, or the same SIM in a
+  new handset, is replaced too. usrloc keeps no IMPI per binding, but an
+  IMPU record belongs to the one IMPI whose subscription it holds, so that
+  is every other binding of the IMPU.
+- An emergency (sos) Contact only replaces an emergency binding and a normal
+  one only a normal one (5.4.1.2.1D NOTE 2). A Contact being removed
+  (expires 0) replaces nothing, and neither is a binding the REGISTER itself
+  names, so several Contacts registered together stay.
+
+The replaced binding is de-registered on the spot, as reg_rpc_dereg_impu()
+does: CONTACT_DELETED, so VALID_CONTACT() is false for it at once and the
+usrloc timer only unlinks it, silently, and releases its dialogs when it
+deletes it. The NOTIFY goes out now rather than on the next timer run, to
+the subscribers of every IMPU of the implicit set: update_contacts_helper()
+runs once per IMPU and the binding is shared, so the bindings a REGISTER
+replaced are remembered for the later runs (per process, by message id and
+pid). It carries the binding as an explicit de-registration contact,
+terminated with event "unregistered": 5.4.2.1.2 allows only "unregistered",
+"deactivated" or "rejected" for "each replaced or removed binding", and a
+P-CSCF acts only on those under an active registration (5.2.5.2). The event
+type is IMS_REGISTRAR_CONTACT_UNREGISTERED_IMPLICIT: _UNREGISTERED and
+_EXPIRED make create_notifications() send Subscription-State: terminated,
+which would end the P-CSCF's subscription while the IMPU is still registered
+over the new contact.
+
+process_xml_for_explit_dereg_contact() renders every explicit
+de-registration contact with event "unregistered" instead of "expired": the
+other two producers, the de-REGISTER in save.c and reg_rpc_dereg_impu()
+(patch 0006), remove a binding too, and "unregistered" is what RFC 3680 and
+5.4.2.1.2 / 5.4.1.5 call that.
+
+diff --git a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
+index b134a00865..d5a31324ae 100644
+--- a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
++++ b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
+@@ -506,6 +506,39 @@ modparam("ims_registrar_scscf", "scscf_restoration_info_enabled", 1)
+       </example>
+     </section>
+ 
++    <section>
++      <title>replace_contacts (int)</title>
++
++      <para>If set to 1 - a REGISTER replaces the earlier bindings of the same
++      UE, as TS 24.229 5.4.1.2.1 has it, e.g. after the UE came back from a new
++      IP address without de-registering. A Contact with a reg-id (multiple
++      registrations, RFC 5626) replaces the binding with the same
++      +sip.instance and reg-id. A Contact without one replaces every other
++      binding of the IMPU, with or without +sip.instance: the IMPU belongs to
++      a single private user identity, and that identity registering a new
++      contact address de-registers the old ones. An emergency (sos) Contact
++      only replaces emergency bindings and a normal one only normal ones, and
++      a Contact being removed (expires 0) replaces nothing.
++      The replaced binding is de-registered at once: lookup() and the 200 OK
++      stop using it, a NOTIFY listing it terminated with event "unregistered"
++      goes to the subscribers of every IMPU of the implicit set (e.g. the
++      P-CSCF), keeping their subscriptions active, and the next usrloc timer
++      run removes it and releases its dialogs.
++      If set to 0 - bindings are matched on the Contact URI only and an
++      abandoned binding stays until it expires.
++      </para>
++
++      <para><emphasis> Default value is 0. </emphasis></para>
++
++      <example>
++        <title>Set <varname>replace_contacts</varname> parameter</title>
++
++        <programlisting format="linespecific">...
++        modparam("ims_registrar_scscf", "replace_contacts", 1)
++...</programlisting>
++      </example>
++    </section>
++
+   </section>
+ 
+   <section>
+diff --git a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
+index 888fd90672..a2fb2f6fba 100644
+--- a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
++++ b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
+@@ -105,6 +105,8 @@ unsigned int send_vs_callid_avp =
+ 		1; /* flag to enable/disable proprietary use of a callid AVP. TODO: add call-id as per TS129.229 */
+ int skip_multiple_bindings_on_reg_resp =
+ 		0; /* For RE-REGISTRATION in 200 OK add only the current contact and skip all other bindings */
++int replace_contacts =
++		0; /* A REGISTER replaces the earlier bindings of the same UE (TS 24.229 5.4.1.2.1) */
+ 
+ int ue_unsubscribe_on_dereg =
+ 		0; /*many UEs do not unsubscribe on de reg - therefore we should remove their subscription and not send a notify
+@@ -338,6 +340,7 @@ static param_export_t params[] = {
+ 	{"notification_processes", PARAM_INT, &notification_processes},
+ 	{"send_vs_callid_avp", PARAM_INT, &send_vs_callid_avp},
+ 	{"skip_multiple_bindings_on_reg_resp", PARAM_INT, &skip_multiple_bindings_on_reg_resp},
++	{"replace_contacts", PARAM_INT, &replace_contacts},
+ 	{0, 0, 0}
+ };
+ 
+diff --git a/src/modules/ims_registrar_scscf/registrar_notify.c b/src/modules/ims_registrar_scscf/registrar_notify.c
+index 73428a8723..3bfb336d44 100644
+--- a/src/modules/ims_registrar_scscf/registrar_notify.c
++++ b/src/modules/ims_registrar_scscf/registrar_notify.c
+@@ -1910,8 +1910,12 @@ static void process_xml_for_explit_dereg_contact(
+ 	LM_DBG("Processing XML for explicit dereg contact address: <%.*s>\n",
+ 			explit_dereg_contact.len, explit_dereg_contact.s);
+ 
++	/* An explicit de-registration contact was removed - by the UE's
++	 * de-REGISTER, by the network (reg_rpc_dereg_impu()), or replaced by a
++	 * later registration - it did not run out: "unregistered" (RFC 3680),
++	 * one of the values TS 24.229 5.4.2.1.2 allows for a removed binding */
+ 	sprintf(pad->s, contact_s_q.s, 1, r_terminated.len, r_terminated.s,
+-			r_expired.len, r_expired.s, 0);
++			r_unregistered.len, r_unregistered.s, 0);
+ 
+ 	pad->len = strlen(pad->s);
+ 	STR_APPEND(*buf, *pad);
+diff --git a/src/modules/ims_registrar_scscf/save.c b/src/modules/ims_registrar_scscf/save.c
+index 24cca9272f..69e52839cc 100644
+--- a/src/modules/ims_registrar_scscf/save.c
++++ b/src/modules/ims_registrar_scscf/save.c
+@@ -87,6 +87,7 @@ extern int
+ extern int ue_unsubscribe_on_dereg;
+ extern int user_data_always;
+ extern int skip_multiple_bindings_on_reg_resp;
++extern int replace_contacts;
+ 
+ #define DO_NOT_USE_REALM_FOR_PRIVATE_IDENTITY 0x01
+ 
+@@ -535,6 +536,229 @@ static int get_restored_ucontact(str *uri, str *path, struct ucontact **c)
+ 	return 1;
+ }
+ 
++/*!
++ * The value of a +sip.instance parameter without the angle brackets around
++ * the URN (the parser has already dropped the quotes), so that the same
++ * instance compares equal whether it came from a REGISTER, the usrloc database
++ * or a restoration Contact.
++ */
++static inline str instance_urn(str instance)
++{
++	if(instance.len >= 2 && instance.s[0] == '<'
++			&& instance.s[instance.len - 1] == '>') {
++		instance.s++;
++		instance.len -= 2;
++	}
++	return instance;
++}
++
++/*!
++ * The +sip.instance and reg-id of a stored binding. reg-id is at least 1
++ * (RFC 5626 4.2), so 0 stands for "no reg-id".
++ */
++static void ucontact_instance(ucontact_t *c, str *instance, unsigned int *reg_id)
++{
++	param_t *p;
++
++	instance->s = NULL;
++	instance->len = 0;
++	*reg_id = 0;
++	for(p = c->params; p; p = p->next) {
++		if(p->name.len == 13 && strncasecmp(p->name.s, "+sip.instance", 13) == 0
++				&& p->body.len > 0) {
++			*instance = instance_urn(p->body);
++		} else if(p->name.len == 6 && strncasecmp(p->name.s, "reg-id", 6) == 0
++				  && p->body.len > 0) {
++			if(str2int(&p->body, reg_id) < 0)
++				*reg_id = 0;
++		}
++	}
++}
++
++/*!
++ * Whether a Contact of the REGISTER, being registered (not removed), replaces
++ * the stored binding c (TS 24.229 5.4.1.2.1):
++ *  - with a reg-id, the multiple registrations mechanism is used and it
++ *    replaces the registration flow of the same +sip.instance and reg-id
++ *    (step 3, RFC 5626 6);
++ *  - without one, it replaces every earlier registration of the private user
++ *    identity that has another contact address, whatever its +sip.instance -
++ *    or none (step 2). usrloc keeps no private user identity per binding, but
++ *    an IMPU record belongs to the one IMPI whose subscription it holds, so
++ *    for us that is every other binding of the IMPU.
++ * An emergency Contact only replaces an emergency binding and a normal one
++ * only a normal one: the emergency registration is a registration of its own
++ * (TS 24.229 5.4.1.2.1D NOTE 2: contacts related to emergency registration
++ * are not affected).
++ */
++static int contact_replaces(contact_t *chi, int expires_hdr, ucontact_t *c)
++{
++	int sos;
++	str instance, c_instance;
++	unsigned int reg_id, c_reg_id;
++
++	sos = cscf_get_sos_uri_param(chi->uri);
++	if(sos < 0)
++		return 0;
++	if(calc_contact_expires(chi, expires_hdr, sos) <= act_time)
++		return 0; /* this Contact is being removed, it replaces nothing */
++	if((cscf_get_sos_uri_param(c->c) > 0) != (sos > 0))
++		return 0;
++	if(!chi->reg_id)
++		return 1;
++
++	if(!chi->instance || chi->instance->body.len <= 0) {
++		LM_WARN("reg-id without +sip.instance in <%.*s> - not replacing any "
++				"binding\n",
++				STR_FMT(&chi->uri));
++		return 0;
++	}
++	if(str2int(&chi->reg_id->body, &reg_id) < 0) {
++		LM_WARN("invalid reg-id [%.*s] in <%.*s> - not replacing any "
++				"binding\n",
++				STR_FMT(&chi->reg_id->body), STR_FMT(&chi->uri));
++		return 0;
++	}
++	instance = instance_urn(chi->instance->body);
++	ucontact_instance(c, &c_instance, &c_reg_id);
++	return c_instance.len == instance.len
++		   && memcmp(c_instance.s, instance.s, instance.len) == 0
++		   && c_reg_id == reg_id;
++}
++
++/*!
++ * The Contact of the REGISTER that replaces c, or NULL. A binding the
++ * REGISTER itself names is never replaced, so neither is one of several
++ * Contacts registered together.
++ */
++static contact_t *replacing_contact(
++		struct sip_msg *msg, int expires_hdr, ucontact_t *c)
++{
++	struct hdr_field *h;
++	contact_t *chi, *by = NULL;
++
++	for(h = msg->contact; h; h = h->next) {
++		if(h->type != HDR_CONTACT_T || !h->parsed)
++			continue;
++		for(chi = ((contact_body_t *)h->parsed)->contacts; chi;
++				chi = chi->next) {
++			if(chi->uri.len == c->c.len
++					&& memcmp(chi->uri.s, c->c.s, c->c.len) == 0)
++				return NULL;
++			if(!by && contact_replaces(chi, expires_hdr, c))
++				by = chi;
++		}
++	}
++	return by;
++}
++
++/*
++ * The bindings the REGISTER being saved has replaced. A binding is shared by
++ * every IMPU of the implicit set, and update_contacts_helper() runs once per
++ * IMPU: only the first run finds it valid and deletes it, the later ones have
++ * to recognise it to notify the subscribers of their own IMPU too. Kept per
++ * process and per message (id and pid); the pointers are only compared with
++ * the bindings still linked to an IMPU, never followed.
++ */
++#define MAX_REPLACED_CONTACTS 16
++static unsigned int replaced_msg_id = 0;
++static int replaced_msg_pid = 0;
++static int num_replaced_contacts = 0;
++static ucontact_t *replaced_contacts[MAX_REPLACED_CONTACTS];
++
++static int replaced_by_this_register(struct sip_msg *msg, ucontact_t *c)
++{
++	int i;
++
++	if(msg->id != replaced_msg_id || msg->pid != replaced_msg_pid)
++		return 0;
++	for(i = 0; i < num_replaced_contacts; i++) {
++		if(replaced_contacts[i] == c)
++			return 1;
++	}
++	return 0;
++}
++
++static void remember_replaced(struct sip_msg *msg, ucontact_t *c)
++{
++	if(msg->id != replaced_msg_id || msg->pid != replaced_msg_pid) {
++		replaced_msg_id = msg->id;
++		replaced_msg_pid = msg->pid;
++		num_replaced_contacts = 0;
++	}
++	if(num_replaced_contacts < MAX_REPLACED_CONTACTS) {
++		replaced_contacts[num_replaced_contacts++] = c;
++	} else {
++		LM_WARN("more than %d bindings replaced by one REGISTER - <%.*s> is "
++				"only notified to the subscribers of the first IMPU\n",
++				MAX_REPLACED_CONTACTS, STR_FMT(&c->c));
++	}
++}
++
++/*!
++ * TS 24.229 5.4.1.2.1 steps 2 and 3: a successful registration replaces the
++ * earlier bindings of the same UE (see contact_replaces()). Left alone, such a
++ * binding stays until it expires: the S-CSCF forks terminating requests to it
++ * and the P-CSCF keeps its contact, and IPsec tunnel, since only a terminated
++ * reg-event contact removes those.
++ *
++ * The replaced binding is de-registered on the spot, as reg_rpc_dereg_impu()
++ * does: it goes to CONTACT_DELETED, so VALID_CONTACT() is false for it and
++ * lookup() and the 200 OK skip it, and the usrloc timer unlinks it from every
++ * IMPU on its next run without notifying anything; deleting it then releases
++ * its dialogs. The NOTIFY goes out now, to the subscribers of every IMPU of
++ * the implicit set, carrying the binding as an explicit de-registration
++ * contact - state "terminated", event "unregistered" - as 5.4.2.1.2 requires
++ * for "each replaced or removed binding" ("expired" is not one of the values
++ * it allows, nor one the P-CSCF acts on under an active registration,
++ * 5.2.5.2). The event is IMS_REGISTRAR_CONTACT_UNREGISTERED_IMPLICIT, not
++ * _UNREGISTERED or _EXPIRED: those make the NOTIFY end the subscription,
++ * and the IMPU is still registered over the new contact.
++ *
++ * Called with the domain locked for impu_rec, after all the Contacts of the
++ * REGISTER were inserted or updated - so the IMPU is never left without a
++ * valid binding.
++ */
++static void replace_superseded_contacts(
++		struct sip_msg *msg, impurecord_t *impu_rec, int expires_hdr)
++{
++	impu_contact_t *impucontact;
++	ucontact_t *c;
++	contact_t *by;
++	str dereg_contact;
++	int notify;
++
++	get_act_time();
++	for(impucontact = impu_rec->linked_contacts.head; impucontact;
++			impucontact = impucontact->next) {
++		c = impucontact->contact;
++		if(!c)
++			break;
++		notify = 0;
++		ul.lock_contact_slot_i(c->sl);
++		if(replaced_by_this_register(msg, c)) {
++			notify = 1;
++		} else if(VALID_CONTACT(c, act_time)
++				  && (by = replacing_contact(msg, expires_hdr, c)) != NULL) {
++			LM_INFO("<%.*s> replaces <%.*s> for <%.*s>%s\n",
++					STR_FMT(&by->uri), STR_FMT(&c->c),
++					STR_FMT(&impu_rec->public_identity),
++					by->reg_id ? " (same +sip.instance and reg-id)" : "");
++			c->state = CONTACT_DELETED;
++			remember_replaced(msg, c);
++			notify = 1;
++		}
++		if(notify && impu_rec->shead) {
++			/* new_notification() copies the URI: the body is rendered later,
++			 * in the notification worker, when the binding may be gone */
++			dereg_contact = c->c;
++			notify_subscribers(impu_rec, c, &dereg_contact, 1,
++					IMS_REGISTRAR_CONTACT_UNREGISTERED_IMPLICIT);
++		}
++		ul.unlock_contact_slot_i(c->sl);
++	}
++}
++
+ /**
+  * update the contacts for a public identity. Make sure you have the lock on the domain before calling this
+  * returns 0 on success, -1 on failure
+@@ -642,6 +866,9 @@ static inline int update_contacts_helper(struct sip_msg *msg,
+ 					}
+ 				}
+ 			}
++			if(replace_contacts) {
++				replace_superseded_contacts(msg, impu_rec, expires_hdr);
++			}
+ 			break;
+ 	}
+ 

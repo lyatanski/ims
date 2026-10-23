@@ -36,6 +36,11 @@ smf:
   - subnet: {{ .root.Values.session.subnet }}
     gateway: {{ .root.Values.session.gateway }}
     dnn: {{ .root.Values.session.dnn }}
+  {{- with .root.Values.session.subnet6 }}
+  - subnet: {{ . }}
+    gateway: {{ $.root.Values.session.gateway6 }}
+    dnn: {{ $.root.Values.session.dnn }}
+  {{- end }}
   dns:
   - 8.8.8.8
   # What the UE gets in the PCO, and therefore where it sends REGISTER. The

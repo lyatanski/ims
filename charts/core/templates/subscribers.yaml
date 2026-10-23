@@ -74,6 +74,25 @@ data:
         pcc_rule: [],
         _id: new ObjectId(),
       }]
+      {{- with .Values.subscribers.tas }}
+      // TS 29.228 B.2.2: initial INVITEs, originating (0) and terminating
+      // registered (1) or unregistered (2). Default handling 0: SESSION_CONTINUED
+      const ifc = [{
+        priority: NumberInt(0),
+        application_server: { server_name: '{{ tpl . $ }}', default_handling: NumberInt(0) },
+        trigger_point: {
+          condition_type_cnf: NumberInt(1),
+          spt: [
+            { condition_negated: NumberInt(0), group: NumberInt(0), method: 'INVITE' },
+            { condition_negated: NumberInt(0), group: NumberInt(1), session_case: NumberInt(0) },
+            { condition_negated: NumberInt(0), group: NumberInt(1), session_case: NumberInt(1) },
+            { condition_negated: NumberInt(0), group: NumberInt(1), session_case: NumberInt(2) },
+          ],
+        },
+      }]
+      {{- else }}
+      const ifc = []
+      {{- end }}
       try {
         db.subscribers.insertOne({
           _id: new ObjectId(),
@@ -92,6 +111,7 @@ data:
             downlink: { value: NumberInt(1000000000), unit: NumberInt(0) },
             uplink:   { value: NumberInt(1000000000), unit: NumberInt(0) },
           },
+          ifc: ifc,
           access_restriction_data: 32,
           network_access_mode: 0,
           subscriber_status: 0,

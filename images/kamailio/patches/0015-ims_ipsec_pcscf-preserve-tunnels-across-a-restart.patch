@@ -1,0 +1,727 @@
+Keep the IPsec tunnels across a P-CSCF restart that keeps the network namespace.
+
+A restarted P-CSCF preloads its contacts from the database and believes every
+UE is still registered, but it can no longer talk to any of them. The kernel
+SAs are gone: ipsec_cleanall() flushes them in mod_init and again in
+mod_destroy, so even a restart inside the same namespace - a container restart
+in a pod that keeps its sandbox - starts empty. And the contacts come back
+without their tunnels: ims_ipsec_pcscf writes both of them through - the one on
+offer to the t_* columns, the one the UE registered over to the unprefixed
+ones - but preload_udomain() selects none of those columns. Every request the
+UEs send over ESP is dropped by the kernel (XfrmInNoStates) until they
+re-register, and nothing tells them to.
+
+In the same namespace the tunnels need not go anywhere, so keep them:
+
+- ims_usrloc_pcscf: preload_udomain() reads the 15 t_* columns back into
+  security_temp and the unprefixed ones into security. That set has no
+  protocol column of its own ("protocol" is the contact's transport), so prot
+  is left empty; the tunnel is always esp. The writers now store r_ealg/r_alg -
+  the algorithms the UE offered and the tunnel is built with - in the ealg/ialg
+  columns of both sets; they stored ealg/alg, which nothing ever sets, so those
+  columns were always empty. A new walk_pcontacts() API visits every in-memory
+  contact under its slot lock.
+- ims_ipsec_pcscf: ipsec_preserve_tunnels (default 0) skips the flush at
+  startup and shutdown. In the PROC_SIPINIT child, after the preload,
+  ipsec_restore_tunnels() removes the tunnels no preloaded contact accounts for
+  (delete_unused_tunnels(), or ipsec_cleanall() when no contact holds one),
+  then marks the SPI pair of each tunnel a contact holds used - new
+  reserve_spi() - and subscribes the contact for its expiry, as ipsec_create()
+  would have. Without that subscription an expiring contact would leave its SAs
+  in the kernel and its pair used forever.
+
+The orphans go first because delete_unused_tunnels() releases a pair for every
+SA it removes - the last contact's pair from its comparison loop, not the SA's -
+and with nothing reserved yet that release has nothing to return. reserve_spi()
+checks spi_remove() for 1: it returns -1 for a pair that is not in a non-empty
+list, which release_spi() takes for success.
+
+delete_unused_sa() and delete_unused_policy() no longer send an empty delete
+batch when everything installed is accounted for; the kernel refuses it and the
+restore logged two errors on every clean restart.
+
+A new namespace still starts empty and the contacts then hold tunnels the kernel
+does not; patch 0016 installs them again from what was preloaded.
+
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index c02b2d9df0..f76abdd1e9 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -1076,7 +1076,7 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 				pend->spi_pc, pend->spi_ps);
+ 		retire_ipsec_tunnel(ci.received_host, pend, s);
+ 		// what is left in the slot is only the UE's half again: nothing to
+-		// re-offer or release should this 401 fail from here on
++		// re-offer, restore or release should this 401 fail from here on
+ 		pend->spi_pc = pend->spi_ps = 0;
+ 		pend->port_pc = pend->port_ps = 0;
+ 		pend_retired = 1;
+@@ -1728,6 +1728,121 @@ int ipsec_reconfig()
+ 	return ret;
+ }
+ 
++typedef struct restore_stats
++{
++	int tunnels;  /* complete tunnels the contacts hold */
++	int reserved; /* ... whose SPI pair was reserved */
++	int subscribed; /* ... that now have ipsec_on_expire */
++} restore_stats_t;
++
++static void count_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
++{
++	if(contact_tunnel(c->security)) {
++		((restore_stats_t *)param)->tunnels++;
++	}
++	if(contact_tunnel(c->security_temp)) {
++		((restore_stats_t *)param)->tunnels++;
++	}
++}
++
++static void restore_tunnel(pcontact_t *c, ipsec_t *s, restore_stats_t *st)
++{
++	st->tunnels++;
++
++	if(reserve_spi(s->spi_pc, s->spi_ps, s->port_pc, s->port_ps) == 0) {
++		st->reserved++;
++	} else {
++		LM_WARN("contact [%.*s]: SPI pair %u/%u (ports %u/%u) is not free, "
++				"another tunnel may be handed the same pair\n",
++				c->aor.len, c->aor.s, s->spi_pc, s->spi_ps, s->port_pc,
++				s->port_ps);
++	}
++}
++
++static void restore_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
++{
++	restore_stats_t *st = (restore_stats_t *)param;
++	ipsec_t *est = contact_tunnel(c->security);
++	ipsec_t *pend = contact_tunnel(c->security_temp);
++
++	if(!est && !pend) {
++		return;
++	}
++	// Both: the UE may answer the offer over the new one, and still sends
++	// over the one it is registered over until then
++	if(est) {
++		restore_tunnel(c, est, st);
++	}
++	if(pend) {
++		restore_tunnel(c, pend, st);
++	}
++
++	// The same subscription ipsec_create() takes: without it the contact's
++	// expiry would leave its tunnel in the kernel and its SPI pair used.
++	if(ul.is_ulcb_registered(c, ipsec_on_expire)
++			|| ul.register_ulcb(c, PCSCF_CONTACT_EXPIRE | PCSCF_CONTACT_DELETE,
++					   ipsec_on_expire, (void *)&c->received_port)
++					   == 1) {
++		st->subscribed++;
++	} else {
++		LM_ERR("contact [%.*s]: failed to subscribe for its expiry\n",
++				c->aor.len, c->aor.s);
++	}
++}
++
++/**
++ * Take over the tunnels a previous instance left in the kernel.
++ *
++ * With ipsec_preserve_tunnels the SAs and policies are not flushed at startup
++ * or shutdown, so a kamailio restart inside the same network namespace - a
++ * container restart in a pod that keeps its sandbox - finds every tunnel still
++ * installed, sequence counters and all. What the new instance lacks is the
++ * bookkeeping: ims_usrloc_pcscf has preloaded each contact's tunnels - the
++ * registered one from its unprefixed security columns and the one on offer
++ * from its t_* columns - and here the SPI pair each one holds is marked used
++ * and the contact subscribed for its expiry, exactly as ipsec_create() would
++ * have.
++ *
++ * Tunnels no preloaded contact accounts for are removed first. That has to
++ * happen before any pair is reserved: delete_unused_tunnels() releases a pair
++ * for every SA it removes, and with nothing reserved yet those releases have
++ * nothing to put back.
++ *
++ * Runs in the PROC_SIPINIT child, after ims_usrloc_pcscf's preload, which is
++ * why this module has to be loaded after ims_usrloc_pcscf.
++ */
++int ipsec_restore_tunnels()
++{
++	restore_stats_t st;
++	int contacts;
++
++	memset(&st, 0, sizeof(st));
++	contacts = ul.walk_pcontacts(count_contact_tunnel, &st);
++
++	if(st.tunnels == 0) {
++		// delete_unused_tunnels() does nothing without a contact to compare
++		// against, and with none holding a tunnel everything installed is
++		// unaccounted for
++		LM_INFO("no preloaded contact holds a tunnel (%d contacts), removing "
++				"all IPSec SAs and policies\n",
++				contacts);
++		return ipsec_cleanall();
++	}
++
++	if(delete_unused_tunnels() != 0) {
++		LM_WARN("failed to remove the tunnels no contact accounts for\n");
++	}
++
++	memset(&st, 0, sizeof(st));
++	ul.walk_pcontacts(restore_contact_tunnel, &st);
++
++	LM_INFO("restored %d IPSec tunnels from %d preloaded contacts: %d SPI "
++			"pairs reserved, %d contacts subscribed for expiry\n",
++			st.tunnels, contacts, st.reserved, st.subscribed);
++
++	return 0;
++}
++
+ int ipsec_cleanall()
+ {
+ 	struct mnl_socket *nlsock = init_mnl_socket();
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.h b/src/modules/ims_ipsec_pcscf/cmd.h
+index 39b29157f0..6031d26d99 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.h
++++ b/src/modules/ims_ipsec_pcscf/cmd.h
+@@ -73,6 +73,7 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags);
+ int ipsec_forward(struct sip_msg *m, udomain_t *d, int _cflags);
+ int ipsec_destroy(struct sip_msg *m, udomain_t *d, str *uri);
+ int ipsec_cleanall();
++int ipsec_restore_tunnels();
+ int ipsec_reconfig();
+ void ipsec_on_expire(pcontact_t *c, int type, void *param);
+ int ipsec_promote(udomain_t *d, pcontact_t *c, struct receive_info *rcv);
+diff --git a/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml b/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml
+index ebcf68276a..d2148b2949 100644
+--- a/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml
++++ b/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml
+@@ -176,6 +176,32 @@ modparam("ims_ipsec_pcscf", "ipsec_max_connections", 10)
+       </example>
+     </section>
+ 
++    <section>
++      <title><varname>ipsec_preserve_tunnels</varname> (int)</title>
++
++      <para>Keep (1) or flush (0) the IPSec SAs and policies at startup and
++      shutdown. When set to 1, a restarted P-CSCF takes over the tunnels still
++      installed in its network namespace: the contacts ims_usrloc_pcscf
++      preloads from its database carry their security parameters, their SPI
++      pairs are marked used, and SAs and policies no preloaded contact accounts
++      for are removed. The UEs keep their registrations and tunnels across a
++      restart that keeps the network namespace, such as a container restart in
++      a Kubernetes pod. It needs ims_usrloc_pcscf with a db_mode that preloads,
++      and this module loaded after it.</para>
++
++      <para><emphasis>Default value is 0.</emphasis></para>
++
++      <example>
++        <title><varname>ipsec_preserve_tunnels</varname> parameter usage</title>
++
++        <programlisting format="linespecific">
++...
++modparam("ims_ipsec_pcscf", "ipsec_preserve_tunnels", 1)
++...
++        </programlisting>
++      </example>
++    </section>
++
+     <section>
+       <title><varname>ipsec_reuse_server_port</varname> (int)</title>
+ 
+diff --git a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
+index 0f1700a55d..f53dffe74c 100644
+--- a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
++++ b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
+@@ -47,6 +47,7 @@ str ipsec_listen_name = STR_NULL;
+ str ipsec_listen_agname = STR_NULL;
+ int ipsec_reuse_server_port = 1;
+ int ipsec_max_connections = 2;
++int ipsec_preserve_tunnels = 0;
+ int spi_id_start = 100;
+ int spi_id_range = 1000;
+ str ipsec_preferred_alg = STR_NULL;
+@@ -115,6 +116,7 @@ static param_export_t params[] = {
+ 	{"ipsec_listen_agname",		PARAM_STR, &ipsec_listen_agname		},
+ 	{"ipsec_reuse_server_port",	PARAM_INT, &ipsec_reuse_server_port	},
+ 	{"ipsec_max_connections",	PARAM_INT, &ipsec_max_connections	},
++	{"ipsec_preserve_tunnels",	PARAM_INT, &ipsec_preserve_tunnels	},
+ 	{"ipsec_spi_id_start",		PARAM_INT, &spi_id_start			},
+ 	{"ipsec_spi_id_range",		PARAM_INT, &spi_id_range			},
+ 	{"ipsec_preferred_alg",		PARAM_STR, &ipsec_preferred_alg		},
+@@ -396,7 +398,10 @@ static int mod_init(void)
+ 		return -1;
+ 	}
+ 
+-	if(ipsec_cleanall() != 0) {
++	// With ipsec_preserve_tunnels what is installed belongs to contacts the
++	// usrloc preload brings back, and ipsec_restore_tunnels() sorts it out once
++	// they are in memory
++	if(!ipsec_preserve_tunnels && ipsec_cleanall() != 0) {
+ 		LM_ERR("Error ipsec tunnels during for module initialisation\n");
+ 		return -1;
+ 	}
+@@ -421,7 +426,7 @@ static int mod_init(void)
+ 
+ static void mod_destroy(void)
+ {
+-	if(ipsec_cleanall() != 0) {
++	if(!ipsec_preserve_tunnels && ipsec_cleanall() != 0) {
+ 		LM_ERR("Error ipsec tunnels during for module cleanup\n");
+ 	}
+ 
+@@ -436,6 +441,17 @@ static void mod_destroy(void)
+ 
+ static int child_init(int rank)
+ {
++	if(rank == PROC_SIPINIT && ipsec_preserve_tunnels) {
++		if(ul.db_mode == NO_DB || ul.db_mode == DB_ONLY) {
++			LM_WARN("ipsec_preserve_tunnels: ims_usrloc_pcscf db_mode %d "
++					"preloads no contact to restore a tunnel for\n",
++					ul.db_mode);
++		}
++		if(ipsec_restore_tunnels() != 0) {
++			LM_ERR("failed to restore IPSec tunnels\n");
++			return -1;
++		}
++	}
+ 	return 0;
+ }
+ 
+diff --git a/src/modules/ims_ipsec_pcscf/ipsec.c b/src/modules/ims_ipsec_pcscf/ipsec.c
+index 3f60b544d9..8e346197c6 100644
+--- a/src/modules/ims_ipsec_pcscf/ipsec.c
++++ b/src/modules/ims_ipsec_pcscf/ipsec.c
+@@ -923,8 +923,9 @@ static int delete_unused_sa(struct mnl_socket *mnl_socket, void *contacts)
+ 		ret = mnl_socket_recvfrom(mnl_socket, buf, sizeof(buf));
+ 	}
+ 
+-	// DELETE unused SAs
+-	if(mnl_socket_sendto(
++	// DELETE unused SAs - if there are any: an empty batch is an error
++	if(del_data.delmsg_buf.offset > 0
++			&& mnl_socket_sendto(
+ 			   mnl_socket, &del_data.delmsg_buf.buf, del_data.delmsg_buf.offset)
+ 			== -1) {
+ 		LM_ERR("Error sending delete unused SAs command via netlink socket: "
+@@ -1139,8 +1140,9 @@ static int delete_unused_policy(struct mnl_socket *mnl_socket, void *contacts)
+ 		ret = mnl_socket_recvfrom(mnl_socket, buf, sizeof(buf));
+ 	}
+ 
+-	// DELETE unused POLICIES
+-	if(mnl_socket_sendto(
++	// DELETE unused POLICIES - if there are any: an empty batch is an error
++	if(del_data.delmsg_buf.offset > 0
++			&& mnl_socket_sendto(
+ 			   mnl_socket, &del_data.delmsg_buf.buf, del_data.delmsg_buf.offset)
+ 			== -1) {
+ 		LM_ERR("Error sending delete unused policies command via netlink "
+diff --git a/src/modules/ims_ipsec_pcscf/spi_gen.c b/src/modules/ims_ipsec_pcscf/spi_gen.c
+index 5b632a777f..259f64ac48 100644
+--- a/src/modules/ims_ipsec_pcscf/spi_gen.c
++++ b/src/modules/ims_ipsec_pcscf/spi_gen.c
+@@ -188,6 +188,39 @@ int release_spi(
+ 	return 0;
+ }
+ 
++// Mark a specific SPI pair as used - the one a tunnel that outlived a restart
++// already holds - so that acquire_spi() does not hand it out a second time.
++// Returns 0 when the pair was free and is now used, 1 otherwise (already used,
++// outside the configured range, or no generator).
++int reserve_spi(
++		uint32_t spi_cid, uint32_t spi_sid, uint16_t cport, uint16_t sport)
++{
++	int ret = 1;
++
++	if(!spi_data) {
++		return 1;
++	}
++
++	if(pthread_mutex_lock(&spi_data->spis_mut) != 0) {
++		return 1;
++	}
++
++	// spi_remove() is 1 when it removed the pair, and 0 or -1 when it is not
++	// in the list
++	if(spi_remove(&spi_data->free_spi, spi_cid, spi_sid) == 1) {
++		spi_add(&spi_data->used_spis[spi_cid % MAX_HASH_SPI], spi_cid, spi_sid,
++				cport, sport);
++		ret = 0;
++	}
++
++	pthread_mutex_unlock(&spi_data->spis_mut);
++
++	LM_DBG("spi %s spi_cid:%u spi_sid:%u cport:%u sport:%u\n",
++			ret ? "not reserved" : "reserved", spi_cid, spi_sid, cport, sport);
++
++	return ret;
++}
++
+ int clean_spi_list()
+ {
+ 	uint32_t j;
+diff --git a/src/modules/ims_ipsec_pcscf/spi_gen.h b/src/modules/ims_ipsec_pcscf/spi_gen.h
+index 3f80b7878a..000de29f88 100644
+--- a/src/modules/ims_ipsec_pcscf/spi_gen.h
++++ b/src/modules/ims_ipsec_pcscf/spi_gen.h
+@@ -42,5 +42,7 @@ uint32_t acquire_spi(
+ 		uint32_t *spi_cid, uint32_t *spi_sid, uint16_t *cport, uint16_t *sport);
+ int release_spi(
+ 		uint32_t spi_cid, uint32_t spi_sid, uint16_t cport, uint16_t sport);
++int reserve_spi(
++		uint32_t spi_cid, uint32_t spi_sid, uint16_t cport, uint16_t sport);
+ 
+ #endif /*  _SPI_GEN_H_ */
+diff --git a/src/modules/ims_usrloc_pcscf/dlist.c b/src/modules/ims_usrloc_pcscf/dlist.c
+index 60370a5978..1091b9e694 100644
+--- a/src/modules/ims_usrloc_pcscf/dlist.c
++++ b/src/modules/ims_usrloc_pcscf/dlist.c
+@@ -215,6 +215,34 @@ int get_all_ucontacts(void *buf, int len, unsigned int flags,
+ 	return get_all_mem_ucontacts(buf, len, flags, part_idx, part_max);
+ }
+ 
++/*!
++ * \brief Call f on every in-memory contact of every domain
++ *
++ * f runs with the contact's slot locked, so it must not lock the domain or
++ * insert or delete contacts.
++ * \param f function called for each contact
++ * \param param passed to f untouched
++ * \return number of contacts visited
++ */
++int walk_pcontacts(pcontact_walk_f f, void *param)
++{
++	dlist_t *p;
++	pcontact_t *c;
++	int i, n = 0;
++
++	for(p = root; p != NULL; p = p->next) {
++		for(i = 0; i < p->d->size; i++) {
++			lock_ulslot(p->d, i);
++			for(c = p->d->table[i].first; c != NULL; c = c->next) {
++				f(p->d, c, param);
++				n++;
++			}
++			unlock_ulslot(p->d, i);
++		}
++	}
++	return n;
++}
++
+ static inline int new_dlist(str *_n, dlist_t **_d)
+ {
+ 	dlist_t *ptr;
+diff --git a/src/modules/ims_usrloc_pcscf/dlist.h b/src/modules/ims_usrloc_pcscf/dlist.h
+index e571e0c30c..51d294b372 100644
+--- a/src/modules/ims_usrloc_pcscf/dlist.h
++++ b/src/modules/ims_usrloc_pcscf/dlist.h
+@@ -72,6 +72,8 @@ void print_all_udomains(FILE *_f);
+ int synchronize_all_udomains(void);
+ int get_all_ucontacts(void *buf, int len, unsigned int flags,
+ 		unsigned int part_idx, unsigned int part_max);
++
++int walk_pcontacts(pcontact_walk_f f, void *param);
+ int get_udomain(const char *_n, udomain_t **_d);
+ unsigned long get_number_of_users(void);
+ int find_domain(str *_d, udomain_t **_p);
+diff --git a/src/modules/ims_usrloc_pcscf/pcontact.h b/src/modules/ims_usrloc_pcscf/pcontact.h
+index ea15baa1cd..28ee839bce 100644
+--- a/src/modules/ims_usrloc_pcscf/pcontact.h
++++ b/src/modules/ims_usrloc_pcscf/pcontact.h
+@@ -65,6 +65,7 @@ void free_ppublic(ppublic_t *_p);
+ int new_pcontact(struct udomain *_d, str *_contact, struct pcontact_info *_ci,
+ 		struct pcontact **_c);
+ void free_pcontact(pcontact_t *_c);
++void free_security(security_t *_p);
+ void print_pcontact(FILE *_f, pcontact_t *_r);
+ ppublic_t *mem_insert_ppublic(
+ 		pcontact_t *_r /*, str* _c, ucontact_info_t* _ci*/);
+diff --git a/src/modules/ims_usrloc_pcscf/udomain.c b/src/modules/ims_usrloc_pcscf/udomain.c
+index 0aeaa9d3bf..b4cb54bae6 100644
+--- a/src/modules/ims_usrloc_pcscf/udomain.c
++++ b/src/modules/ims_usrloc_pcscf/udomain.c
+@@ -1071,6 +1071,106 @@ static inline pcontact_info_t *dbrow2info(db_val_t *vals, str *contact)
+ 	return &ci;
+ }
+ 
++/*!
++ * \brief Copy a string column of a preloaded row into shm
++ * \return 0 on success (an empty or NULL column leaves dst empty), -1 on failure
++ */
++static int dbval2shm_str(db_val_t *val, str *dst)
++{
++	str src = STR_NULL;
++
++	dst->s = NULL;
++	dst->len = 0;
++	if(VAL_NULL(val)) {
++		return 0;
++	}
++	if(VAL_TYPE(val) == DB1_STR) {
++		src = VAL_STR(val);
++	} else if(VAL_STRING(val)) {
++		src.s = (char *)VAL_STRING(val);
++		src.len = strlen(src.s);
++	}
++	if(src.len <= 0) {
++		return 0;
++	}
++	dst->s = shm_malloc(src.len);
++	if(!dst->s) {
++		SHM_MEM_ERROR;
++		return -1;
++	}
++	memcpy(dst->s, src.s, src.len);
++	dst->len = src.len;
++	return 0;
++}
++
++/*!
++ * \brief Rebuild one of a contact's tunnels from its preloaded columns
++ *
++ * ims_ipsec_pcscf keeps two tunnels per contact - CK, IK, the negotiated
++ * algorithms, both sides' SPIs and ports: the one being negotiated in
++ * security_temp, written through to the t_* columns, and the one the UE
++ * registered over in security, written through to the unprefixed columns.
++ * Reading them back is what lets a restarted P-CSCF forward to and tear down
++ * the tunnels its preloaded contacts still hold; without it they come back
++ * looking registered but with no tunnel at all.
++ *
++ * The established set has no protocol column of its own - "protocol" is the
++ * contact's transport - so it is read with prot NULL; the tunnel is always esp.
++ *
++ * SPIs are unsigned 32-bit and the columns are int: db_str2int() accepts the
++ * whole unsigned range and the cast below takes it back.
++ *
++ * \param vals the security type value
++ * \param prot the protocol value, or NULL when the set has none
++ * \param rest the 13 values that follow, mode to spi_us
++ * \return the security in shm, or NULL when the row carries none
++ */
++static security_t *dbrow2security(db_val_t *vals, db_val_t *prot, db_val_t *rest)
++{
++	security_t *sec;
++	ipsec_t *ipsec;
++
++	if(VAL_NULL(vals) || VAL_INT(vals) != SECURITY_IPSEC) {
++		return NULL;
++	}
++
++	sec = shm_malloc(sizeof(security_t));
++	ipsec = shm_malloc(sizeof(ipsec_t));
++	if(!sec || !ipsec) {
++		SHM_MEM_ERROR;
++		if(sec)
++			shm_free(sec);
++		if(ipsec)
++			shm_free(ipsec);
++		return NULL;
++	}
++	memset(sec, 0, sizeof(security_t));
++	memset(ipsec, 0, sizeof(ipsec_t));
++	sec->type = SECURITY_IPSEC;
++	sec->data.ipsec = ipsec;
++
++	if((prot && dbval2shm_str(prot, &ipsec->prot) < 0)
++			|| dbval2shm_str(rest + 0, &ipsec->mod) < 0
++			|| dbval2shm_str(rest + 1, &ipsec->ck) < 0
++			|| dbval2shm_str(rest + 2, &ipsec->ik) < 0
++			|| dbval2shm_str(rest + 3, &ipsec->r_ealg) < 0
++			|| dbval2shm_str(rest + 4, &ipsec->r_alg) < 0) {
++		free_security(sec);
++		return NULL;
++	}
++
++	ipsec->port_pc = VAL_NULL(rest + 5) ? 0 : (unsigned short)VAL_INT(rest + 5);
++	ipsec->port_ps = VAL_NULL(rest + 6) ? 0 : (unsigned short)VAL_INT(rest + 6);
++	ipsec->port_uc = VAL_NULL(rest + 7) ? 0 : (unsigned short)VAL_INT(rest + 7);
++	ipsec->port_us = VAL_NULL(rest + 8) ? 0 : (unsigned short)VAL_INT(rest + 8);
++	ipsec->spi_pc = VAL_NULL(rest + 9) ? 0 : (unsigned int)VAL_INT(rest + 9);
++	ipsec->spi_ps = VAL_NULL(rest + 10) ? 0 : (unsigned int)VAL_INT(rest + 10);
++	ipsec->spi_uc = VAL_NULL(rest + 11) ? 0 : (unsigned int)VAL_INT(rest + 11);
++	ipsec->spi_us = VAL_NULL(rest + 12) ? 0 : (unsigned int)VAL_INT(rest + 12);
++
++	return sec;
++}
++
+ /*!
+  * \brief Load all records from a udomain
+  *
+@@ -1084,7 +1184,7 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+ {
+ 	pcontact_info_t *ci;
+ 	db_row_t *row;
+-	db_key_t columns[15];
++	db_key_t columns[44];
+ 	db1_res_t *res = NULL;
+ 	str aor;
+ 	int i, n;
+@@ -1108,6 +1208,35 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+ 	columns[12] = &service_routes_col;
+ 	columns[13] = &public_ids_col;
+ 	columns[14] = &path_col;
++	columns[15] = &t_security_type_col;
++	columns[16] = &t_protocol_col;
++	columns[17] = &t_mode_col;
++	columns[18] = &t_ck_col;
++	columns[19] = &t_ik_col;
++	columns[20] = &t_ealg_col;
++	columns[21] = &t_ialg_col;
++	columns[22] = &t_port_pc_col;
++	columns[23] = &t_port_ps_col;
++	columns[24] = &t_port_uc_col;
++	columns[25] = &t_port_us_col;
++	columns[26] = &t_spi_pc_col;
++	columns[27] = &t_spi_ps_col;
++	columns[28] = &t_spi_uc_col;
++	columns[29] = &t_spi_us_col;
++	columns[30] = &security_type_col;
++	columns[31] = &mode_col;
++	columns[32] = &ck_col;
++	columns[33] = &ik_col;
++	columns[34] = &ealg_col;
++	columns[35] = &ialg_col;
++	columns[36] = &port_pc_col;
++	columns[37] = &port_ps_col;
++	columns[38] = &port_uc_col;
++	columns[39] = &port_us_col;
++	columns[40] = &spi_pc_col;
++	columns[41] = &spi_ps_col;
++	columns[42] = &spi_uc_col;
++	columns[43] = &spi_us_col;
+ 
+ 	if(ul_dbf.use_table(_c, _d->name) < 0) {
+ 		LM_ERR("sql use_table failed\n");
+@@ -1119,7 +1248,7 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+ #endif
+ 
+ 	if(DB_CAPABILITY(ul_dbf, DB_CAP_FETCH)) {
+-		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 15, 0, 0) < 0) {
++		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 44, 0, 0) < 0) {
+ 			LM_ERR("db_query (1) failed\n");
+ 			return -1;
+ 		}
+@@ -1128,7 +1257,7 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+ 			return -1;
+ 		}
+ 	} else {
+-		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 15, 0, &res) < 0) {
++		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 44, 0, &res) < 0) {
+ 			LM_ERR("db_query failed\n");
+ 			return -1;
+ 		}
+@@ -1174,6 +1303,10 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+ 				}
+ 				goto error1;
+ 			}
++			c->security_temp = dbrow2security(ROW_VALUES(row) + 15,
++					ROW_VALUES(row) + 16, ROW_VALUES(row) + 17);
++			c->security = dbrow2security(
++					ROW_VALUES(row) + 30, NULL, ROW_VALUES(row) + 31);
+ 			//c->flags = c->flags|(1<<FLAG_READFROMDB);
+ 			//TODO: need to subscribe to s-cscf for first public identity
+ 			unlock_udomain(_d, &ci->via_host, ci->via_port, ci->via_prot);
+diff --git a/src/modules/ims_usrloc_pcscf/usrloc.c b/src/modules/ims_usrloc_pcscf/usrloc.c
+index 93423ad395..c361636376 100644
+--- a/src/modules/ims_usrloc_pcscf/usrloc.c
++++ b/src/modules/ims_usrloc_pcscf/usrloc.c
+@@ -83,6 +83,7 @@ int bind_usrloc(usrloc_api_t *api)
+ 	api->update_pcontact = update_pcontact;
+ 	api->update_rx_regsession = update_rx_regsession;
+ 	api->get_all_ucontacts = get_all_ucontacts;
++	api->walk_pcontacts = walk_pcontacts;
+ 	api->update_security = update_security;
+ 	api->update_temp_security = update_temp_security;
+ 	api->register_ulcb = register_ulcb;
+diff --git a/src/modules/ims_usrloc_pcscf/usrloc.h b/src/modules/ims_usrloc_pcscf/usrloc.h
+index 34b6cfe05b..84ff68e6fd 100644
+--- a/src/modules/ims_usrloc_pcscf/usrloc.h
++++ b/src/modules/ims_usrloc_pcscf/usrloc.h
+@@ -284,6 +284,9 @@ typedef int (*register_udomain_t)(const char *_n, struct udomain **_d);
+ typedef int (*get_udomain_t)(const char *_n, udomain_t **_d);
+ typedef int (*get_all_ucontacts_t)(void *buf, int len, unsigned int flags,
+ 		unsigned int part_idx, unsigned int part_max);
++typedef void (*pcontact_walk_f)(
++		struct udomain *_d, struct pcontact *_c, void *param);
++typedef int (*walk_pcontacts_t)(pcontact_walk_f f, void *param);
+ 
+ /*security related API signatures */
+ typedef int (*update_security_t)(struct udomain *_d, security_type _t,
+@@ -325,6 +328,7 @@ typedef struct usrloc_api
+ 	is_ulcb_registered_t is_ulcb_registered;
+ 	register_ulcb_t register_ulcb_method;
+ 	db_load_pcontact_t db_load_pcontact;
++	walk_pcontacts_t walk_pcontacts;
+ } usrloc_api_t;
+ 
+ /*! usrloc API export bind function */
+diff --git a/src/modules/ims_usrloc_pcscf/usrloc_db.c b/src/modules/ims_usrloc_pcscf/usrloc_db.c
+index 7d0e23e9e8..4cd50c490e 100644
+--- a/src/modules/ims_usrloc_pcscf/usrloc_db.c
++++ b/src/modules/ims_usrloc_pcscf/usrloc_db.c
+@@ -425,11 +425,11 @@ int db_update_pcontact_security_temp(
+ 
+ 			VAL_TYPE(values + ++i) = DB1_STR;
+ 			VAL_NULL(values + i) = ipsec ? 0 : 1;
+-			VAL_STR(values + i) = ipsec ? ipsec->ealg : s_empty;
++			VAL_STR(values + i) = ipsec ? ipsec->r_ealg : s_empty;
+ 
+ 			VAL_TYPE(values + ++i) = DB1_STR;
+ 			VAL_NULL(values + i) = ipsec ? 0 : 1;
+-			VAL_STR(values + i) = ipsec ? ipsec->alg : s_empty;
++			VAL_STR(values + i) = ipsec ? ipsec->r_alg : s_empty;
+ 
+ 			VAL_TYPE(values + ++i) = DB1_INT;
+ 			VAL_NULL(values + i) = ipsec ? 0 : 1;
+@@ -547,11 +547,11 @@ int db_update_pcontact_security(
+ 
+ 			VAL_TYPE(values + ++i) = DB1_STR;
+ 			VAL_NULL(values + i) = ipsec ? 0 : 1;
+-			VAL_STR(values + i) = ipsec ? ipsec->ealg : s_empty;
++			VAL_STR(values + i) = ipsec ? ipsec->r_ealg : s_empty;
+ 
+ 			VAL_TYPE(values + ++i) = DB1_STR;
+ 			VAL_NULL(values + i) = ipsec ? 0 : 1;
+-			VAL_STR(values + i) = ipsec ? ipsec->alg : s_empty;
++			VAL_STR(values + i) = ipsec ? ipsec->r_alg : s_empty;
+ 
+ 			VAL_TYPE(values + ++i) = DB1_INT;
+ 			VAL_NULL(values + i) = ipsec ? 0 : 1;
+diff --git a/src/modules/ims_usrloc_pcscf/usrloc_db.h b/src/modules/ims_usrloc_pcscf/usrloc_db.h
+index 688387b1b2..1d5aab0190 100644
+--- a/src/modules/ims_usrloc_pcscf/usrloc_db.h
++++ b/src/modules/ims_usrloc_pcscf/usrloc_db.h
+@@ -120,6 +120,35 @@ extern str expires_col;
+ extern str service_routes_col;
+ extern str socket_col;
+ extern str public_ids_col;
++extern str security_type_col;
++extern str mode_col;
++extern str ck_col;
++extern str ik_col;
++extern str ealg_col;
++extern str ialg_col;
++extern str port_pc_col;
++extern str port_ps_col;
++extern str port_uc_col;
++extern str port_us_col;
++extern str spi_pc_col;
++extern str spi_ps_col;
++extern str spi_uc_col;
++extern str spi_us_col;
++extern str t_security_type_col;
++extern str t_protocol_col;
++extern str t_mode_col;
++extern str t_ck_col;
++extern str t_ik_col;
++extern str t_ealg_col;
++extern str t_ialg_col;
++extern str t_port_pc_col;
++extern str t_port_ps_col;
++extern str t_port_uc_col;
++extern str t_port_us_col;
++extern str t_spi_pc_col;
++extern str t_spi_ps_col;
++extern str t_spi_uc_col;
++extern str t_spi_us_col;
+ 
+ typedef struct reusable_buffer
+ {

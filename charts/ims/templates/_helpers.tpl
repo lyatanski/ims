@@ -93,6 +93,17 @@ Call with (dict "root" $ "cscf" <role>).
     {{- end }}
 {{- end }}
 
+{{/*
+The emergency numbers the P-CSCF and the E-CSCF share (cscf/sos.cfg), left
+out when unset so the cfg's own default (112, 911) applies.
+*/}}
+{{- define "ims.sosnum" -}}
+{{- with .Values.cscf.emergency.numbers }}
+- name: SOSNUM
+  value: {{ join " " . | quote }}
+{{- end }}
+{{- end }}
+
 {{- define "ims.regsrv" -}}
 addr={{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }};port={{ .Values.rtpengine.valkey.ports.valkey }};db={{ .Values.db.interrogating }}
 {{- end }}
@@ -180,10 +191,10 @@ it, and this one is the easier of the two to miss: the CNI network name is what
 host-local keys its allocations on -- /var/lib/cni/networks/<name> -- so two
 releases sharing it hand out addresses from one pool into two subnets.
 
-Call with the root context.
+Call with (dict "root" $ "name" <gm|ici> "config" <its config>).
 */}}
 {{- define "ims.network.config" -}}
-{{- toJson (merge (deepCopy .Values.gm.config) (dict "name" (printf "%s-gm" .Release.Name))) -}}
+{{- toJson (merge (deepCopy .config) (dict "name" (printf "%s-%s" .root.Release.Name .name))) -}}
 {{- end }}
 
 {{/*
@@ -207,19 +218,28 @@ The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
     pool={{ .Values.global.ue.subnet }}
     mtu={{ .Values.global.ue.mtu }}
     via={{ .Values.global.ue.via | quote }}
+    pool6={{ .Values.global.ue.subnet6 | quote }}
+    via6={{ .Values.global.ue.via6 | quote }}
 
-    while :; do
-      if [ -n "$via" ]; then
+    # $1 family flag, $2 pool, $3 next hop or empty for the default route's
+    route() {
+      [ -n "$2" ] || return 0
+      if [ -n "$3" ]; then
         # An explicit next hop: the kernel resolves the device from it, which
         # is the Gm one whenever that is the interface the hop is on-link on.
-        ip route replace "$pool" via "$via" mtu "$mtu"
+        ip "$1" route replace "$2" via "$3" mtu "$mtu"
       else
         # "default via <gw> dev <dev>" -> "<gw> <dev>"
-        set -- $(ip route | awk '$1 == "default" { print $3, $5; exit }')
-        if [ -n "$1" ]; then
-          ip route replace "$pool" via "$1" dev "$2" mtu "$mtu"
+        set -- "$1" "$2" $(ip "$1" route | awk '$1 == "default" { print $3, $5; exit }')
+        if [ -n "$3" ]; then
+          ip "$1" route replace "$2" via "$3" dev "$4" mtu "$mtu"
         fi
       fi
+    }
+
+    while :; do
+      route -4 "$pool" "$via"
+      route -6 "$pool6" "$via6"
       sleep {{ .Values.reconcile }}
     done
 {{- end }}
@@ -248,6 +268,7 @@ testing the HSS rather than the IMS.
 - {name: IMS_MSISDN_CC,     value: {{ tpl .Values.test.msisdn.cc . | quote }}}
 - {name: IMS_MSISDN_DIGITS, value: {{ .Values.test.msisdn.digits | quote }}}
 - {name: CALL_URI, value: {{ .Values.test.uri | quote }}}
+- {name: IMS_PDN_TYPE, value: {{ .Values.test.pdnType | quote }}}
 {{- end }}
 
 {{/*
