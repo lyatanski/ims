@@ -75,8 +75,8 @@ media:
   #              naming templates only.
   #
   # Media moves onto these interfaces; control stays off them. Without `vips`
-  # the client reaches the ng socket through the ClusterIP Service, and it is
-  # bound to the pod address. With them it is bound to the first such
+  # the client reaches the ng socket through the ClusterIP Service, pinned to
+  # one replica per client address, and it is bound to the pod address. With them it is bound to the first such
   # interface's addresses, one rtpengine node per replica, and the client is
   # given an attachment of its own to that interface's network -- a call's
   # commands then follow its media address, which is what lets a standby that

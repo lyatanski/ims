@@ -208,7 +208,8 @@ Call with the root context.
 
 {{/*
 kamailio's `rtpengine_sock`: one node per replica on its control address when
-the interfaces carry `vips` (IPv4 preferred), the ClusterIP Service otherwise.
+the interfaces carry `vips` (IPv4 preferred), the ClusterIP Service otherwise,
+which keeps each client on one replica (sessionAffinity, service.yaml).
 A call stays on the node it was hashed to for its whole life, so the node has
 to be an address that moves with the call rather than a pod.
 
