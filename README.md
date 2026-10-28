@@ -15,6 +15,7 @@ architecture-beta
     service pcscf(server)[PCSCF]
     service icscf(server)[ICSCF]
     service scscf(server)[SCSCF]
+    service ibcf(server)[IBCF]
     service rtp(server)[rtpengine]
     service ocs(server)[OCS]
     junction Mw
@@ -32,7 +33,8 @@ architecture-beta
     pcscf:R -- L:Mw
     icscf:B -- T:Mw
     scscf:L -- R:Mw
-    scscf:B -- R:rtp
+    scscf:B -- T:ibcf
+    ibcf:L -- R:rtp
 ```
 
 Why the setup?
@@ -54,6 +56,13 @@ To swap the HSS (and the mongo / subscriber-seed / DRA machinery behind it) for 
 CSCF chain instead — point `$CORE` at [stub.yml](stub.yml)
 
     CORE=stub.yml docker compose up -d --remove-orphans
+
+The setup is dual-stack: the CSCFs listen on both families, and the UE pool
+has an IPv6 half (`UENETv6`) next to the IPv4 one. The test UE asks for an IPv4
+PDN unless told otherwise; `ipv6` and `ipv4v6` register, subscribe and call
+over the P-CSCF's IPv6 Gm address (`IPSECv6`), IPsec and media included
+
+    PDN_TYPE=ipv6 docker compose --profile test up -d
 
 To observe the packets
 
@@ -116,10 +125,13 @@ See [Tracing](doc/trace.md) for what each of those gives you.
     - [x] Proxy
     - [x] Interrogating
     - [x] Serving
+    - [x] Emergency — PSAP chosen from local configuration by service URN and cell, no LRF ([TS 24.229 5.11](images/kamailio/cscf/emergency.cfg))
+  - [x] IBCF — entry and exit point on Ici: peer screening, topology hiding, header and body screening, privacy, rtpengine as TrGW, CDRs; no roaming registration, transcoding or STIR/SHAKEN ([TS 24.229 5.10](images/kamailio/cscf/border.cfg))
+  - [x] TAS — call barring by number prefix, outgoing and incoming, per subscriber in valkey ([TS 24.611](images/kamailio/as/telephony.cfg))
   - [x] [DB](doc/images.md#ims-db)
   - [x] [rtpengine](doc/images.md#rtpengine)
   - [x] [DNS](doc/images.md#coredns)
-    - [x] ENUM — a dialled number translated to a SIP URI, off-range numbers broken out to a trunk ([session flow](doc/session.md))
+    - [x] ENUM — a dialled number translated to a SIP URI, off-range numbers broken out to the IBCF ([session flow](doc/session.md))
 - Core Network (core.yml)
   - [x] [DRA](doc/images.md#freediameter-dra)
   - [x] [HSS](doc/images.md#open5gs-hsspcrfpgw)

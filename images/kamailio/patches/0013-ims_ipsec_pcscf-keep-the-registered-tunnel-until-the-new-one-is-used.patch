@@ -1,0 +1,619 @@
+Keep the registered tunnel until the UE has registered over the new one.
+
+ims_ipsec_pcscf kept its one tunnel in security_temp, so a re-challenge
+replaced the working tunnel the moment the 401 went out - patch 0003 tears the
+old one down right there - and the 401 itself, sent from the old protected
+server port, left with no policy to cover it. A UE that then fails or abandons
+the second REGISTER has no usable SA at all until the contact expires, and
+every MT request in between goes over SAs it may not have installed yet. TS
+33.203 7.4 has it the other way round: the SA set a 401 offers is only a
+candidate until a REGISTER over it is answered 200.
+
+Now security_temp holds the offer and security the tunnel the UE is registered
+over, both written through to the database:
+
+- ipsec_create() builds the offer beside the registered tunnel. An earlier
+  offer the UE never registered over is superseded and removed, as 0003 did.
+  The registered tunnel is removed up front only when the two would be the same
+  kernel state somewhere - an SA is keyed by destination and SPI, a policy by
+  its ports - which is what a UE that keeps its SPIs across offers, against
+  33.203, does. Then the new one has to win at once, or it would be installed
+  with the old one's keys (the add fails EEXIST): that is the old behaviour,
+  kept for that case only.
+- ipsec_promote(), exported in the API for ims_registrar_pcscf, makes the offer
+  the registered tunnel when a REGISTER came in over it - from the UE's
+  protected client port to the offer's protected server port - removes the
+  tunnel it replaces and releases that pair. Anything else promotes nothing.
+- ipsec_forward() sends MT requests over the registered tunnel, the offer
+  before a first registration completes, and a reply over the tunnel its
+  request came in on.
+- Expiry, ipsec_destroy() and ipsec_destroy_by_contact() remove both.
+
+Until ims_registrar_pcscf calls ipsec_promote() nothing fills security, and
+every 401 replaces the previous offer as 0003 did.
+
+The security_t around a REGISTER's Security-Client was leaked on every
+registration; it is freed or handed to the contact now.
+
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index f3ef4f161a..c02b2d9df0 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -118,6 +118,7 @@ int bind_ipsec_pcscf(ipsec_pcscf_api_t *api)
+ 
+ 	api->ipsec_on_expire = ipsec_on_expire;
+ 	api->ipsec_reconfig = ipsec_reconfig;
++	api->ipsec_promote = ipsec_promote;
+ 
+ 	return 0;
+ }
+@@ -606,8 +607,9 @@ static int create_ipsec_tunnel(const struct ip_addr *remote_addr, ipsec_t *s)
+ 	return 0;
+ }
+ 
+-static int destroy_ipsec_tunnel(
+-		str remote_addr, ipsec_t *s, unsigned short received_port)
++// Remove a tunnel's SAs and policies from the kernel, leaving its SPI pair
++// marked used. destroy_ipsec_tunnel() is this plus the release.
++static int remove_ipsec_tunnel(str remote_addr, ipsec_t *s)
+ {
+ 	struct mnl_socket *sock = init_mnl_socket();
+ 	if(sock == NULL) {
+@@ -687,11 +689,126 @@ static int destroy_ipsec_tunnel(
+ 	remove_policy(sock, remote_addr, ipsec_addr, s->port_us, s->port_ps,
+ 			s->spi_pc, ip_addr.af, IPSEC_POLICY_DIRECTION_IN);
+ 
++	close_mnl_socket(sock);
++	return 0;
++}
++
++static int destroy_ipsec_tunnel(
++		str remote_addr, ipsec_t *s, unsigned short received_port)
++{
++	int ret = remove_ipsec_tunnel(remote_addr, s);
++
+ 	// Release SPIs
+ 	release_spi(s->spi_pc, s->spi_ps, s->port_pc, s->port_ps);
+ 
+-	close_mnl_socket(sock);
+-	return 0;
++	return ret;
++}
++
++/*
++ * A contact holds up to two tunnels, as TS 33.203 7.4 has it: the one the UE
++ * registered over, in security, and the one a 401 has just offered, in
++ * security_temp, until a REGISTER over it is answered 200 and ipsec_promote()
++ * makes it the registered one. Until then the registered tunnel keeps
++ * carrying everything - MT requests, and whatever the UE still sends over it -
++ * so a challenge the UE never answers costs nothing but the offer.
++ *
++ * security_temp can also hold what save_pending() stored for a first
++ * registration: the UE's half of the offer only, with the P-CSCF's SPIs and
++ * ports still zero. That is not a tunnel yet; contact_tunnel() leaves it out.
++ */
++
++// The tunnel a security slot holds, or NULL when it holds none (yet)
++static ipsec_t *contact_tunnel(security_t *sec)
++{
++	ipsec_t *s;
++
++	if(!sec || sec->type != SECURITY_IPSEC || !sec->data.ipsec) {
++		return NULL;
++	}
++	s = sec->data.ipsec;
++	return (s->spi_pc && s->spi_ps && s->port_pc && s->port_ps) ? s : NULL;
++}
++
++// Whether two tunnels hold the same SPI pair from the generator
++static inline int same_spi_pair(ipsec_t *a, ipsec_t *b)
++{
++	return a->spi_pc == b->spi_pc && a->spi_ps == b->spi_ps;
++}
++
++static inline int share_any(
++		unsigned int a1, unsigned int a2, unsigned int b1, unsigned int b2)
++{
++	return a1 == b1 || a1 == b2 || a2 == b1 || a2 == b2;
++}
++
++/*
++ * Whether two tunnels of the same UE would be the same kernel state anywhere.
++ *
++ * An SA is keyed by its destination and SPI: the inbound ones by the P-CSCF's
++ * spi_pc/spi_ps, the outbound ones by the UE's address and its spi_uc/spi_us.
++ * A policy is keyed by its selector, a UE port against a P-CSCF port. Two
++ * tunnels that share any of these cannot be installed side by side - the add
++ * of the second one fails with EEXIST and leaves the first one's state, keys
++ * and all - and removing one takes the other's with it.
++ *
++ * A UE that picks new SPIs for every offer, as TS 33.203 7.4 requires, never
++ * collides: the P-CSCF's pair is new as well, unless ipsec_reuse_server_port
++ * handed out the same one again.
++ */
++static int tunnels_collide(ipsec_t *a, ipsec_t *b)
++{
++	return share_any(a->spi_pc, a->spi_ps, b->spi_pc, b->spi_ps)
++		   || share_any(a->spi_uc, a->spi_us, b->spi_uc, b->spi_us)
++		   || (share_any(a->port_uc, a->port_us, b->port_uc, b->port_us)
++				   && share_any(a->port_pc, a->port_ps, b->port_pc,
++						   b->port_ps));
++}
++
++// Remove a tunnel that is being replaced by keep. Its SPI pair goes back to
++// the generator unless keep took the same one over.
++static void retire_ipsec_tunnel(str remote_addr, ipsec_t *s, ipsec_t *keep)
++{
++	remove_ipsec_tunnel(remote_addr, s);
++	if(!keep || !same_spi_pair(s, keep)) {
++		release_spi(s->spi_pc, s->spi_ps, s->port_pc, s->port_ps);
++	}
++}
++
++// Remove both of a contact's tunnels
++static void destroy_contact_tunnels(str remote_addr, pcontact_t *c)
++{
++	ipsec_t *est = contact_tunnel(c->security);
++	ipsec_t *pend = contact_tunnel(c->security_temp);
++
++	if(pend && pend != est) {
++		if(est && tunnels_collide(est, pend)) {
++			// what they share is one state, removed with est below
++			if(!same_spi_pair(est, pend)) {
++				release_spi(pend->spi_pc, pend->spi_ps, pend->port_pc,
++						pend->port_ps);
++			}
++		} else {
++			retire_ipsec_tunnel(remote_addr, pend, est);
++		}
++	}
++	if(est) {
++		destroy_ipsec_tunnel(remote_addr, est, c->contact_port);
++	}
++}
++
++static void free_ipsec_data(ipsec_t *p);
++
++static void free_security_slot(security_t *sec)
++{
++	if(!sec) {
++		return;
++	}
++	if(sec->type == SECURITY_IPSEC) {
++		free_ipsec_data(sec->data.ipsec);
++	} else if(sec->type == SECURITY_TLS && sec->data.tls) {
++		shm_free(sec->data.tls);
++	}
++	shm_free(sec);
+ }
+ 
+ void ipsec_on_expire(struct pcontact *c, int type, void *param)
+@@ -702,19 +819,12 @@ void ipsec_on_expire(struct pcontact *c, int type, void *param)
+ 	}
+ 
+ 
+-	if(c->security_temp == NULL) {
+-		LM_ERR("No security parameters found in contact\n");
++	if(!contact_tunnel(c->security) && !contact_tunnel(c->security_temp)) {
++		LM_DBG("No tunnel found in contact\n");
+ 		return;
+ 	}
+ 
+-	//get security parameters
+-	if(c->security_temp->type != SECURITY_IPSEC) {
+-		LM_ERR("Unsupported security type: %d\n", c->security_temp->type);
+-		return;
+-	}
+-
+-	destroy_ipsec_tunnel(
+-			c->received_host, c->security_temp->data.ipsec, c->contact_port);
++	destroy_contact_tunnels(c->received_host, c);
+ }
+ 
+ int add_supported_secagree_header(struct sip_msg *m)
+@@ -862,10 +972,16 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 	ipsec_t *s = NULL;
+ 	ipsec_t *old_s = NULL;
+ 	ipsec_t *old_ipsec = NULL;
+-	// set to 1 once req_sec_params->data.ipsec is handed to the contact (initial
+-	// registration); if it stays 0 that ipsec_t was only used to build the
+-	// tunnel and must be freed before returning, otherwise it leaks
++	ipsec_t *est = NULL;  // the tunnel the UE is registered over
++	ipsec_t *pend = NULL; // the one a previous 401 offered
++	security_t *old_sec = NULL;
++	// set to 1 once req_sec_params->data.ipsec is handed to the contact; if it
++	// stays 0 that ipsec_t was only used to build the tunnel and must be freed
++	// before returning, otherwise it leaks. sec_stored is the same for the
++	// security_t around it.
+ 	int ipsec_swapped = 0;
++	int sec_stored = 0;
++	int pend_retired = 0;
+ 
+ 	if(m->first_line.type == SIP_REPLY) {
+ 		t = tmb.t_gett();
+@@ -887,18 +1003,18 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 		goto cleanup;
+ 	}
+ 
++	est = contact_tunnel(pcontact->security);
++	pend = contact_tunnel(pcontact->security_temp);
++
+ 	// Get security parameters
+-	if(pcontact->security_temp == NULL) {
++	if(!est
++			&& (pcontact->security_temp == NULL
++					|| pcontact->security_temp->type != SECURITY_IPSEC
++					|| pcontact->security_temp->data.ipsec == NULL)) {
+ 		LM_ERR("No security parameters found in contact\n");
+ 		goto cleanup;
+ 	}
+ 
+-	if(pcontact->security_temp->type != SECURITY_IPSEC) {
+-		LM_ERR("Unsupported security type: %d\n",
+-				pcontact->security_temp->type);
+-		goto cleanup;
+-	}
+-
+ 	// Get request from reply
+ 	if(!t)
+ 		t = tmb.t_gett();
+@@ -912,15 +1028,14 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 	// Parse security parameters from the REGISTER request and get some data for the new tunnels
+ 	req_sec_params = cscf_get_security(req);
+ 
+-	// Update contacts only for initial registration, for re-registration the existing contacts shouldn't be updated.
+-	if(pcontact->security_temp->data.ipsec->port_ps == 0
+-			&& pcontact->security_temp->data.ipsec->port_pc == 0) {
++	if(!est && !pend) {
+ 		LM_DBG("Registration for contact with AOR [%.*s], VIA [%d://%.*s:%d], "
+ 			   "received_host [%d://%.*s:%d]\n",
+ 				ci.aor.len, ci.aor.s, ci.via_prot, ci.via_host.len,
+ 				ci.via_host.s, ci.via_port, ci.received_proto,
+ 				ci.received_host.len, ci.received_host.s, ci.received_port);
+ 
++		// the UE's offer save_pending() stored, when the REGISTER has none
+ 		if(req_sec_params == NULL)
+ 			s = pcontact->security_temp->data.ipsec;
+ 		else
+@@ -938,9 +1053,9 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 		}
+ 
+ 		s = req_sec_params->data.ipsec;
+-		old_s = (ipsec_reuse_server_port && pcontact->security_temp)
+-						? pcontact->security_temp->data.ipsec
+-						: NULL;
++		// the latest offer: for a second 401 to the same challenge, the one
++		// the first 401 made
++		old_s = ipsec_reuse_server_port ? (pend ? pend : est) : NULL;
+ 	}
+ 
+ 	if(update_contact_ipsec_params(s, m, old_s) != 0) {
+@@ -948,26 +1063,43 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 		goto cleanup;
+ 	}
+ 
+-	// If the contact already had a tunnel and update_contact_ipsec_params()
+-	// did not reuse its parameters - a re-registration whose CK/IK changed
+-	// takes a fresh pair from acquire_spi() - that tunnel is still installed in
+-	// the kernel and its port pair is still marked used. Tear it down here,
+-	// before the replacement is created: the old and the new one share the UE's
+-	// SPIs, so their outbound SAs are the same kernel states and removing them
+-	// afterwards would take the new tunnel's with them.
+-	old_ipsec = pcontact->security_temp->data.ipsec;
+-	if(old_ipsec && old_ipsec != s && old_ipsec->spi_pc && old_ipsec->spi_ps
+-			&& old_ipsec->port_pc && old_ipsec->port_ps
+-			&& (old_ipsec->spi_pc != s->spi_pc
+-					|| old_ipsec->spi_ps != s->spi_ps
+-					|| old_ipsec->port_pc != s->port_pc
+-					|| old_ipsec->port_ps != s->port_ps)) {
+-		LM_DBG("Replacing tunnel on contact [%.*s]: destroying the previous one "
+-			   "(client port %d, server port %d, spi_pc %u, spi_ps %u)\n",
+-				ci.aor.len, ci.aor.s, old_ipsec->port_pc, old_ipsec->port_ps,
+-				old_ipsec->spi_pc, old_ipsec->spi_ps);
+-		destroy_ipsec_tunnel(
+-				ci.received_host, old_ipsec, pcontact->contact_port);
++	// An offer the UE never registered over - had it, ipsec_promote() would
++	// have made it the registered tunnel - is superseded by this one. It is
++	// still installed and its pair still marked used, so remove it, and before
++	// the replacement is created: the two may share state (the same pair again
++	// from ipsec_reuse_server_port, or a UE that keeps its SPIs), and removing
++	// it afterwards would take the new tunnel's with it.
++	if(pend && pend != s) {
++		LM_DBG("Replacing the offered tunnel on contact [%.*s] (client port "
++			   "%d, server port %d, spi_pc %u, spi_ps %u)\n",
++				ci.aor.len, ci.aor.s, pend->port_pc, pend->port_ps,
++				pend->spi_pc, pend->spi_ps);
++		retire_ipsec_tunnel(ci.received_host, pend, s);
++		// what is left in the slot is only the UE's half again: nothing to
++		// re-offer or release should this 401 fail from here on
++		pend->spi_pc = pend->spi_ps = 0;
++		pend->port_pc = pend->port_ps = 0;
++		pend_retired = 1;
++	}
++
++	// The registered tunnel stays until the UE has registered over the new
++	// one - unless the two cannot exist side by side. Then the new one has to
++	// win now, or it would be installed with the old one's keys.
++	if(est && tunnels_collide(est, s)) {
++		LM_INFO("Contact [%.*s]: the new tunnel (spi_uc %u, spi_us %u, spi_pc "
++				"%u, spi_ps %u) shares state with the registered one (spi_uc "
++				"%u, spi_us %u, spi_pc %u, spi_ps %u), replacing it before the "
++				"UE has registered over the new one\n",
++				ci.aor.len, ci.aor.s, s->spi_uc, s->spi_us, s->spi_pc,
++				s->spi_ps, est->spi_uc, est->spi_us, est->spi_pc, est->spi_ps);
++		retire_ipsec_tunnel(ci.received_host, est, s);
++		old_sec = pcontact->security;
++		if(ul.update_security(d, SECURITY_IPSEC, NULL, pcontact) != 0) {
++			LM_ERR("Error clearing security\n");
++		}
++		pcontact->security = NULL;
++		free_security_slot(old_sec);
++		est = NULL;
+ 	}
+ 
+ 	fun_ret_c = create_ipsec_tunnel(&req->rcv.src_ip, s);
+@@ -977,17 +1109,25 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 	}
+ 
+ 	if(req_sec_params != NULL) {
+-		old_ipsec = pcontact->security_temp->data.ipsec;
+-		pcontact->security_temp->data.ipsec = s;
++		if(pcontact->security_temp == NULL) {
++			// a registered contact: its last offer became the registered
++			// tunnel, so this one gets the slot to itself
++			pcontact->security_temp = req_sec_params;
++			sec_stored = 1;
++		} else {
++			old_ipsec = pcontact->security_temp->data.ipsec;
++			pcontact->security_temp->type = SECURITY_IPSEC;
++			pcontact->security_temp->data.ipsec = s;
++			// free the ipsec_t we just replaced on the contact - it was
++			// stored by save_pending() (or a prior ipsec_create()) and was
++			// previously orphaned on every registration
++			if(old_ipsec && old_ipsec != s) {
++				free_ipsec_data(old_ipsec);
++			}
++		}
+ 		// s is now owned by the contact (freed at contact expiry by
+ 		// free_security()); do not free it on the cleanup path
+ 		ipsec_swapped = 1;
+-		// free the ipsec_t we just replaced on the contact - it was
+-		// stored by save_pending() (or a prior ipsec_create()) and was
+-		// previously orphaned on every registration
+-		if(old_ipsec && old_ipsec != s) {
+-			free_ipsec_data(old_ipsec);
+-		}
+ 	}
+ 	// Update temp security parameters
+ 	if(ul.update_temp_security(d, pcontact->security_temp->type,
+@@ -1042,12 +1182,14 @@ cleanup:
+ 	// reply had to do was name it. So name it: re-offer what is installed and
+ 	// report success, which makes the duplicate the retransmission it is
+ 	// rather than a downgrade to no security at all.
+-	if(ret != IPSEC_CMD_SUCCESS && pcontact != NULL
+-			&& pcontact->security_temp != NULL
+-			&& pcontact->security_temp->type == SECURITY_IPSEC) {
+-		ipsec_t *cur = pcontact->security_temp->data.ipsec;
+-		if(cur && cur->spi_pc && cur->spi_ps && cur->port_pc && cur->port_ps
+-				&& add_supported_secagree_header(m) == 0
++	//
++	// The latest offer still installed is the one to name: the offered tunnel
++	// if there is one, else the registered one.
++	if(ret != IPSEC_CMD_SUCCESS && pcontact != NULL) {
++		ipsec_t *cur = contact_tunnel(pcontact->security_temp);
++		if(!cur)
++			cur = contact_tunnel(pcontact->security);
++		if(cur && add_supported_secagree_header(m) == 0
+ 				&& add_security_server_header(m, cur) == 0) {
+ 			LM_WARN("Could not build a tunnel for this 401 on contact [%.*s]; "
+ 					"re-offering the one already installed (client port %d, "
+@@ -1066,6 +1208,15 @@ cleanup:
+ 		free_ipsec_data(req_sec_params->data.ipsec);
+ 		req_sec_params->data.ipsec = NULL;
+ 	}
++	if(req_sec_params && !sec_stored) {
++		shm_free(req_sec_params);
++	}
++	if(pend_retired && !ipsec_swapped
++			&& ul.update_temp_security(d, pcontact->security_temp->type,
++					   pcontact->security_temp, pcontact)
++					   != 0) {
++		LM_ERR("Error updating temp security\n");
++	}
+ 	ul.unlock_udomain(d, &ci.via_host, ci.via_port, ci.via_prot);
+ 	pkg_free(ci.received_host.s);
+ 	pkg_free(ci.aor.s);
+@@ -1075,6 +1226,74 @@ cleanup:
+ 	return ret;
+ }
+ 
++/**
++ * Make the offered tunnel the registered one, once the UE has registered over
++ * it (TS 33.203 7.4).
++ *
++ * Called by ims_registrar_pcscf with the domain locked, for each contact a 200
++ * to a REGISTER updates. Only a REGISTER that came in over the offered tunnel -
++ * from the UE's protected client port to the P-CSCF's protected server port -
++ * proves the UE has it: a 200 to one sent over the registered tunnel (a
++ * refresh that was not challenged), or to another contact's, changes nothing.
++ * The registered tunnel it replaces is removed and its pair released.
++ *
++ * \return 1 if the tunnel was promoted, 0 if there was nothing to promote
++ */
++int ipsec_promote(udomain_t *d, pcontact_t *c, struct receive_info *rcv)
++{
++	ipsec_t *pend = contact_tunnel(c->security_temp);
++	ipsec_t *est = contact_tunnel(c->security);
++	security_t *old_sec;
++	ip_addr_t ue_addr;
++
++	if(!pend || !rcv) {
++		return 0;
++	}
++	if(rcv->dst_port != pend->port_ps || rcv->src_port != pend->port_uc
++			|| str2ipxbuf(&c->received_host, &ue_addr) < 0
++			|| !ip_addr_cmp(&ue_addr, &rcv->src_ip)) {
++		LM_DBG("contact [%.*s]: REGISTER from port %u to %u did not come over "
++			   "the offered tunnel (%u to %u)\n",
++				c->aor.len, c->aor.s, rcv->src_port, rcv->dst_port,
++				pend->port_uc, pend->port_ps);
++		return 0;
++	}
++
++	if(est) {
++		if(tunnels_collide(est, pend)) {
++			// ipsec_create() does not leave two such tunnels side by side;
++			// what they share is the offered tunnel's now, so leave it
++			LM_WARN("contact [%.*s]: the registered tunnel shares state with "
++					"the offered one, leaving it installed\n",
++					c->aor.len, c->aor.s);
++			if(!same_spi_pair(est, pend)) {
++				release_spi(est->spi_pc, est->spi_ps, est->port_pc,
++						est->port_ps);
++			}
++		} else {
++			retire_ipsec_tunnel(c->received_host, est, pend);
++		}
++	}
++
++	LM_DBG("contact [%.*s]: registered over the offered tunnel (client port "
++		   "%d, server port %d, spi_pc %u, spi_ps %u)%s\n",
++			c->aor.len, c->aor.s, pend->port_pc, pend->port_ps, pend->spi_pc,
++			pend->spi_ps, est ? ", the previous one removed" : "");
++
++	old_sec = c->security;
++	if(ul.update_security(d, SECURITY_IPSEC, c->security_temp, c) != 0) {
++		LM_ERR("Error updating security\n");
++	}
++	c->security = c->security_temp;
++	if(ul.update_temp_security(d, SECURITY_IPSEC, NULL, c) != 0) {
++		LM_ERR("Error clearing temp security\n");
++	}
++	c->security_temp = NULL;
++	free_security_slot(old_sec);
++
++	return 1;
++}
++
+ /**
+  *
+  */
+@@ -1157,20 +1376,31 @@ int ipsec_forward(struct sip_msg *m, udomain_t *d, int _cflags)
+ 		goto cleanup;
+ 	}
+ 
+-	if(pcontact->security_temp == NULL) {
++	// A reply goes over the tunnel its request came in on; a request over
++	// the one the UE is registered over, or, before the first registration
++	// has completed, the one it is registering over.
++	ipsec_t *s = NULL;
++	ipsec_t *est = contact_tunnel(pcontact->security);
++	ipsec_t *pend = contact_tunnel(pcontact->security_temp);
++	if(m->first_line.type == SIP_REPLY && pend
++			&& (req->rcv.dst_port == pend->port_ps
++					|| req->rcv.dst_port == pend->port_pc)) {
++		s = pend;
++	} else if(est) {
++		s = est;
++	} else if(pend) {
++		s = pend;
++	} else if(pcontact->security_temp
++			  && pcontact->security_temp->type == SECURITY_IPSEC
++			  && pcontact->security_temp->data.ipsec) {
++		s = pcontact->security_temp->data.ipsec;
++	}
++
++	if(s == NULL) {
+ 		LM_ERR("No security parameters found in contact\n");
+ 		goto cleanup;
+ 	}
+ 
+-	//get security parameters
+-	if(pcontact->security_temp->type != SECURITY_IPSEC) {
+-		LM_ERR("Unsupported security type: %d\n",
+-				pcontact->security_temp->type);
+-		goto cleanup;
+-	}
+-
+-	ipsec_t *s = pcontact->security_temp->data.ipsec;
+-
+ 	// Update the destination
+ 	//
+ 	//       from sec-agree
+@@ -1399,20 +1629,13 @@ int ipsec_destroy(struct sip_msg *m, udomain_t *d, str *uri)
+ 	}
+ 
+ 
+-	if(pcontact->security_temp == NULL) {
++	if(!contact_tunnel(pcontact->security)
++			&& !contact_tunnel(pcontact->security_temp)) {
+ 		LM_ERR("No security parameters found in contact\n");
+ 		goto cleanup;
+ 	}
+ 
+-	//get security parameters
+-	if(pcontact->security_temp->type != SECURITY_IPSEC) {
+-		LM_ERR("Unsupported security type: %d\n",
+-				pcontact->security_temp->type);
+-		goto cleanup;
+-	}
+-
+-	destroy_ipsec_tunnel(ci.received_host, pcontact->security_temp->data.ipsec,
+-			pcontact->contact_port);
++	destroy_contact_tunnels(ci.received_host, pcontact);
+ 
+ 	ret = IPSEC_CMD_SUCCESS; // all good, set ret to SUCCESS, and exit
+ 
+@@ -1465,20 +1688,13 @@ int ipsec_destroy_by_contact(
+ 	ul.lock_udomain(
+ 			_d, &pcontact->via_host, pcontact->via_port, pcontact->via_proto);
+ 
+-	if(pcontact->security_temp == NULL) {
++	if(!contact_tunnel(pcontact->security)
++			&& !contact_tunnel(pcontact->security_temp)) {
+ 		LM_ERR("No security parameters found in contact\n");
+ 		goto cleanup;
+ 	}
+ 
+-	//get security parameters
+-	if(pcontact->security_temp->type != SECURITY_IPSEC) {
+-		LM_ERR("Unsupported security type: %d\n",
+-				pcontact->security_temp->type);
+-		goto cleanup;
+-	}
+-
+-	destroy_ipsec_tunnel(search_ci.received_host,
+-			pcontact->security_temp->data.ipsec, pcontact->contact_port);
++	destroy_contact_tunnels(search_ci.received_host, pcontact);
+ 
+ 	ret = IPSEC_CMD_SUCCESS; // all good, set ret to SUCCESS, and exit
+ 
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.h b/src/modules/ims_ipsec_pcscf/cmd.h
+index 9817a638c3..39b29157f0 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.h
++++ b/src/modules/ims_ipsec_pcscf/cmd.h
+@@ -51,12 +51,16 @@
+ 
+ typedef void (*contact_expired_t)(pcontact_t *c, int type, void *param);
+ typedef int (*reconfig_tunnels_t)();
++struct receive_info;
++typedef int (*promote_tunnel_t)(
++		udomain_t *d, pcontact_t *c, struct receive_info *rcv);
+ 
+ /*! ipsec pcscf API export structure */
+ typedef struct ipsec_pcscf_api
+ {
+ 	contact_expired_t ipsec_on_expire;
+ 	reconfig_tunnels_t ipsec_reconfig;
++	promote_tunnel_t ipsec_promote;
+ } ipsec_pcscf_api_t;
+ 
+ /*! ipsec pcscf API export bind function */
+@@ -71,6 +75,7 @@ int ipsec_destroy(struct sip_msg *m, udomain_t *d, str *uri);
+ int ipsec_cleanall();
+ int ipsec_reconfig();
+ void ipsec_on_expire(pcontact_t *c, int type, void *param);
++int ipsec_promote(udomain_t *d, pcontact_t *c, struct receive_info *rcv);
+ int ipsec_destroy_by_contact(
+ 		udomain_t *_d, str *uri, str *received_host, int received_port);
+ 

@@ -12,6 +12,9 @@ services:
     - /dev/net/tun
     cap_add:
     - NET_ADMIN
+    sysctls:
+      # docker turns on IPv4 forwarding in a container, never IPv6
+      net.ipv6.conf.all.forwarding: 1
     restart: unless-stopped
     depends_on:
       smf:
@@ -24,8 +27,12 @@ services:
     - -c
     - |
       sleep 3
-      ip addr add ${UEGW}/16 dev tunue;
+      ip addr add ${UEGW}/$${UENET#*/} dev tunue;
+      ip addr add ${UEGWv6}/$${UENETv6#*/} dev tunue;
       ip link set tunue up
+    environment:
+      UENET: ${UENET}
+      UENETv6: ${UENETv6}
     network_mode: service:upf
     cap_add:
     - NET_ADMIN
@@ -60,5 +67,9 @@ configs:
         session:
         - subnet: ${UENET}
           gateway: ${UEGW}
+          dnn: ims
+          dev: tunue
+        - subnet: ${UENETv6}
+          gateway: ${UEGWv6}
           dnn: ims
           dev: tunue

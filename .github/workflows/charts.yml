@@ -36,8 +36,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # Dual-stack: a UE on an IPv6 PDN rides the UPF's own eth0 and the node's
+    # routes on to Gm, so both need IPv6 of their own.
+    - name: KinD Config
+      run: |
+        cat > kind.yaml <<'EOF'
+        kind: Cluster
+        apiVersion: kind.x-k8s.io/v1alpha4
+        networking:
+          ipFamily: dual
+        EOF
+
     - name: Create KinD Cluster
       uses: helm/kind-action@v1
+      with:
+        config: kind.yaml
 
     # KinD ships neither the bridge plugin nor Multus. v4.3.0 because the thin
     # image is published up to v4.3.0 only, and pinned by name because the
@@ -97,12 +110,15 @@ jobs:
     # kindnet SNATs anything leaving the pod CIDR, and transport-mode ESP does
     # not survive that: the plain REGISTER and the 401 ride through and only
     # the protected REGISTER disappears. The Gm and media subnets from the IMS
-    # values below.
+    # values below, and the same again for IPv6.
     - name: Exempt the secondary subnets from masquerading
       run: |
         NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
         for net in 10.20.0.0/24 10.30.0.0/24; do
           docker exec "$NODE" iptables -t nat -I KIND-MASQ-AGENT 1 -d "$net" -j RETURN
+        done
+        for net in fd20::/64 fd30::/64; do
+          docker exec "$NODE" ip6tables -t nat -I KIND-MASQ-AGENT 1 -d "$net" -j RETURN
         done
 
     # The chart defaults request 5.8 cores between them -- the measured demand
@@ -120,6 +136,7 @@ jobs:
         ims:
           pcscf:
           - 10.20.0.10
+          - fd20::10
         components:
           hss:
             resources:
@@ -149,16 +166,24 @@ jobs:
     # and with no gateway to take from it the bridge's own address is the
     # subnet's first, 10.20.0.1. The `null`s drop macvlan's keys, which Helm's
     # map merge would otherwise keep beside these. rtpengine's interfaces are a
-    # list, which Helm replaces whole, so `external` is restated and no `null`s
-    # are needed there.
+    # list, which Helm replaces whole, so both are given in full and no
+    # `null`s are needed there. `external` is the TrGW's side of Ici, on the
+    # IBCF's bridge, its vips past rangeEnd like media's.
     #
     # The default `gm.addresses` is what makes the P-CSCF .10 -- move it
     # together with ims.pcscf above.
+    #
+    # The IBCF is on, with one peer that nothing plays: its Ready only needs
+    # the peer loaded. The test that plays it (test.border) needs a pro2call
+    # with ibcf_peer.lua, which the published one is not yet; kind.sh runs it
+    # against a local build.
     - name: Install IMS
       run: |
         helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m -f - <<'EOF'
         gm:
           enabled: true
+          addresses6:
+          - fd20::10/64
           config:
             cniVersion: 0.3.1
             type: bridge
@@ -166,10 +191,27 @@ jobs:
             isGateway: true
             master: null
             mode: null
+        ici:
+          config:
+            cniVersion: 0.3.1
+            type: bridge
+            bridge: ici0
+            master: null
+            mode: null
         global:
           ue:
             via: 10.20.0.1
+            via6: fd20::1
         cscf:
+          border:
+            enabled: true
+            peers:
+            - name: peer
+              entry: [sip:10.40.0.30:5060]
+              routes: [ims.mnc099.mcc001.3gppnetwork.org, "+999"]
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 1, memory: 256Mi}
           proxy:
             resources:
               requests: {cpu: 50m, memory: 64Mi}
@@ -187,6 +229,9 @@ jobs:
             interfaces:
             - name: internal
               address: media0
+              # one per replica, past the host-local rangeEnd below
+              vips: [10.30.0.251, 10.30.0.252]
+              vips6: [fd30::fb, fd30::fc]
               network:
                 enabled: true
                 name: media
@@ -197,15 +242,38 @@ jobs:
                   isGateway: true
                   ipam:
                     type: host-local
-                    subnet: 10.30.0.0/24
-                    gateway: 10.30.0.1
-                    rangeStart: 10.30.0.10
-                    rangeEnd: 10.30.0.250
+                    ranges:
+                    - - subnet: 10.30.0.0/24
+                        gateway: 10.30.0.1
+                        rangeStart: 10.30.0.10
+                        rangeEnd: 10.30.0.250
+                    - - subnet: fd30::/64
+                        gateway: fd30::1
+                        rangeStart: fd30::10
+                        rangeEnd: fd30::fa
                     routes:
                     - dst: 10.10.0.0/16
                       gw: 10.30.0.1
+                    - dst: fd10:10::/48
+                      gw: fd30::1
             - name: external
-              alias: internal
+              address: ici0
+              vips: [10.40.0.251, 10.40.0.252]
+              network:
+                enabled: true
+                name: ici
+                config:
+                  cniVersion: 0.3.1
+                  type: bridge
+                  bridge: ici0
+                  isGateway: true
+                  ipam:
+                    type: host-local
+                    ranges:
+                    - - subnet: 10.40.0.0/24
+                        gateway: 10.40.0.1
+                        rangeStart: 10.40.0.100
+                        rangeEnd: 10.40.0.250
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 2, memory: 512Mi}

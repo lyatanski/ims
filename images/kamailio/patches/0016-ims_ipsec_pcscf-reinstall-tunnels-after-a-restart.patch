@@ -1,0 +1,397 @@
+Install the IPsec tunnels again after a P-CSCF restart into a new namespace.
+
+Patch 0015 keeps the tunnels across a restart that keeps the network
+namespace. One that does not - a container recreated, a pod replaced - starts
+with no SAs at all, while the preloaded contacts, and the UEs, still hold
+theirs: everything the UEs send over ESP is dropped until they re-register.
+
+The contacts now carry everything the tunnel was built from (CK, IK, the
+negotiated algorithms, both sides' SPIs and ports, the UE's address), so
+ipsec_restore_tunnels() calls create_ipsec_tunnel() for each of them - both,
+for a contact holding the tunnel it is registered over and an offer beside it. The adds
+use NLM_F_EXCL, so an SA or policy that survived the restart makes its add fail
+and stays as it is, counters and all; only what is missing is created. One path
+covers both kinds of restart, and a tunnel left half-installed as well.
+
+A put-back outbound SA must not start numbering at 1. The UE's inbound SA has
+seen the old one's sequence numbers and drops what it has seen and everything
+more than its replay window (32) below the highest, so a fresh SA would be
+silent towards the UE until it caught up - for a UE that received a thousand
+packets, a thousand lost MT requests and responses. Nothing records how far the
+old SA got, so the new ones start above a bound instead: add_sa() takes the
+starting oseq (XFRMA_REPLAY_VAL), and the put-back outbound SAs start at
+ipsec_restore_oseq_rate (default 16) per second since 2026-01-01. That holds as
+long as no SA sends faster than the rate on average, and still holds for a
+second restart while a UE is on a put-back SA; it runs out of 32-bit headroom in
+about 8 years at the default, and is clamped with a warning before then.
+Inbound SAs need nothing: a fresh replay state accepts the UE's numbers.
+
+The replacement has to come up on the same ipsec_listen_addr: the UE's SAs and
+policies are bound to it.
+
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index f76abdd1e9..b1dba9a806 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -59,11 +59,14 @@
+ #include <string.h>
+ 
+ #include <arpa/inet.h>
++#include <stdint.h>
++#include <time.h>
+ 
+ 
+ extern str ipsec_listen_addr;
+ extern str ipsec_listen_addr6;
+ extern int ipsec_reuse_server_port;
++extern int ipsec_restore_oseq_rate;
+ extern ip_addr_t ipsec_listen_ip_addr;
+ extern ip_addr_t ipsec_listen_ip_addr6;
+ 
+@@ -503,7 +506,11 @@ static int update_contact_ipsec_params(
+ 	return 0;
+ }
+ 
+-static int create_ipsec_tunnel(const struct ip_addr *remote_addr, ipsec_t *s)
++// oseq: the sequence number the SAs from the P-CSCF to the UE start at, 0 for
++// the kernel's default. Only a tunnel put back for a UE that is still using it
++// needs one.
++static int create_ipsec_tunnel(
++		const struct ip_addr *remote_addr, ipsec_t *s, uint32_t oseq)
+ {
+ 	struct mnl_socket *sock = init_mnl_socket();
+ 	if(sock == NULL) {
+@@ -548,28 +555,28 @@ static int create_ipsec_tunnel(const struct ip_addr *remote_addr, ipsec_t *s)
+ 	// SA1 UE client to P-CSCF server
+ 	//               src adrr     dst addr     src port    dst port
+ 	add_sa(sock, remote_addr, ipsec_addr, s->port_uc, s->port_ps, s->spi_ps,
+-			s->ck, s->ik, s->r_alg, s->r_ealg);
++			s->ck, s->ik, s->r_alg, s->r_ealg, 0);
+ 	add_policy(sock, remote_addr, ipsec_addr, s->port_uc, s->port_ps, s->spi_ps,
+ 			IPSEC_POLICY_DIRECTION_IN);
+ 
+ 	// SA2 P-CSCF client to UE server
+ 	//               src adrr     dst addr     src port           dst port
+ 	add_sa(sock, ipsec_addr, remote_addr, s->port_pc, s->port_us, s->spi_us,
+-			s->ck, s->ik, s->r_alg, s->r_ealg);
++			s->ck, s->ik, s->r_alg, s->r_ealg, oseq);
+ 	add_policy(sock, ipsec_addr, remote_addr, s->port_pc, s->port_us, s->spi_us,
+ 			IPSEC_POLICY_DIRECTION_OUT);
+ 
+ 	// SA3 P-CSCF server to UE client
+ 	//               src adrr     dst addr     src port           dst port
+ 	add_sa(sock, ipsec_addr, remote_addr, s->port_ps, s->port_uc, s->spi_uc,
+-			s->ck, s->ik, s->r_alg, s->r_ealg);
++			s->ck, s->ik, s->r_alg, s->r_ealg, oseq);
+ 	add_policy(sock, ipsec_addr, remote_addr, s->port_ps, s->port_uc, s->spi_uc,
+ 			IPSEC_POLICY_DIRECTION_OUT);
+ 
+ 	// SA4 UE server to P-CSCF client
+ 	//               src adrr     dst addr     src port    dst port
+ 	add_sa(sock, remote_addr, ipsec_addr, s->port_us, s->port_pc, s->spi_pc,
+-			s->ck, s->ik, s->r_alg, s->r_ealg);
++			s->ck, s->ik, s->r_alg, s->r_ealg, 0);
+ 	add_policy(sock, remote_addr, ipsec_addr, s->port_us, s->port_pc, s->spi_pc,
+ 			IPSEC_POLICY_DIRECTION_IN);
+ 
+@@ -577,28 +584,28 @@ static int create_ipsec_tunnel(const struct ip_addr *remote_addr, ipsec_t *s)
+ 	// SA5 UE client to P-CSCF client
+ 	//               src adrr     dst addr     src port    dst port
+ 	add_sa(sock, remote_addr, ipsec_addr, s->port_uc, s->port_pc, s->spi_ps,
+-			s->ck, s->ik, s->r_alg, s->r_ealg);
++			s->ck, s->ik, s->r_alg, s->r_ealg, 0);
+ 	add_policy(sock, remote_addr, ipsec_addr, s->port_uc, s->port_pc, s->spi_ps,
+ 			IPSEC_POLICY_DIRECTION_IN);
+ 
+ 	// SA6 P-CSCF client to UE client
+ 	//               src adrr     dst addr     src port    dst port
+ 	add_sa(sock, ipsec_addr, remote_addr, s->port_pc, s->port_uc, s->spi_us,
+-			s->ck, s->ik, s->r_alg, s->r_ealg);
++			s->ck, s->ik, s->r_alg, s->r_ealg, oseq);
+ 	add_policy(sock, ipsec_addr, remote_addr, s->port_pc, s->port_uc, s->spi_us,
+ 			IPSEC_POLICY_DIRECTION_OUT);
+ 
+ 	// SA7 P-CSCF server to UE server
+ 	//               src adrr     dst addr     src port    dst port
+ 	add_sa(sock, ipsec_addr, remote_addr, s->port_ps, s->port_us, s->spi_uc,
+-			s->ck, s->ik, s->r_alg, s->r_ealg);
++			s->ck, s->ik, s->r_alg, s->r_ealg, oseq);
+ 	add_policy(sock, ipsec_addr, remote_addr, s->port_ps, s->port_us, s->spi_uc,
+ 			IPSEC_POLICY_DIRECTION_OUT);
+ 
+ 	// SA8 UE server to P-CSCF server
+ 	//               src adrr     dst addr     src port    dst port
+ 	add_sa(sock, remote_addr, ipsec_addr, s->port_us, s->port_ps, s->spi_pc,
+-			s->ck, s->ik, s->r_alg, s->r_ealg);
++			s->ck, s->ik, s->r_alg, s->r_ealg, 0);
+ 	add_policy(sock, remote_addr, ipsec_addr, s->port_us, s->port_ps, s->spi_pc,
+ 			IPSEC_POLICY_DIRECTION_IN);
+ 
+@@ -1102,7 +1109,7 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 		est = NULL;
+ 	}
+ 
+-	fun_ret_c = create_ipsec_tunnel(&req->rcv.src_ip, s);
++	fun_ret_c = create_ipsec_tunnel(&req->rcv.src_ip, s, 0);
+ 	if(fun_ret_c != 0) {
+ 		LM_ERR("IPSEC tunnel creation failed.\n");
+ 		goto cleanup;
+@@ -1730,11 +1737,51 @@ int ipsec_reconfig()
+ 
+ typedef struct restore_stats
+ {
+-	int tunnels;  /* complete tunnels the contacts hold */
+-	int reserved; /* ... whose SPI pair was reserved */
++	int tunnels;	/* complete tunnels the contacts hold */
++	int failed;		/* ... whose tunnel could not be installed */
++	int reserved;	/* ... whose SPI pair was reserved */
+ 	int subscribed; /* ... that now have ipsec_on_expire */
++	uint32_t oseq;	/* where a put-back outbound SA starts numbering */
+ } restore_stats_t;
+ 
++/* 2026-01-01T00:00:00Z: the zero of the put-back sequence numbers */
++#define IPSEC_RESTORE_OSEQ_EPOCH 1767225600
++/* keep a put-back SA this far from where a 32-bit sequence number runs out */
++#define IPSEC_RESTORE_OSEQ_MAX 0xC0000000U
++
++/**
++ * The sequence number an outbound SA put back for a live tunnel starts at.
++ *
++ * The UE's inbound SA drops what it has already seen and everything more than
++ * its replay window (32) below the highest, so an SA put back at 1 is silent
++ * towards the UE until it has caught up with the one it replaces - which the
++ * UE may have seen send thousands. Nothing records how far that was, so this
++ * bounds it instead: at most ipsec_restore_oseq_rate packets a second since
++ * IPSEC_RESTORE_OSEQ_EPOCH, a bound that also holds across a second restart
++ * while the UE is still on a put-back SA. It only has to be above what the UE
++ * saw; the jump itself costs nothing but headroom, and the next registration
++ * replaces the SA anyway.
++ */
++static uint32_t restore_oseq(void)
++{
++	time_t now = time(NULL);
++	uint64_t oseq;
++
++	if(ipsec_restore_oseq_rate <= 0 || now <= IPSEC_RESTORE_OSEQ_EPOCH) {
++		return 0;
++	}
++	oseq = (uint64_t)(now - IPSEC_RESTORE_OSEQ_EPOCH)
++		   * (uint64_t)ipsec_restore_oseq_rate;
++	if(oseq > IPSEC_RESTORE_OSEQ_MAX) {
++		LM_WARN("outbound sequence numbers from %d/s since the epoch would "
++				"leave no headroom, starting at %u - lower "
++				"ipsec_restore_oseq_rate\n",
++				ipsec_restore_oseq_rate, IPSEC_RESTORE_OSEQ_MAX);
++		oseq = IPSEC_RESTORE_OSEQ_MAX;
++	}
++	return (uint32_t)oseq;
++}
++
+ static void count_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
+ {
+ 	if(contact_tunnel(c->security)) {
+@@ -1747,8 +1794,26 @@ static void count_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
+ 
+ static void restore_tunnel(pcontact_t *c, ipsec_t *s, restore_stats_t *st)
+ {
++	ip_addr_t ue_addr;
++
+ 	st->tunnels++;
+ 
++	// Put the tunnel in again. Whatever survived the restart stays: the SAs
++	// and policies are added with NLM_F_EXCL, so one already installed -
++	// counters and all - makes that add fail and nothing else. What is missing,
++	// all of it after a restart into a new network namespace, is created
++	// from what was preloaded. The UE's side never went anywhere.
++	if(str2ipxbuf(&c->received_host, &ue_addr) < 0) {
++		LM_ERR("contact [%.*s]: unable to convert received host [%.*s]\n",
++				c->aor.len, c->aor.s, c->received_host.len,
++				c->received_host.s);
++		st->failed++;
++	} else if(create_ipsec_tunnel(&ue_addr, s, st->oseq) != 0) {
++		LM_ERR("contact [%.*s]: failed to install its tunnel\n", c->aor.len,
++				c->aor.s);
++		st->failed++;
++	}
++
+ 	if(reserve_spi(s->spi_pc, s->spi_ps, s->port_pc, s->port_ps) == 0) {
+ 		st->reserved++;
+ 	} else {
+@@ -1791,17 +1856,21 @@ static void restore_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
+ }
+ 
+ /**
+- * Take over the tunnels a previous instance left in the kernel.
++ * Take over, or put back, the tunnels of the contacts a previous instance left.
+  *
+  * With ipsec_preserve_tunnels the SAs and policies are not flushed at startup
+  * or shutdown, so a kamailio restart inside the same network namespace - a
+  * container restart in a pod that keeps its sandbox - finds every tunnel still
+- * installed, sequence counters and all. What the new instance lacks is the
+- * bookkeeping: ims_usrloc_pcscf has preloaded each contact's tunnels - the
+- * registered one from its unprefixed security columns and the one on offer
+- * from its t_* columns - and here the SPI pair each one holds is marked used
+- * and the contact subscribed for its expiry, exactly as ipsec_create() would
+- * have.
++ * installed, sequence counters and all. A restart into a new namespace - a
++ * container recreated, a pod replaced - finds none, and the UEs still send
++ * over theirs. Either way ims_usrloc_pcscf has preloaded each contact's
++ * tunnels - the registered one from its unprefixed security columns and the
++ * one on offer from its t_* columns - and here each tunnel is installed where
++ * it is missing, the SPI pair it holds is marked used and the contact
++ * subscribed for its expiry, exactly as ipsec_create() would have.
++ *
++ * A tunnel can only be put back on the address the UE built it with: the new
++ * instance needs the same ipsec_listen_addr.
+  *
+  * Tunnels no preloaded contact accounts for are removed first. That has to
+  * happen before any pair is reserved: delete_unused_tunnels() releases a pair
+@@ -1834,11 +1903,15 @@ int ipsec_restore_tunnels()
+ 	}
+ 
+ 	memset(&st, 0, sizeof(st));
++	st.oseq = restore_oseq();
+ 	ul.walk_pcontacts(restore_contact_tunnel, &st);
+ 
+-	LM_INFO("restored %d IPSec tunnels from %d preloaded contacts: %d SPI "
+-			"pairs reserved, %d contacts subscribed for expiry\n",
+-			st.tunnels, contacts, st.reserved, st.subscribed);
++	LM_INFO("restored %d IPSec tunnels from %d preloaded contacts: missing "
++			"SAs and policies installed (%d failed, outbound SAs from sequence "
++			"number %u), %d SPI pairs reserved, %d contacts subscribed for "
++			"expiry\n",
++			st.tunnels, contacts, st.failed, st.oseq, st.reserved,
++			st.subscribed);
+ 
+ 	return 0;
+ }
+diff --git a/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml b/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml
+index d2148b2949..0dff90bf61 100644
+--- a/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml
++++ b/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml
+@@ -180,14 +180,16 @@ modparam("ims_ipsec_pcscf", "ipsec_max_connections", 10)
+       <title><varname>ipsec_preserve_tunnels</varname> (int)</title>
+ 
+       <para>Keep (1) or flush (0) the IPSec SAs and policies at startup and
+-      shutdown. When set to 1, a restarted P-CSCF takes over the tunnels still
+-      installed in its network namespace: the contacts ims_usrloc_pcscf
+-      preloads from its database carry their security parameters, their SPI
+-      pairs are marked used, and SAs and policies no preloaded contact accounts
+-      for are removed. The UEs keep their registrations and tunnels across a
+-      restart that keeps the network namespace, such as a container restart in
+-      a Kubernetes pod. It needs ims_usrloc_pcscf with a db_mode that preloads,
+-      and this module loaded after it.</para>
++      shutdown. When set to 1, a restarted P-CSCF carries on with the tunnels
++      of the contacts ims_usrloc_pcscf preloads from its database: a tunnel
++      still installed in the network namespace is taken over as it is, one
++      that is missing - all of them after a restart into a new namespace - is
++      installed again from the contact's security parameters, their SPI pairs
++      are marked used, and SAs and policies no preloaded contact accounts for
++      are removed. The UEs keep their registrations and tunnels across the
++      restart. It needs ims_usrloc_pcscf with a db_mode that preloads, this
++      module loaded after it, and the same ipsec_listen_addr as before the
++      restart: the UE's SAs are bound to it.</para>
+ 
+       <para><emphasis>Default value is 0.</emphasis></para>
+ 
+@@ -202,6 +204,29 @@ modparam("ims_ipsec_pcscf", "ipsec_preserve_tunnels", 1)
+       </example>
+     </section>
+ 
++    <section>
++      <title><varname>ipsec_restore_oseq_rate</varname> (int)</title>
++
++      <para>With ipsec_preserve_tunnels, the outbound SAs of a tunnel that
++      has to be installed again start at this many sequence numbers per second
++      since 2026-01-01, instead of at 1. The UE's side of the tunnel has
++      already seen the old SA's numbers and drops anything its replay window
++      puts behind them, so the new numbers have to start above them: set this
++      above the highest packet rate towards a single UE. 0 starts at 1.</para>
++
++      <para><emphasis>Default value is 16.</emphasis></para>
++
++      <example>
++        <title><varname>ipsec_restore_oseq_rate</varname> parameter usage</title>
++
++        <programlisting format="linespecific">
++...
++modparam("ims_ipsec_pcscf", "ipsec_restore_oseq_rate", 16)
++...
++        </programlisting>
++      </example>
++    </section>
++
+     <section>
+       <title><varname>ipsec_reuse_server_port</varname> (int)</title>
+ 
+diff --git a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
+index f53dffe74c..9b39f5bf02 100644
+--- a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
++++ b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
+@@ -48,6 +48,7 @@ str ipsec_listen_agname = STR_NULL;
+ int ipsec_reuse_server_port = 1;
+ int ipsec_max_connections = 2;
+ int ipsec_preserve_tunnels = 0;
++int ipsec_restore_oseq_rate = 16;
+ int spi_id_start = 100;
+ int spi_id_range = 1000;
+ str ipsec_preferred_alg = STR_NULL;
+@@ -117,6 +118,7 @@ static param_export_t params[] = {
+ 	{"ipsec_reuse_server_port",	PARAM_INT, &ipsec_reuse_server_port	},
+ 	{"ipsec_max_connections",	PARAM_INT, &ipsec_max_connections	},
+ 	{"ipsec_preserve_tunnels",	PARAM_INT, &ipsec_preserve_tunnels	},
++	{"ipsec_restore_oseq_rate",	PARAM_INT, &ipsec_restore_oseq_rate	},
+ 	{"ipsec_spi_id_start",		PARAM_INT, &spi_id_start			},
+ 	{"ipsec_spi_id_range",		PARAM_INT, &spi_id_range			},
+ 	{"ipsec_preferred_alg",		PARAM_STR, &ipsec_preferred_alg		},
+diff --git a/src/modules/ims_ipsec_pcscf/ipsec.c b/src/modules/ims_ipsec_pcscf/ipsec.c
+index 8e346197c6..2397ad35ab 100644
+--- a/src/modules/ims_ipsec_pcscf/ipsec.c
++++ b/src/modules/ims_ipsec_pcscf/ipsec.c
+@@ -113,7 +113,7 @@ static uint choose_nlmsg_seq(void)
+ 
+ int add_sa(struct mnl_socket *nl_sock, const struct ip_addr *src_addr_param,
+ 		const struct ip_addr *dest_addr_param, int s_port, int d_port,
+-		int long id, str ck, str ik, str r_alg, str r_ealg)
++		int long id, str ck, str ik, str r_alg, str r_ealg, uint32_t oseq)
+ {
+ 	char l_msg_buf[MNL_SOCKET_BUFFER_SIZE];
+ 	char l_auth_algo_buf[XFRM_TMPLS_BUF_SIZE];
+@@ -248,6 +248,16 @@ int add_sa(struct mnl_socket *nl_sock, const struct ip_addr *src_addr_param,
+ 	mnl_attr_put(l_nlh, XFRMA_ALG_CRYPT,
+ 			sizeof(struct xfrm_algo) + l_enc_algo->alg_key_len, l_enc_algo);
+ 
++	// Start the outbound sequence number somewhere other than 1: an SA put
++	// back for a tunnel the peer is still using has to number past what the
++	// peer's replay window has already seen
++	if(oseq) {
++		struct xfrm_replay_state l_replay;
++		memset(&l_replay, 0, sizeof(l_replay));
++		l_replay.oseq = oseq;
++		mnl_attr_put(l_nlh, XFRMA_REPLAY_VAL, sizeof(l_replay), &l_replay);
++	}
++
+ 	// send it to Netlink socket
+ 	if(mnl_socket_sendto(nl_sock, l_nlh, l_nlh->nlmsg_len) < 0) {
+ 		LM_ERR("Failed to send Netlink message for SA creation, error: %s\n",
+diff --git a/src/modules/ims_ipsec_pcscf/ipsec.h b/src/modules/ims_ipsec_pcscf/ipsec.h
+index 9fa97f5dbe..1ab3371ca0 100644
+--- a/src/modules/ims_ipsec_pcscf/ipsec.h
++++ b/src/modules/ims_ipsec_pcscf/ipsec.h
+@@ -29,6 +29,7 @@
+ 
+ #include "../../core/str.h"
+ #include "../../core/ip_addr.h"
++#include <stdint.h>
+ 
+ 
+ struct mnl_socket;
+@@ -45,7 +46,7 @@ void close_mnl_socket(struct mnl_socket *sock);
+ 
+ int add_sa(struct mnl_socket *nl_sock, const struct ip_addr *src_addr_param,
+ 		const struct ip_addr *dest_addr_param, int s_port, int d_port,
+-		int long id, str ck, str ik, str r_alg, str r_ealg);
++		int long id, str ck, str ik, str r_alg, str r_ealg, uint32_t oseq);
+ int remove_sa(struct mnl_socket *nl_sock, str src_addr_param,
+ 		str dest_addr_param, int s_port, int d_port, int long id,
+ 		unsigned int af);
