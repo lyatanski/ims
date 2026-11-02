@@ -77,6 +77,7 @@ expected() {
 	VP9                supported for decoding only
 	X-L16              fully supported (audio)
 	ac3                codec supported but lacks RTP definition
+	codec2             fully supported (audio)
 	eac3               codec supported but lacks RTP definition
 	iLBC               fully supported (audio)
 	opus               fully supported (audio)
