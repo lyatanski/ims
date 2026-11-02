@@ -30,7 +30,7 @@ The replacement has to come up on the same ipsec_listen_addr: the UE's SAs and
 policies are bound to it.
 
 diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
-index f76abdd1e9..b1dba9a806 100644
+index edf3b51..8c3df02 100644
 --- a/src/modules/ims_ipsec_pcscf/cmd.c
 +++ b/src/modules/ims_ipsec_pcscf/cmd.c
 @@ -59,11 +59,14 @@
@@ -48,7 +48,7 @@ index f76abdd1e9..b1dba9a806 100644
  extern ip_addr_t ipsec_listen_ip_addr;
  extern ip_addr_t ipsec_listen_ip_addr6;
  
-@@ -503,7 +506,11 @@ static int update_contact_ipsec_params(
+@@ -507,7 +510,11 @@ static int update_contact_ipsec_params(
  	return 0;
  }
  
@@ -61,7 +61,7 @@ index f76abdd1e9..b1dba9a806 100644
  {
  	struct mnl_socket *sock = init_mnl_socket();
  	if(sock == NULL) {
-@@ -548,28 +555,28 @@ static int create_ipsec_tunnel(const struct ip_addr *remote_addr, ipsec_t *s)
+@@ -552,28 +559,28 @@ static int create_ipsec_tunnel(const struct ip_addr *remote_addr, ipsec_t *s)
  	// SA1 UE client to P-CSCF server
  	//               src adrr     dst addr     src port    dst port
  	add_sa(sock, remote_addr, ipsec_addr, s->port_uc, s->port_ps, s->spi_ps,
@@ -94,7 +94,7 @@ index f76abdd1e9..b1dba9a806 100644
  	add_policy(sock, remote_addr, ipsec_addr, s->port_us, s->port_pc, s->spi_pc,
  			IPSEC_POLICY_DIRECTION_IN);
  
-@@ -577,28 +584,28 @@ static int create_ipsec_tunnel(const struct ip_addr *remote_addr, ipsec_t *s)
+@@ -581,28 +588,28 @@ static int create_ipsec_tunnel(const struct ip_addr *remote_addr, ipsec_t *s)
  	// SA5 UE client to P-CSCF client
  	//               src adrr     dst addr     src port    dst port
  	add_sa(sock, remote_addr, ipsec_addr, s->port_uc, s->port_pc, s->spi_ps,
@@ -127,16 +127,25 @@ index f76abdd1e9..b1dba9a806 100644
  	add_policy(sock, remote_addr, ipsec_addr, s->port_us, s->port_ps, s->spi_pc,
  			IPSEC_POLICY_DIRECTION_IN);
  
-@@ -1102,7 +1109,7 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
- 		est = NULL;
- 	}
+@@ -1031,7 +1038,7 @@ static void install_deferred_tunnel(
+ 	c->security = NULL;
+ 	free_security_t(old_sec);
  
--	fun_ret_c = create_ipsec_tunnel(&req->rcv.src_ip, s);
-+	fun_ret_c = create_ipsec_tunnel(&req->rcv.src_ip, s, 0);
- 	if(fun_ret_c != 0) {
- 		LM_ERR("IPSEC tunnel creation failed.\n");
- 		goto cleanup;
-@@ -1730,11 +1737,51 @@ int ipsec_reconfig()
+-	if(create_ipsec_tunnel(&dt->ue_addr, s) != 0) {
++	if(create_ipsec_tunnel(&dt->ue_addr, s, 0) != 0) {
+ 		// nothing was installed: removing it when it goes finds nothing, and
+ 		// gives its pair back
+ 		LM_ERR("IPSEC tunnel creation failed for contact [%.*s]\n",
+@@ -1252,7 +1259,7 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+ 				s->spi_ps, est->spi_uc, est->spi_us, est->spi_pc, est->spi_ps);
+ 		deferred = 1;
+ 	} else {
+-		fun_ret_c = create_ipsec_tunnel(&req->rcv.src_ip, s);
++		fun_ret_c = create_ipsec_tunnel(&req->rcv.src_ip, s, 0);
+ 		if(fun_ret_c != 0) {
+ 			LM_ERR("IPSEC tunnel creation failed.\n");
+ 			// Nothing was installed, and no slot holds the pair - one that
+@@ -1991,11 +1998,51 @@ int ipsec_reconfig()
  
  typedef struct restore_stats
  {
@@ -190,14 +199,23 @@ index f76abdd1e9..b1dba9a806 100644
  static void count_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
  {
  	if(contact_tunnel(c->security)) {
-@@ -1747,8 +1794,26 @@ static void count_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
+@@ -2006,10 +2053,34 @@ static void count_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
+ 	}
+ }
  
- static void restore_tunnel(pcontact_t *c, ipsec_t *s, restore_stats_t *st)
+-static void restore_tunnel(pcontact_t *c, ipsec_t *s, restore_stats_t *st)
++// install: 0 for a tunnel that was never in the kernel to begin with
++static void restore_tunnel(
++		pcontact_t *c, ipsec_t *s, restore_stats_t *st, int install)
  {
+-	st->tunnels++;
 +	ip_addr_t ue_addr;
-+
- 	st->tunnels++;
  
++	st->tunnels++;
++	if(!install) {
++		goto reserve;
++	}
++
 +	// Put the tunnel in again. Whatever survived the restart stays: the SAs
 +	// and policies are added with NLM_F_EXCL, so one already installed -
 +	// counters and all - makes that add fail and nothing else. What is missing,
@@ -214,10 +232,32 @@ index f76abdd1e9..b1dba9a806 100644
 +		st->failed++;
 +	}
 +
++reserve:
  	if(reserve_spi(s->spi_pc, s->spi_ps, s->port_pc, s->port_ps) == 0) {
  		st->reserved++;
  	} else {
-@@ -1791,17 +1856,21 @@ static void restore_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
+@@ -2032,7 +2103,7 @@ static void restore_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
+ 	// Both: the UE may answer the offer over the new one, and still sends
+ 	// over the one it is registered over until then
+ 	if(est) {
+-		restore_tunnel(c, est, st);
++		restore_tunnel(c, est, st, 1);
+ 	}
+ 	if(pend) {
+ 		if(est && same_spi_pair(pend, est)) {
+@@ -2041,7 +2112,10 @@ static void restore_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
+ 			st->tunnels++;
+ 			st->reserved++;
+ 		} else {
+-			restore_tunnel(c, pend, st);
++			// deferred, it was never installed, and the reply callback that
++			// would have installed it went with the old instance: it waits
++			// for ipsec_promote() or a new offer
++			restore_tunnel(c, pend, st, !tunnel_deferred(est, pend));
+ 		}
+ 		// for ipsec_promote() to find this contact again, as ipsec_create()
+ 		// has it
+@@ -2062,17 +2136,21 @@ static void restore_contact_tunnel(udomain_t *d, pcontact_t *c, void *param)
  }
  
  /**
@@ -246,7 +286,7 @@ index f76abdd1e9..b1dba9a806 100644
   *
   * Tunnels no preloaded contact accounts for are removed first. That has to
   * happen before any pair is reserved: delete_unused_tunnels() releases a pair
-@@ -1834,11 +1903,15 @@ int ipsec_restore_tunnels()
+@@ -2105,11 +2183,15 @@ int ipsec_restore_tunnels()
  	}
  
  	memset(&st, 0, sizeof(st));
@@ -266,10 +306,10 @@ index f76abdd1e9..b1dba9a806 100644
  	return 0;
  }
 diff --git a/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml b/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml
-index d2148b2949..0dff90bf61 100644
+index a7bdc82..a6ef6ff 100644
 --- a/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml
 +++ b/src/modules/ims_ipsec_pcscf/doc/ims_ipsec_pcscf_admin.xml
-@@ -180,14 +180,16 @@ modparam("ims_ipsec_pcscf", "ipsec_max_connections", 10)
+@@ -186,14 +186,16 @@ modparam("ims_ipsec_pcscf", "ipsec_max_connections", 10)
        <title><varname>ipsec_preserve_tunnels</varname> (int)</title>
  
        <para>Keep (1) or flush (0) the IPSec SAs and policies at startup and
@@ -294,7 +334,7 @@ index d2148b2949..0dff90bf61 100644
  
        <para><emphasis>Default value is 0.</emphasis></para>
  
-@@ -202,6 +204,29 @@ modparam("ims_ipsec_pcscf", "ipsec_preserve_tunnels", 1)
+@@ -208,6 +210,29 @@ modparam("ims_ipsec_pcscf", "ipsec_preserve_tunnels", 1)
        </example>
      </section>
  
@@ -325,7 +365,7 @@ index d2148b2949..0dff90bf61 100644
        <title><varname>ipsec_reuse_server_port</varname> (int)</title>
  
 diff --git a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
-index f53dffe74c..9b39f5bf02 100644
+index 65d3ceb..9f08b14 100644
 --- a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
 +++ b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
 @@ -48,6 +48,7 @@ str ipsec_listen_agname = STR_NULL;
@@ -345,7 +385,7 @@ index f53dffe74c..9b39f5bf02 100644
  	{"ipsec_spi_id_range",		PARAM_INT, &spi_id_range			},
  	{"ipsec_preferred_alg",		PARAM_STR, &ipsec_preferred_alg		},
 diff --git a/src/modules/ims_ipsec_pcscf/ipsec.c b/src/modules/ims_ipsec_pcscf/ipsec.c
-index 8e346197c6..2397ad35ab 100644
+index 8e34619..2397ad3 100644
 --- a/src/modules/ims_ipsec_pcscf/ipsec.c
 +++ b/src/modules/ims_ipsec_pcscf/ipsec.c
 @@ -113,7 +113,7 @@ static uint choose_nlmsg_seq(void)
@@ -375,7 +415,7 @@ index 8e346197c6..2397ad35ab 100644
  	if(mnl_socket_sendto(nl_sock, l_nlh, l_nlh->nlmsg_len) < 0) {
  		LM_ERR("Failed to send Netlink message for SA creation, error: %s\n",
 diff --git a/src/modules/ims_ipsec_pcscf/ipsec.h b/src/modules/ims_ipsec_pcscf/ipsec.h
-index 9fa97f5dbe..1ab3371ca0 100644
+index 9fa97f5..1ab3371 100644
 --- a/src/modules/ims_ipsec_pcscf/ipsec.h
 +++ b/src/modules/ims_ipsec_pcscf/ipsec.h
 @@ -29,6 +29,7 @@

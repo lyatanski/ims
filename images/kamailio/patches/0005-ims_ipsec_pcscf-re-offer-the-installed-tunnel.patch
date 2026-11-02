@@ -14,21 +14,22 @@ answered "403 Forbidden - You must register first with a S-CSCF" while its
 terminating leg leaves in the clear. The registration is not recoverable short
 of the UE starting over.
 
-The case that reaches this is a second 401 for a challenge the UE has already
-answered: by then the tunnel is up, building it again fails, and a duplicate
-tears down a registration that was working. Whatever produced the duplicate, the
-answer here is the same — when the contact already carries a complete tunnel,
-the only thing the reply had to do was name it. So name it: re-offer what is
-installed and return success, which turns the duplicate into the retransmission
-it is. The guard is the same "is this a real tunnel" test patch 0003 uses, so a
-first registration, whose contact still holds the placeholder ipsec_t from
-save_pending() with zeroed SPIs and ports, is untouched and still fails loudly.
+The case this was written for is a second 401 for a challenge the UE has
+already answered, where building the tunnel again failed. Upstream's two-slot
+ipsec_create() now retires the earlier offer and makes a new one there, but
+any of its other failure paths (an offer that cannot be removed, SPIs or ports
+exhausted, a kernel error) still relays a 401 with no offer. Whatever produced
+it, when the contact already carries an installed tunnel, the only thing the
+reply had to do was name it. So name it: re-offer the offered tunnel, or the
+registered one when the offer is deferred and so not installed, and return
+success. A first registration has no complete tunnel in either slot
+(contact_tunnel()) and still fails loudly.
 
 diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
-index 77c381e..d5b5846 100644
+index 1636fe4..f33653f 100644
 --- a/src/modules/ims_ipsec_pcscf/cmd.c
 +++ b/src/modules/ims_ipsec_pcscf/cmd.c
-@@ -1035,6 +1035,35 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
+@@ -1320,6 +1320,36 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
  	ret = IPSEC_CMD_SUCCESS; // all good, set ret to SUCCESS, and exit
  
  cleanup:
@@ -36,22 +37,23 @@ index 77c381e..d5b5846 100644
 +	// failure above returns before add_security_server_header(), and a UE that
 +	// reads a challenge carrying no Security-Server concludes this P-CSCF does
 +	// not do IPsec: it re-registers unprotected, and the contact that replaces
-+	// the protected one takes the tunnel below with it at expiry. For a second
-+	// 401 on a challenge the UE has already answered - the tunnel is up by
-+	// then, so building it again fails - that is a working registration torn
-+	// down by a duplicate, and the SIP layer cannot suppress it: tm relays a
-+	// final reply whatever the reply route says.
++	// the protected one takes its tunnels with it at expiry. The SIP layer
++	// cannot suppress such a 401: tm relays a final reply whatever the reply
++	// route says.
 +	//
-+	// When the contact already carries a complete tunnel, the only thing this
-+	// reply had to do was name it. So name it: re-offer what is installed and
-+	// report success, which makes the duplicate the retransmission it is
-+	// rather than a downgrade to no security at all.
-+	if(ret != IPSEC_CMD_SUCCESS && pcontact != NULL
-+			&& pcontact->security_temp != NULL
-+			&& pcontact->security_temp->type == SECURITY_IPSEC) {
-+		ipsec_t *cur = pcontact->security_temp->data.ipsec;
-+		if(cur && cur->spi_pc && cur->spi_ps && cur->port_pc && cur->port_ps
-+				&& add_supported_secagree_header(m) == 0
++	// When the contact already carries an installed tunnel, name it: re-offer
++	// it and report success, rather than downgrade the UE to no security at
++	// all. The latest one installed is the one to name: the offered tunnel,
++	// unless it is deferred and so not installed (see tunnel_deferred()), else
++	// the registered one.
++	if(ret != IPSEC_CMD_SUCCESS && pcontact != NULL) {
++		ipsec_t *cur_est = contact_tunnel(pcontact->security);
++		ipsec_t *cur = contact_tunnel(pcontact->security_temp);
++
++		if(!cur || tunnel_deferred(cur_est, cur)) {
++			cur = cur_est;
++		}
++		if(cur && add_supported_secagree_header(m) == 0
 +				&& add_security_server_header(m, cur) == 0) {
 +			LM_WARN("Could not build a tunnel for this 401 on contact [%.*s]; "
 +					"re-offering the one already installed (client port %d, "
@@ -61,6 +63,6 @@ index 77c381e..d5b5846 100644
 +			ret = IPSEC_CMD_SUCCESS;
 +		}
 +	}
- 	// On the re-registration path the swap did not happen, so
- 	// req_sec_params->data.ipsec was only used to build the tunnel and is never
- 	// stored on the contact. Free it here, otherwise it leaks on every
+ 	if(req_sec_params && !sec_stored) {
+ 		free_security_t(req_sec_params);
+ 	}
