@@ -5,5 +5,15 @@ metadata:
   name: {{ .Release.Name }}-gm
   labels: {{- include "ims.labels" . | nindent 4 }}
 spec:
-  config: {{ include "ims.network.config" . | quote }}
+  config: {{ include "ims.network.config" (dict "root" . "name" "gm" "config" .Values.gm.config) | quote }}
+{{- end }}
+{{- if .Values.cscf.border.enabled }}
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ .Release.Name }}-ici
+  labels: {{- include "ims.labels" . | nindent 4 }}
+spec:
+  config: {{ include "ims.network.config" (dict "root" . "name" "ici" "config" .Values.ici.config) | quote }}
 {{- end }}

@@ -1,0 +1,59 @@
+{{- /*
+The interconnect check (border.sh under compose): pro2call's ibcf_peer.lua
+plays the peer network on Ici and an S-CSCF on the pod network, and drives
+the first IBCF from both sides. Every check is a line of its log.
+*/}}
+{{- if and .Values.cscf.border.enabled .Values.test.border.enabled }}
+{{- $t := .Values.test.border }}
+{{- $peer := (split "/" $t.address)._0 }}
+{{- $listed := false }}
+{{- range $p := .Values.cscf.border.peers }}
+{{- range $e := $p.entry }}
+{{- if regexMatch (printf "^sips?:([^@]*@)?%s([:;>]|$)" (regexQuoteMeta $peer)) $e }}{{ $listed = true }}{{ end }}
+{{- end }}
+{{- end }}
+{{- if not $listed }}
+{{- fail (printf "test.border.address: %s is no peer's entry point in cscf.border.peers" $peer) }}
+{{- end }}
+{{- /* The TrGW's addresses, one per replica on either side, in the same order */}}
+{{- $trgw := dict }}
+{{- range $if := .Values.rtpengine.media.interfaces }}
+{{- if has $if.name (list "internal" "external") }}{{ $_ := set $trgw $if.name ($if.vips | default list) }}{{ end }}
+{{- end }}
+{{- range $side := list "internal" "external" }}
+{{- if not (get $trgw $side) }}
+{{- fail (printf "test.border: rtpengine's %q interface needs vips, the addresses the SDP is checked against" $side) }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test-border
+  labels: {{- include "ims.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-ici" .Release.Name) "interface" .Values.ici.interface "ips" (list $t.address)) | toJson | quote }}
+spec:
+  restartPolicy: Never
+  containers:
+  - name: peer
+    image: {{ .Values.test.image }}
+    command: [lua]
+    args: [ibcf_peer.lua]
+    {{- with .Values.test.resources }}
+    resources: {{- toYaml . | nindent 6 }}
+    {{- end }}
+    env:
+    - {name: PEER_ICI,     value: {{ $peer | quote }}}
+    - {name: PEER_IBCF,    value: {{ (split "/" (first .Values.ici.addresses))._0 | quote }}}
+    - {name: PEER_IBCF_MX, value: {{ printf "%s-ibcf-0-0.%s-ibcf.%s.svc.cluster.local" .Release.Name .Release.Name .Release.Namespace }}}
+    - {name: PEER_MX_IF,   value: eth0}
+    - {name: PEER_TRGW,    value: {{ join " " $trgw.external | quote }}}
+    - {name: PEER_TRGW_MX, value: {{ join " " $trgw.internal | quote }}}
+    - {name: PEER_REALM,   value: {{ tpl .Values.domain . | quote }}}
+    - {name: PEER_DIAL,    value: {{ $t.dial | quote }}}
+    # In the home range, provisioned or not: the answer is the home
+    # network's either way
+    - {name: PEER_HOME,    value: {{ printf "tel:+%v000000099" .Values.global.e164.home | quote }}}
+    - {name: PEER_MEDIA_TIMEOUT_S, value: {{ $t.mediaTimeout | quote }}}
+{{- end }}

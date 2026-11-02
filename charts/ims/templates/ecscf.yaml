@@ -1,0 +1,113 @@
+{{- /*
+The E-CSCF (cscf/emergency.cfg). Apart from the other CSCFs: no Diameter, so
+no identity to render, and no state store to wait for. Ready once its PSAP
+table is non-empty, which is what /check reports for this role.
+*/}}
+{{- with .Values.cscf.emergency }}
+{{- if .enabled }}
+{{- $e := . }}
+{{- with $ }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ecscf
+  labels: {{- include "ims.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - port: {{ .Values.service.port }}
+    targetPort: {{ .Values.service.port }}
+    protocol: TCP
+    name: tcp
+  - port: {{ .Values.service.port }}
+    targetPort: {{ .Values.service.port }}
+    protocol: UDP
+    name: udp
+  publishNotReadyAddresses: true
+  selector: {{- include "ims.selectorLabels" . | nindent 4 }}
+    role: ecscf
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-ecscf
+  labels: {{- include "ims.labels" . | nindent 4 }}
+    role: ecscf
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: {{ .Release.Name }}-ecscf
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels: {{- include "ims.selectorLabels" . | nindent 6 }}
+      role: ecscf
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels: {{- include "ims.labels" . | nindent 8 }}
+        role: ecscf
+    spec:
+      dnsPolicy: None
+      dnsConfig:
+        nameservers:
+        - {{ include "ims.dnsIP" . }}
+        searches:
+        - {{ .Release.Namespace }}.svc.cluster.local
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: cscf
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args: ["-f", "/etc/cscf/emergency.cfg"]
+        env:
+        - name: REALM
+          value: {{ tpl .Values.domain . }}
+        - name: PSAP
+          value: {{ tpl (join " " (required "cscf.emergency.psap: at least one PSAP" $e.psap)) $ | quote }}
+        {{- with $e.bgcf }}
+        # Left out when unset: an empty value would still define BGCF
+        - name: BGCF
+          value: {{ tpl . $ | quote }}
+        {{- end }}
+        {{- with include "ims.sosnum" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        ports:
+        - name: tcp
+          containerPort: {{ .Values.service.port }}
+          protocol: TCP
+        - name: udp
+          containerPort: {{ .Values.service.port }}
+          protocol: UDP
+        - name: mon
+          containerPort: 9090
+          protocol: TCP
+        readinessProbe:
+          httpGet: {path: /check, port: mon}
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: {path: /metrics, port: mon}
+          periodSeconds: 20
+          failureThreshold: 6
+        {{- with $e.resources }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

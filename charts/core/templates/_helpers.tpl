@@ -130,9 +130,34 @@ Call with (dict "root" $ "name" <component>).
     # there is nothing to test for first and nothing to undo.
     while :; do
       ip addr add {{ .root.Values.session.gateway }}/{{ include "core.session.prefixlen" .root }} dev {{ .root.Values.session.dev }} 2>/dev/null
+      {{- with .root.Values.session.subnet6 }}
+      ip addr add {{ $.root.Values.session.gateway6 }}/{{ splitList "/" . | last }} dev {{ $.root.Values.session.dev }} 2>/dev/null
+      {{- end }}
       ip link set {{ .root.Values.session.dev }} up 2>/dev/null
       sleep {{ .root.Values.reconcile }}
     done
+{{- end }}
+
+{{/*
+IPv6 forwarding in the UPF's namespace. A new network namespace inherits the
+node's IPv4 settings, ip_forward included, but starts IPv6 from the kernel
+defaults, so the UE's IPv6 uplink would die at the TUN device. Not a pod
+sysctl: net.ipv6.conf.* is outside Kubernetes' safe set, and the kubelet
+refuses the pod unless its allowlist names it. Privileged only because /proc/sys
+is read-only otherwise -- the UPF container beside it already is.
+
+Call with (dict "root" $ "name" <component>).
+*/}}
+{{- define "core.forward6" -}}
+- name: forward6
+  image: {{ .root.Values.image.repository }}:{{ .root.Values.image.tag | default .root.Chart.AppVersion }}
+  imagePullPolicy: {{ .root.Values.image.pullPolicy }}
+  {{- with .root.Values.sidecar.resources }}
+  resources: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    privileged: true
+  command: ["sh", "-c", "echo 1 > /proc/sys/net/ipv6/conf/all/forwarding"]
 {{- end }}
 
 {{/*

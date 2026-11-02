@@ -18,7 +18,15 @@ x-kamailio: &kamailio
 
 x-route: &route
   image: alpine
-  command: sh -c "gw=$$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1); test -n \"$$gw\" && ip route replace ${UENET} via $$gw mtu 1450"
+  command:
+  - sh
+  - -c
+  - |
+    gw=$$(getent ahostsv4 upf | cut -d' ' -f1 | sort -u | head -1)
+    gw6=$$(getent ahostsv6 upf | cut -d' ' -f1 | sort -u | head -1)
+    test -n "$$gw" && test -n "$$gw6" &&
+    ip route replace ${UENET} via $$gw mtu 1450 &&
+    ip -6 route replace ${UENETv6} via $$gw6 mtu 1450
   cap_add:
   - NET_ADMIN
   restart: on-failure
@@ -31,6 +39,8 @@ services:
       REALM: ${REALM}
       DBURL: redis:6379/1
       IPSEC: ${IPSEC}
+      IPSEC6: ${IPSECv6}
+      ECSCF: sip:ecscf.ims.${REALM}
     configs:
     - source: pcscf.xml
       target: /etc/cscf/diameter.xml
@@ -39,6 +49,7 @@ services:
     networks:
       default:            # Mw
         ipv4_address: ${IPSEC}
+        ipv6_address: ${IPSECv6}
     depends_on:
       kmod:
         condition: service_completed_successfully
@@ -63,15 +74,60 @@ services:
       REALM: ${REALM}
       #DBURL: redis:6379/3
       REGSRV: addr=redis;port=6379;db=2
-      RTPADR: udp:rtpengine:9910
       ENUM: e164.${REALM}.
-      TRUNK:
+      # Off-net numbers (the BGCF role) and other networks' domains both
+      # leave through the IBCF, which anchors their media
+      TRUNK: sip:ibcf.ims.${REALM}
+      IBCF: sip:ibcf.ims.${REALM}
       E164CC: ${DIAL}
       E164IDD:
       E164NDD:
     configs:
     - source: scscf.xml
       target: /etc/cscf/diameter.xml
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ecscf:
+    << : *kamailio
+    command: -f /etc/cscf/emergency.cfg
+    environment:
+      REALM: ${REALM}
+      # <service>[@<cell prefix>]=<uri> entries (cscf/emergency.cfg). Nothing
+      # answers at the default: point it at a PSAP, and set BGCF for tel URIs
+      PSAP: ${PSAP:-sos=sip:psap.ims.${REALM}}
+
+  # Interconnection Border Control Function: the network's entry and exit
+  # point on Ici (TS 23.228 4.14, Annex I), with rtpengine as its TrGW
+  ibcf:
+    << : *kamailio
+    command: -f /etc/cscf/border.cfg
+    environment:
+      REALM: ${REALM}
+      ICI: ${ICI}
+      ICINET: ${NETICI}
+      # By address: the name resolves to the IPv6 one first, and the ng
+      # socket is on RTPv4 only
+      RTPADR: udp:${RTPv4}:9910
+      ECSCF: sip:ecscf.ims.${REALM}
+      # Which peers.list set a destination goes to: the peer network's
+      # domain, and the number range behind it
+      ROUTES: ${PEERDOMAIN}=1 +${PEERDIAL}=1
+    configs:
+    - source: peers.list
+      target: /etc/cscf/peers.list
+    networks:
+      default:            # Mx
+      ici:                # Ici
+        ipv4_address: ${ICI}
+
+  tas:
+    << : *kamailio
+    command: -f /etc/as/telephony.cfg
+    environment:
+      REALM: ${REALM}
+      DBURL: redis:6379/6
     depends_on:
       redis:
         condition: service_healthy
@@ -85,8 +141,14 @@ services:
     networks:
       default:
         ipv4_address: ${DNSv4}
+        ipv6_address: ${DNSv6}
 
-  rtpengine:
+  # The IBCF's TrGW (TS 23.228 Annex I), rtpengine: `internal` faces the
+  # network, `external` the peers. Static addresses, as rtpengine binds each
+  # interface by one (interface_name would pin the device, but needs Docker
+  # Engine 28.1), and the ng socket and the HTTP port listen on Mx only --
+  # not on Ici, where the peers are
+  trgw:
     image: ghcr.io/lyatanski/rtpengine
     command: --no-log-timestamps 
     configs:
@@ -95,8 +157,13 @@ services:
     expose:
     - 9910/udp
     scale: 1
+    networks:
+      default:
+        ipv4_address: ${RTPv4}
+      ici:
+        ipv4_address: ${ICIRTP}
     healthcheck:
-      test: wget -qO- 127.0.0.1:9090/ping
+      test: wget -qO- ${RTPv4}:9090/ping
       retries: 60
       interval: 5s
       start_period: 5s
@@ -107,7 +174,7 @@ services:
 
   route-rtp:
     << : *route
-    network_mode: service:rtpengine
+    network_mode: service:trgw
 
   kmod:
     image: alpine
@@ -145,6 +212,7 @@ services:
     image: ghcr.io/lyatanski/pro2call
     environment:
       PGW_IP:            smf
+      IMS_PDN_TYPE:      ${PDN_TYPE:-ipv4}   # ipv6 / ipv4v6 run SIP and media over IPv6
       GTPU_IFACE:        eth0
       GTPU_INNER_IFACE:  eth0
       GTP_T3_MS:  ${GTP_T3_MS:-3000}
@@ -163,12 +231,58 @@ services:
     - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
     - BPF         # loading the GTP-U datapath
     - PERFMON     # privileged verifier: skip the Spectre passes
+    sysctls:
+      # The UE starts sending the moment it has a PDN, while eth0's link-local
+      # address is still in DAD: the first neighbour solicitation for the
+      # P-CSCF then waits out the 1 s retransmit, and every IPv6 registration
+      # measures it
+      net.ipv6.conf.all.accept_dad: 0
+      net.ipv6.conf.default.accept_dad: 0
     depends_on:
       pcscf:
         condition: service_healthy
       icscf:
         condition: service_healthy
       scscf:
+        condition: service_healthy
+
+  # Another operator's network across Ici, and in the same process a
+  # stand-in for this network's S-CSCF behind the IBCF: the interconnect
+  # check (border.sh). Every check is a line in its log; the exit status is
+  # the number that failed
+  peer:
+    profiles:
+    - border
+    image: ${PRO2CALL:-ghcr.io/lyatanski/pro2call}
+    # Its Mx device is whichever does not hold the Ici address: without
+    # interface_name (Docker Engine 28.1) the eth<n> order is not fixed
+    entrypoint:
+    - sh
+    - -c
+    - |
+      export PEER_MX_IF=$$(ip -o -4 addr show scope global | awk '$$4 !~ "^${ICIPEER}/" {print $$2; exit}')
+      exec lua ibcf_peer.lua
+    environment:
+      PEER_ICI: ${ICIPEER}
+      PEER_IBCF: ${ICI}
+      PEER_IBCF_MX: ibcf
+      PEER_TRGW: ${ICIRTP}
+      PEER_TRGW_MX: ${RTPv4}
+      PEER_REALM: ${REALM}
+      PEER_DIAL: ${PEERDIAL}
+      # In the home range, provisioned or not: the answer is the home
+      # network's either way
+      PEER_HOME: tel:+${DIAL}000000099
+      # rtpengine's `timeout`: how long a call without media lasts
+      PEER_MEDIA_TIMEOUT_S: 60
+    networks:
+      default:
+      ici:
+        ipv4_address: ${ICIPEER}
+    depends_on:
+      ibcf:
+        condition: service_healthy
+      trgw:
         condition: service_healthy
 
 
@@ -231,8 +345,9 @@ configs:
       [rtpengine]
       log-level = 7
       table = -1
-      listen-http = 0.0.0.0:9090
-      listen-ng = 0.0.0.0:9910
+      # Both on Mx only: POST /ng-plain on the HTTP port is ng as well
+      listen-http = ${RTPv4}:9090
+      listen-ng = ${RTPv4}:9910
       interfaces-config = interface
       templates = templates
       timeout = 60
@@ -241,6 +356,10 @@ configs:
       port-min = 30000
       port-max = 40000
       no-redis-required = true
+      # A call whose media stops is ended by the IBCF that set it up:
+      # dlg.terminate_dlg over XMLRPC, %% being the address the offer came from
+      b2b-url = http://%%:9090/RPC2
+      xmlrpc-format = 2
       #redis-write = redis:6379/4
       #redis-subscribe = redis:6379/5
       #redis-resolve-on-reconnect = true
@@ -263,15 +382,24 @@ configs:
       redis-resolve-on-reconnect = true
 
       [interface-internal]
-      address = any
+      address = ${RTPv4}
 
       [interface-external]
-      alias = internal
+      address = ${ICIRTP}
 
+      # Named by the IBCF on the initial offer, by the side it came from.
+      # strict-source: once latched, a stream is only taken from that source.
+      # replace-origin: the o= line names the TrGW too, not the side behind it
       [templates]
-      internal = direction=internal direction=internal
-      outgoing = direction=internal direction=external
-      incoming = direction=external direction=internal
+      outgoing = direction=internal direction=external strict-source replace-origin
+      incoming = direction=external direction=internal strict-source replace-origin
+
+  # The peer networks, one dispatcher set each: their entry points, and
+  # whether they are inside this network's trust domain (TS 24.229 4.4)
+  peers.list:
+    content: |
+      # setid destination flags priority attributes
+      1 sip:${ICIPEER}:5060 0 0 peer=peer;trust=0;sockname=Ici
 
   dns:
     content: |
@@ -294,7 +422,7 @@ configs:
               rcode NXDOMAIN
           }
           template IN SRV {
-              match (?P<name>.cscf)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
+              match (?P<name>.cscf|ibcf|tas)?\.ims\.mnc\d{2,3}\.mcc\d{3}\.3gppnetwork.org
               answer "{{ .Name }} 1D SRV 0 0 5060 {{ or .Group.name \"icscf\" }}."
               fallthrough
           }
@@ -320,4 +448,12 @@ networks:
       config:
       - subnet: ${NETv4}
       - subnet: ${NETv6}
+  # The interconnect, II-NNI (TS 23.228 Annex K): the IBCF and the TrGW on
+  # this network's side, peers on the other
+  ici:
+    driver_opts:
+      com.docker.network.bridge.name: ici0
+    ipam:
+      config:
+      - subnet: ${NETICI}
 

@@ -16,10 +16,7 @@ jobs:
         - freediameter
         - openssl
         - open5gs
-        - cgr-console
         - cgr-engine
-        - cgr-loader
-        #- cgr-ui
         - grafonnet
     steps:
     - uses: actions/checkout@v7

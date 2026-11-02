@@ -5,6 +5,12 @@ metadata:
   labels: {{- include "rtpengine.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
+  # Every kamailio process has an ng socket of its own, and kube-proxy picks
+  # a replica per UDP 5-tuple: without this the answer or the delete for a
+  # call reaches the replica holding only its standby copy. Per client
+  # address, all of a client's calls go to one replica. The default 3 h of
+  # affinity outlasts the IBCF's DLGTIMEOUT, so no call outlives it.
+  sessionAffinity: ClientIP
   ports:
   - name: control
     port: {{ .Values.service.port }}

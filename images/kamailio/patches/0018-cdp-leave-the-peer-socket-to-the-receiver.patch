@@ -1,0 +1,50 @@
+Leave the peer socket of an outgoing connection to the receiver.
+
+The process that opens a peer connection - usually the peer_timer process -
+hands the socket to the peer's receiver over the fd exchange pipe, which
+gives the receiver a copy under a number of its own, and then, back in
+I_Snd_Conn_Req(), stores its own number in the shared p->I_sock. The
+receiver stores its number there too, without the peer lock, so whichever
+write comes last wins:
+
+- the receiver's first: the timer's number overwrites it, and I_Snd_CER()
+  in the receiver runs on a descriptor that is not the socket.
+  getsockname() fails with "Error on finding local host address > Not a
+  socket", or the CER goes to whatever the number is in the receiver, and
+  the peer is left half-open without a CER ever reaching it. Seen on cold
+  compose starts about one in three: a CSCF that never connects to its
+  PCRF, HSS, DRA or OCS and stays unhealthy.
+- the timer's first: its copy is left open with nothing referring to it,
+  one leaked descriptor per connection, and since that copy holds the
+  socket open, the receiver closing the connection never sends a FIN.
+
+The opening process has no use for its copy once the receiver has one (the
+descriptor in flight holds its own reference), so close it and leave
+p->I_sock to the receiver alone.
+
+diff --git a/src/modules/cdp/peerstatemachine.c b/src/modules/cdp/peerstatemachine.c
+index b7b2993..33eb24c 100644
+--- a/src/modules/cdp/peerstatemachine.c
++++ b/src/modules/cdp/peerstatemachine.c
+@@ -548,15 +548,19 @@ error:
+  */
+ peer_event_t I_Snd_Conn_Req(peer *p)
+ {
++	int sock;
++
+ 	LM_INFO("Peer %.*s \n", p->fqdn.len, p->fqdn.s);
+ 
+ 	if(p->I_sock > 0)
+ 		close(p->I_sock);
+ 	p->I_sock = -1;
+-	p->I_sock = peer_connect(p);
+-	if(p->I_sock < 0) {
++	sock = peer_connect(p);
++	if(sock < 0) {
+ 		return I_Rcv_Conn_NAck;
+ 	}
++	/* the receiver has its own copy now, and sets p->I_sock from it */
++	close(sock);
+ 
+ 	return I_Rcv_Conn_Ack;
+ }

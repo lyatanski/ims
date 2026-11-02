@@ -1,7 +1,7 @@
 FROM golang:alpine AS build
 RUN mkdir -p /usr/share/cgrates/diameter/dict/
 #RUN go install github.com/cgrates/cgrates/cmd/cgr-engine@latest
-RUN apk add git && git clone https://github.com/cgrates/cgrates.git
+RUN apk add git && git clone --depth=1 -b main https://github.com/cgrates/cgrates.git
 RUN cd cgrates && go install -ldflags "\
     -X 'github.com/cgrates/cgrates/utils.GitCommitDate=$(git log -n1 --format=format:%cI HEAD)' \
     -X 'github.com/cgrates/cgrates/utils.GitCommitHash=$(git log -n1 --format=format:%H HEAD)'" \

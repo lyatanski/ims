@@ -98,6 +98,51 @@ once, at startup, so a rescheduled UPF also strands the SMF on the address that
 is gone — `Retry association with peer failed`, and a Create Session Response
 that names a PGW-U which no longer exists. Restart the SMF after moving it.
 
+### IPv6
+
+`session.subnet6` is the IPv6 pool beside it, on by default: a UE asking for an
+IPv6 or IPv4v6 PDN gets a /64 of it, and the UPF routes the downlink by that
+/64. Its traffic takes the IPv4 pool's path, so each of the pieces above has an
+IPv6 half, and the cluster has to be dual-stack for them to have anything to
+work with:
+
+- the TUN sidecar adds `session.gateway6`, and an init container turns on IPv6
+  forwarding in the UPF's namespace. A new namespace inherits the node's IPv4
+  settings, `ip_forward` included, but starts IPv6 from the kernel defaults --
+  forwarding off -- and `net.ipv6.conf.*` is outside Kubernetes' safe sysctls,
+  so it cannot be a pod sysctl without the kubelet's allowlist;
+- the node route resolves the UPF through `core-upf-node`, a headless
+  `PreferDualStack` Service of its own. The component Services stay
+  single-stack on purpose: open5gs resolves `gtpu.server.advertise` with
+  `AF_UNSPEC`, and a dual-stack `-gtpu` would put an IPv6 address in every
+  F-TEID;
+- the P-CSCF's `ueroute` sidecar routes `global.ue.subnet6`, through
+  `global.ue.via6` when the pool is reached over Gm's router.
+
+The P-CSCF registers those UEs on an IPv6 Gm address, `gm.addresses6`, entry
+*i* being the second address of the P-CSCF `gm.addresses` entry *i* names. It
+becomes `IPSEC6`, which `ims_ipsec_pcscf` binds its protected ports on, and
+goes into `ims.pcscf` beside the IPv4 one -- the SMF sorts the list into the
+PCO's IPv4 and IPv6 containers. With it set, the P-CSCF's IPsec port pool
+halves: every port is bound once per family, and the socket budget is what
+`ipsec_max_connections` in `cscf/proxy.cfg` explains.
+
+```yaml
+gm:
+  addresses:
+  - 10.20.0.10/24
+  addresses6:
+  - fd20::10/64
+global:
+  ue:
+    via6: fd20::1
+```
+
+`test.pdnType` (`ipv4`, `ipv6`, `ipv4v6`) is what the helm test's UE asks for.
+`./kind.sh` makes the cluster dual-stack (`IP_FAMILY`), gives Gm and media an
+IPv6 subnet each, exempts both from kindnet's IPv6 masquerade too, and takes
+`PDN_TYPE` and `PRO2CALL` for the test.
+
 
 ## Common Challenges
 Determination of when instance has calls running on it. This is necessary to know when it is safe to terminate instance.
@@ -216,6 +261,42 @@ prerequisite for HA-PLAN Tier 1's takeover, not the whole of it.
 S-CSCF to PSTN connectivity. When S-CSCF is sending packet it will be sent by default from the worker node host IP. When receiving response on the same IP, Service type NodePort on the 5060 port is required. This is a problem as this requires system k8s reconfiguration as the port is not allowed by default for this Service type allocation.
 
 
+## IBCF
+
+`cscf.border` (off by default) runs `images/kamailio/cscf/border.cfg`, the
+entry and exit point on Ici, with rtpengine as its TrGW:
+
+- **Ici** is an attachment of its own, `ici` in the values, the Gm pattern
+  again: one single-replica StatefulSet per `ici.addresses` entry,
+  `<release>-ibcf-<i>`. The cfg binds the address by value, and it is the one
+  the peers' configuration names, so each pod has to know it at start.
+  `ICINET` is that address with its prefix, which is how the IBCF tells
+  sources on Ici from the rest (metrics, rtpengine's teardown RPC).
+- **Mx** is the pod network: the Service `<release>-ibcf` is what
+  `ibcf.ims.<realm>` resolves to (the CoreDNS SRV template has to list
+  `ibcf`, or the name falls through to the I-CSCF). With the IBCF on, the
+  S-CSCF gets `IBCF`, and `TRUNK` too unless `trunk` names another.
+- **Peers** are `cscf.border.peers`, rendered as dispatcher's `peers.list`
+  (one set each, `entry` order as priority) and `ROUTES`. Ready means the
+  first set loaded. The topology hiding key is a Secret, generated once and
+  kept across upgrades.
+- **The TrGW** is rtpengine's `external` interface, which has to be where the
+  peers can reach it: on Ici, through an attachment of its own to the same
+  network (`bridge`/`master`), with an IPAM range clear of the IBCF and peer
+  addresses. The IBCF reaches the ng socket the way any client does, Service
+  or control VIPs, and `b2bUrl` points rtpengine's media timeout back at the
+  IBCF (`dlg.terminate_dlg`).
+
+`test.border` is a helm test of its own: pro2call's `ibcf_peer.lua`, the
+check `border.sh` runs under compose, as the peer on Ici and an S-CSCF on the
+pod network. It needs a pro2call that carries the script, the published one
+does not yet, so `kind.sh` runs it only when `$PRO2CALL` has it and CI leaves
+it off. In KinD two things are test plumbing rather than the chart: the
+rtpengine Ici attachment's `isGateway`, which gives the node an address on
+the Ici bridge so the stand-in S-CSCF on the pod network can reach Ici at
+all, and a loose `rp_filter` on the node, as the IBCF and the TrGW answer it
+from their Ici and media addresses over their pods' eth0.
+
 ## rtpengine
 The same challenges as the Proxy-CSCF apply. [whereabouts](https://github.com/k8snetworkplumbingwg/whereabouts) with host device/macvlan could be utilised as the IP in the SDP is assigned by the rtpengine when offer/answer is forwarded to it. IP allocation pool could be used for these cases.
 
@@ -232,15 +313,15 @@ Could not parse 'media0' as network address, checking to see if it's an interfac
 Determined address 10.30.0.5 for interface 'media0'
 ```
 
-Only media moves. The ng control socket stays on `0.0.0.0` behind the ClusterIP
-Service the S-CSCF addresses, which is the one part of rtpengine that wants
-Kubernetes load balancing. Without an attachment the interface binds whatever
+Only media moves. Without `vips` (below) the ng control socket stays on
+`0.0.0.0` behind the ClusterIP Service its client addresses. Without an attachment the interface binds whatever
 its `address` names on the pod itself — `any` being every address it has, which
 under Kubernetes is the pod address.
 
 Unlike Gm, an address out of a whereabouts pool is reachable from the UE but
 is not one the ordinal keeps across rescheduling, which is what HA-PLAN §5.5
-needs before media can follow a takeover.
+needs before media can follow a takeover. `vips` is that address — see
+[Per-owner addresses](#per-owner-addresses-implemented).
 
 The one thing that is not optional is the **return route**, which is why the
 shipped `config` carries an `ipam.routes` entry for the UE pool. rtpengine
@@ -265,25 +346,27 @@ it; it wants isolating separately.
 
 `media.interfaces` is a list because a call between two UEs and a call out to
 the trunk are not answered with the same address. rtpengine calls these
-*logical interfaces*, renders them as `[interface-<name>]` sections, and picks
+*logical interfaces*, renders them as `[interface-<i>-<name>]` sections (one set per replica), and picks
 one per side of a call from `direction=`.
 
-Naming them at every `rtpengine_manage()` in the S-CSCF would put media policy
-in the dial plan, so the chart puts it in `templates` instead — rtpengine's own
-`[templates]` section, a name for a string of ng flags. The S-CSCF then sends
-only the name:
+Naming them at every `rtpengine_manage()` would put media policy in the
+routing script, so the chart puts it in `templates` instead — rtpengine's own
+`[templates-<i>]` section, a name for a string of ng flags. The client then
+sends only the name:
 
-| call | template | interfaces (offerer → answerer) |
+| offer | template | interfaces (offerer → answerer) |
 | --- | --- | --- |
-| UE to UE | `internal` | internal → internal |
-| UE to the trunk | `outgoing` | internal → external |
-| trunk to a UE | `incoming` | external → internal |
+| both legs inside | `internal` | internal → internal |
+| from inside, on its way out | `outgoing` | internal → external |
+| from outside, on its way in | `incoming` | external → internal |
 
-`images/kamailio/cscf/serving.cfg` chooses in `route[E164]`, which is where the
-breakout decision is already made, and hands the name over in `route[MORIG]`.
-An incoming call is anchored on its terminating leg instead, and only where a
-trunk is configured — see `route[MTERM]` for why anchoring an on-net call there
-as well would loop its media back on itself.
+The client is the IBCF, rtpengine being its TrGW (TS 23.228 Annex I): it names
+the template on a call's initial offer by the side the offer came from
+(`images/kamailio/cscf/border.cfg`, `route[ENTRY]` and `route[EXIT]`). The
+S-CSCF anchored every call here until it was moved, which put the TrGW in the
+wrong place and on-net media through a relay it does not need. With
+`cscf.border` off nothing in the chart sends rtpengine a call; see
+[IBCF](#ibcf) for what `external` has to be for it.
 
 Measured against the daemon (26.3) with a rendered config, one advertised
 address on `external` to make the choice visible:
@@ -305,3 +388,82 @@ leave `external` as an `alias` of `internal` and lose nothing but the second
 address.
 
 
+
+### Standby copy of a peer's calls (implemented)
+
+Replica `i` writes its calls to valkey database `db.offset + i` and keeps a
+*foreign* copy of replica `(i + 1) mod replicaCount`'s, built from the keyspace
+notifications on that database — the 1&1 active-active scheme (Kuzak, Kamailio
+World 2016, slide 18). It was configured before and did nothing: valkey
+publishes no keyspace events unless told to, and rtpengine never asks. The
+chart now sets `notify-keyspace-events K$g` on its valkey (`$` the SET that
+writes a call, `g` the DEL that ends it, the only two rtpengine acts on), adds
+`redis =` without which a restart restores nothing, not even its own calls, and
+`active-switchover`, which turns a foreign call into an own one on its first
+packet or ng command. A lone replica gets neither the subscription nor the
+switchover; it would subscribe to itself.
+
+Measured against the daemon (27.0) with the rendered config, two replicas and
+a valkey, driven over the ng socket:
+
+| step | replica 0 own / foreign | replica 1 own / foreign |
+| --- | --- | --- |
+| offer + answer `c1` on 0 | 1 / 0 | 0 / 1 |
+| restart 0 | 1 / 0 (restored) | 0 / 1 |
+| kill 0, `answer` `c2` on 1 | — | 1 / 1 (`c2` promoted, written to db 9) |
+| 0 comes back | 0 / 1 | 1 / 0 |
+| `delete` with no delay on 0 | dropped | dropped |
+| notifications off, offer on 0 | +1 own | no copy |
+
+On its own this does not give media that survives the takeover. A restored
+call keeps its ports but is bound by logical interface name and position, not
+address, so replica 1 rebinds replica 0's call on *its own* address — 31244 on
+172.19.0.4 where the far end is still sending to 172.19.0.3. That is what
+per-owner addresses below are for. Two more things seen on the way: a failed-back replica leaves its
+stale key for a promoted call in its own database, and the first answer on a
+restored call logs `List of codecs empty`.
+
+rtpengine cannot use a valkey cluster — it has no MOVED handling and keyspace
+notifications are node-local — so the chart refuses `valkey.cluster.primaries > 1`.
+
+### Per-owner addresses (implemented)
+
+An interface with `vips` (and/or `vips6`) — one address per replica, outside
+the attachment's IPAM range — answers offers from that address rather than
+the pool's, and becomes one logical interface per owner, `<name>-<k>`. Each
+replica configures two of them: its own first, which makes it its default,
+and the one of the replica it is standby for. Every `direction=<name>` in
+`templates` is rewritten per replica (`[templates-<i>]`), so the client still
+names only `internal`/`outgoing`/`incoming`. A privileged init container
+(`vip.sh` in the ConfigMap) sets `ip_nonlocal_bind` — the standby binds the
+peer's address before it has it — and puts the replica's own address on the
+device, with an unsolicited ARP for the MAC the previous pod left behind.
+
+The ng control address follows: kamailio's rtpengine module keeps a call on
+the node it was hashed to and never moves an existing call elsewhere, so
+`RTPADR` becomes one node per replica on the control interface's VIP, and the
+client has to be attached to that interface's network to reach it. Each
+replica's `listen-ng` binds its own control VIP and its standby peer's, the
+latter before it is on the pod (`ip_nonlocal_bind` again), so a VIP that has
+moved is answered from where it now is. Without vips it binds the pod address
+the Service leads to. It used to be `0.0.0.0`, which is how the table below
+was measured; that also answered ng on every other interface, the TrGW's
+on Ici included, and the HTTP port (`listen-http`, now the pod address too)
+takes ng as well, at `POST /ng-plain`.
+
+Nothing here moves an address yet. Measured with the rendered config in docker,
+the address moved by hand (`ip addr add` + `arping -U` in the standby's netns)
+in place of the failover that will do it:
+
+| step | result |
+| --- | --- |
+| offer/answer on VIP0, RTP both ways | 20/20 each way from 172.30.0.251:36376 / :30284 |
+| standby (replica 1) | foreign copy, and `netstat` shows it bound on 172.30.0.251:30284/36376 |
+| replica 0 and its netns removed | 0/5 |
+| VIP0 added to replica 1 | 20/20 each way, same address and ports; call promoted to own on the first packet |
+| `query`/`delete` to 172.30.0.251:9910 | answered by replica 1 |
+
+The validation refuses an interface whose vips are not one per replica, one
+that is an alias or in a `base:suffix` round-robin group (the rest of the
+group would be handed to its calls), one with an `advertised` address, and one
+whose `address` is not a device.

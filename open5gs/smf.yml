@@ -56,8 +56,12 @@ configs:
         - subnet: ${UENET}
           gateway: ${UEGW}
           dnn: ims
+        - subnet: ${UENETv6}
+          gateway: ${UEGWv6}
+          dnn: ims
         dns:
         - ${DNSv4}
+        - ${DNSv6}
         p-cscf:
         - pcscf
         ctf:
