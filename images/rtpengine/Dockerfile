@@ -24,6 +24,7 @@ ARG ALPINE=latest
 ARG FFMPEG=n8.1.2
 ARG LIBILBC=v3.0.4
 ARG BCG729=1.1.2
+ARG CODEC2=1.2.0
 ARG RTPENGINE=master
 
 
@@ -31,7 +32,7 @@ ARG RTPENGINE=master
 ## The codec libraries, and the ffmpeg that fronts them.
 ##
 FROM alpine:${ALPINE} AS media
-ARG FFMPEG LIBILBC BCG729
+ARG FFMPEG LIBILBC BCG729 CODEC2
 
 # One entry per external codec ffmpeg cannot implement itself: the configure
 # switch, and the Alpine -dev package behind it.  An empty package means the
@@ -53,7 +54,7 @@ ARG CODECS="\
 RUN apk add --no-cache build-base cmake git nasm perl pkgconf \
     && apk add --no-cache $(printf '%s\n' ${CODECS} | cut -d: -f2 | grep . | sort -u)
 
-# iLBC and G.729 are the two codecs rtpengine wants that Alpine does not
+# iLBC and G.729 are two codecs rtpengine wants that Alpine does not
 # package at all, so they are built here.  libilbc needs --recurse-submodules:
 # it carries the WebRTC iLBC sources, which include abseil headers from one.
 RUN git clone --depth=1 --recurse-submodules --shallow-submodules \
@@ -89,6 +90,18 @@ RUN git clone --depth=1 -b ${FFMPEG} https://github.com/FFmpeg/FFmpeg.git /src/f
         $(printf '%s\n' ${CODECS} | cut -d: -f1 | sed 's/^/--enable-lib/') \
     && make -j"$(nproc)" \
     && make install
+
+# Codec 2 is a third that Alpine does not package (only edge/testing has it).
+# rtpengine links libcodec2 directly rather than through ffmpeg, so only the
+# library target is built -- not the demo programs.  It installs under
+# /usr/local, which carries it to the later stages with ffmpeg's libraries, and
+# comes after ffmpeg only so that the ffmpeg layer stays cached.
+RUN git clone --depth=1 -b ${CODEC2} https://github.com/drowe67/codec2.git /src/codec2 \
+    && cmake -S /src/codec2 -B /src/codec2/build -G "Unix Makefiles" \
+        -D CMAKE_INSTALL_PREFIX=/usr/local -D CMAKE_BUILD_TYPE=Release \
+        -D CMAKE_INSTALL_LIBDIR=lib \
+    && cmake --build /src/codec2/build --target codec2 \
+    && cmake --install /src/codec2/build
 
 
 ##
