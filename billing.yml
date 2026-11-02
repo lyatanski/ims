@@ -310,5 +310,5 @@ configs:
   Accounts.csv:
     content: |
       #Tenant,ID,FilterIDs,Weights,Blockers,Opts,BalanceID,BalanceFilterIDs,BalanceWeights,BalanceBlockers,BalanceType,BalanceUnits,BalanceUnitFactors,BalanceOpts,BalanceCostIncrements,BalanceAttributeIDs,BalanceRateProfileIDs,ThresholdIDs
-      cgrates.org,IMS,*prefix:~*req.Account:${DIAL}|${MCC}${MNC},;10,,,VOICE_5M,*string:~*req.ToR:*voice,;20,,*abstract,5m,,,;1s;0;0,,,*none
-      cgrates.org,IMS,,,,,MONETARY,,;10,,*concrete,10,,,;1s;;,,RP_VOICE,
+      cgrates.org,IMS,*prefix:~*req.Account:${DIAL}|${MCC}${MNC},;10,,,VOICE_5M,*string:~*req.ToR:*voice,;20,,*abstract,5m,,,;0;0;;1s,,,*none
+      cgrates.org,IMS,,,,,MONETARY,,;10,,*concrete,10,,,;;;;1s,,RP_VOICE,
