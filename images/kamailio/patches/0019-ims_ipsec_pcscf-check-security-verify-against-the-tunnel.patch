@@ -1,0 +1,379 @@
+From e974bdc3ee775c81b9c03704b523af73f5703c27 Mon Sep 17 00:00:00 2001
+From: Lyubomir Yatanski <lyubomir.yatanski@flolive.net>
+Date: Tue, 3 Nov 2026 11:43:08 +0000
+Subject: [PATCH] ims_ipsec_pcscf: check Security-Verify against the tunnel
+
+RFC 3329 2.3.1 and TS 33.203 7.2 have the P-CSCF check that a request
+over a security association carries a Security-Verify mirroring the
+Security-Server it offered. Nothing did: a Security-Server modified on its
+way to the UE went unnoticed.
+
+ipsec_verify() checks it against the tunnel the request came in over, the
+established one or the one a 401 has just offered, and on a mismatch puts
+the tunnel's Security-Server on the reply for the 494 the RFC asks for.
+---
+ src/modules/ims_ipsec_pcscf/cmd.c             | 297 ++++++++++++++++++
+ src/modules/ims_ipsec_pcscf/cmd.h             |   1 +
+ .../ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c     |   8 +
+ 3 files changed, 306 insertions(+)
+
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index 5f0db96b1a..ed87fedc71 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -46,6 +46,7 @@
+ 
+ #include "../../core/parser/msg_parser.h"
+ #include "../../core/socket_info.h"
++#include "../../core/data_lump_rpl.h"
+ #include "../../lib/ims/ims_getters.h"
+ #include "../../modules/tm/tm_load.h"
+ #include "../ims_usrloc_pcscf/usrloc.h"
+@@ -1901,6 +1902,302 @@ cleanup:
+ 	return ret;
+ }
+ 
++/*
++ * RFC 3329 2.3.1, TS 33.203 7.2: a request that comes in over a tunnel has to
++ * carry a Security-Verify that mirrors the Security-Server the P-CSCF offered
++ * that tunnel with - the same mechanisms in the same order, each with the same
++ * parameter values. What the P-CSCF offers is one ipsec-3gpp mechanism, built
++ * by add_security_server_header() from the tunnel itself, so the tunnel is
++ * what the Security-Verify is checked against. Its q value is a preference
++ * among mechanisms, which with one mechanism orders nothing, so it is left out.
++ */
++
++// The value of a numeric sec-agree parameter, or -1 when it is not a number
++static long sec_param_num(str *v)
++{
++	long n = 0;
++	int i;
++
++	if(v->len == 0 || v->len > 10) {
++		return -1;
++	}
++	for(i = 0; i < v->len; i++) {
++		if(v->s[i] < '0' || v->s[i] > '9') {
++			return -1;
++		}
++		n = n * 10 + (v->s[i] - '0');
++	}
++	return n;
++}
++
++static inline int sec_param_is(str *v, str *expect)
++{
++	return v->len == expect->len && strncasecmp(v->s, expect->s, v->len) == 0;
++}
++
++static inline void sec_trim(str *s)
++{
++	while(s->len > 0 && (s->s[0] == ' ' || s->s[0] == '\t')) {
++		s->s++;
++		s->len--;
++	}
++	while(s->len > 0
++			&& (s->s[s->len - 1] == ' ' || s->s[s->len - 1] == '\t'
++					|| s->s[s->len - 1] == '\r' || s->s[s->len - 1] == '\n')) {
++		s->len--;
++	}
++}
++
++#define SV_SPI_C (1 << 0)
++#define SV_SPI_S (1 << 1)
++#define SV_PORT_C (1 << 2)
++#define SV_PORT_S (1 << 3)
++#define SV_ALG (1 << 4)
++#define SV_EALG (1 << 5)
++#define SV_PROT (1 << 6)
++#define SV_MOD (1 << 7)
++#define SV_ALL 0xff
++
++// Whether one mechanism of a Security-Verify is the tunnel's Security-Server
++static int sec_verify_mechanism(str mech, ipsec_t *s)
++{
++	static str ipsec_3gpp = str_init("ipsec-3gpp");
++	static str esp = str_init("esp");
++	static str trans = str_init("trans");
++	str name, value, param;
++	char *semi, *eq;
++	int seen = 0, bit;
++
++	semi = memchr(mech.s, ';', mech.len);
++	name.s = mech.s;
++	name.len = semi ? semi - mech.s : mech.len;
++	sec_trim(&name);
++	if(!sec_param_is(&name, &ipsec_3gpp)) {
++		LM_INFO("Security-Verify mechanism [%.*s] was not offered\n",
++				name.len, name.s);
++		return 0;
++	}
++
++	while(semi) {
++		param.s = semi + 1;
++		param.len = mech.s + mech.len - param.s;
++		semi = memchr(param.s, ';', param.len);
++		if(semi) {
++			param.len = semi - param.s;
++		}
++		eq = memchr(param.s, '=', param.len);
++		if(!eq) {
++			LM_INFO("Security-Verify parameter [%.*s] has no value\n",
++					param.len, param.s);
++			return 0;
++		}
++		name.s = param.s;
++		name.len = eq - param.s;
++		value.s = eq + 1;
++		value.len = param.s + param.len - value.s;
++		sec_trim(&name);
++		sec_trim(&value);
++
++		bit = 0;
++		if(name.len == 1 && (name.s[0] == 'q' || name.s[0] == 'Q')) {
++			continue;
++		} else if(name.len == 5 && strncasecmp(name.s, "spi-c", 5) == 0) {
++			bit = SV_SPI_C;
++			if(sec_param_num(&value) != (long)s->spi_pc)
++				goto mismatch;
++		} else if(name.len == 5 && strncasecmp(name.s, "spi-s", 5) == 0) {
++			bit = SV_SPI_S;
++			if(sec_param_num(&value) != (long)s->spi_ps)
++				goto mismatch;
++		} else if(name.len == 6 && strncasecmp(name.s, "port-c", 6) == 0) {
++			bit = SV_PORT_C;
++			if(sec_param_num(&value) != (long)s->port_pc)
++				goto mismatch;
++		} else if(name.len == 6 && strncasecmp(name.s, "port-s", 6) == 0) {
++			bit = SV_PORT_S;
++			if(sec_param_num(&value) != (long)s->port_ps)
++				goto mismatch;
++		} else if(name.len == 3 && strncasecmp(name.s, "alg", 3) == 0) {
++			bit = SV_ALG;
++			if(!sec_param_is(&value, &s->r_alg))
++				goto mismatch;
++		} else if(name.len == 4 && strncasecmp(name.s, "ealg", 4) == 0) {
++			bit = SV_EALG;
++			if(!sec_param_is(&value, &s->r_ealg))
++				goto mismatch;
++		} else if(name.len == 4 && strncasecmp(name.s, "prot", 4) == 0) {
++			bit = SV_PROT;
++			if(!sec_param_is(&value, &esp))
++				goto mismatch;
++		} else if(name.len == 3 && strncasecmp(name.s, "mod", 3) == 0) {
++			bit = SV_MOD;
++			if(!sec_param_is(&value, &trans))
++				goto mismatch;
++		} else {
++			LM_INFO("Security-Verify parameter [%.*s] was not offered\n",
++					name.len, name.s);
++			return 0;
++		}
++		if(seen & bit) {
++			LM_INFO("Security-Verify repeats [%.*s]\n", name.len, name.s);
++			return 0;
++		}
++		seen |= bit;
++	}
++
++	if(seen != SV_ALL) {
++		LM_INFO("Security-Verify lacks offered parameters (0x%x of 0x%x)\n",
++				seen, SV_ALL);
++		return 0;
++	}
++	return 1;
++
++mismatch:
++	LM_INFO("Security-Verify %.*s=%.*s is not what was offered\n", name.len,
++			name.s, value.len, value.s);
++	return 0;
++}
++
++// Whether the Security-Verify header fields of m list exactly the tunnel's
++// Security-Server
++static int sec_verify_matches(struct sip_msg *m, ipsec_t *s)
++{
++	struct hdr_field *h;
++	str body, mech;
++	char *comma;
++	int n = 0;
++
++	for(h = m->headers; h; h = h->next) {
++		if(h->name.len != 15
++				|| strncasecmp(h->name.s, "Security-Verify", 15) != 0) {
++			continue;
++		}
++		body = h->body;
++		while(body.len > 0) {
++			comma = memchr(body.s, ',', body.len);
++			mech.s = body.s;
++			mech.len = comma ? comma - body.s : body.len;
++			body.len -= mech.len + (comma ? 1 : 0);
++			body.s = comma ? comma + 1 : body.s + mech.len;
++			sec_trim(&mech);
++			if(mech.len == 0) {
++				continue;
++			}
++			// one mechanism offered, so one mirrored
++			if(++n > 1) {
++				LM_INFO("Security-Verify lists more than the one mechanism "
++						"offered\n");
++				return 0;
++			}
++			if(!sec_verify_mechanism(mech, s)) {
++				return 0;
++			}
++		}
++	}
++	if(n == 0) {
++		LM_INFO("no Security-Verify in a request over a tunnel\n");
++	}
++	return n == 1;
++}
++
++// A Security-Server for the tunnel on the reply to m, for the 494 a mismatch
++// is answered with: RFC 3329 2.3.1 has it carry the unmodified list
++static int add_security_server_reply(struct sip_msg *m, ipsec_t *s)
++{
++	char buf[256];
++	int len;
++
++	len = snprintf(buf, sizeof(buf),
++			"Security-Server: "
++			"ipsec-3gpp;q=0.1;prot=esp;mod=trans;spi-c=%u;spi-s=%u;port-c=%u;"
++			"port-s=%u;alg=%.*s;ealg=%.*s\r\n",
++			s->spi_pc, s->spi_ps, s->port_pc, s->port_ps, s->r_alg.len,
++			s->r_alg.s, s->r_ealg.len, s->r_ealg.s);
++	if(len <= 0 || len >= sizeof(buf)) {
++		LM_ERR("Security-Server too long for the reply\n");
++		return -1;
++	}
++	if(add_lump_rpl(m, buf, len, LUMP_RPL_HDR) == 0) {
++		LM_ERR("failed to add Security-Server to the reply\n");
++		return -1;
++	}
++	return 0;
++}
++
++/*
++ * Check the Security-Verify of a request from the UE against the tunnel it came
++ * in over: an established one, or the one a 401 has just offered, which the
++ * REGISTER answering it is sent over.
++ *
++ * Returns 1 when it mirrors the tunnel's Security-Server, -1 when it does not
++ * (the reply carries the Security-Server, for a 494), and -2 when the request
++ * did not come over a tunnel of a known contact, so there is nothing to check
++ * it against.
++ */
++int ipsec_verify(struct sip_msg *m, udomain_t *d)
++{
++	struct pcontact_info ci;
++	pcontact_t *pcontact = NULL;
++	struct via_body *vb;
++	ipsec_t *s = NULL, *est, *pend;
++	int ret = -2;
++
++	if(m->first_line.type != SIP_REQUEST) {
++		LM_ERR("only a request has a Security-Verify to check\n");
++		return -2;
++	}
++	if(parse_headers(m, HDR_EOH_F, 0) < 0) {
++		LM_ERR("failed to parse the headers\n");
++		return -2;
++	}
++	vb = cscf_get_ue_via(m);
++	if(!vb) {
++		LM_ERR("no via to find the contact by\n");
++		return -2;
++	}
++
++	memset(&ci, 0, sizeof(ci));
++	ci.via_host = vb->host;
++	ci.via_port = vb->port ? vb->port : SIP_PORT;
++	ci.via_prot = vb->proto;
++	ci.searchflag = SEARCH_NORMAL;
++	ci.reg_state = PCONTACT_ANY;
++
++	ul.lock_udomain(d, &ci.via_host, ci.via_port, ci.via_prot);
++	if(ul.get_pcontact(d, &ci, &pcontact, 0) != 0 || pcontact == NULL) {
++		LM_DBG("no contact for [%d://%.*s:%d]\n", (int)ci.via_prot,
++				ci.via_host.len, ci.via_host.s, (int)ci.via_port);
++		goto done;
++	}
++
++	est = contact_tunnel(pcontact->security);
++	pend = contact_tunnel(pcontact->security_temp);
++	if(pend && came_over_tunnel(pend, &m->rcv)) {
++		s = pend;
++	} else if(est && came_over_tunnel(est, &m->rcv)) {
++		s = est;
++	}
++	if(!s) {
++		LM_DBG("[%.*s] did not come over a tunnel of its contact\n",
++				pcontact->aor.len, pcontact->aor.s);
++		goto done;
++	}
++
++	if(sec_verify_matches(m, s)) {
++		ret = 1;
++	} else {
++		LM_WARN("Security-Verify of [%.*s] does not mirror the Security-Server "
++				"of the tunnel it came over (spi-c=%u spi-s=%u)\n",
++				pcontact->aor.len, pcontact->aor.s, s->spi_pc, s->spi_ps);
++		add_security_server_reply(m, s);
++		ret = -1;
++	}
++
++done:
++	ul.unlock_udomain(d, &ci.via_host, ci.via_port, ci.via_prot);
++	return ret;
++}
++
+ 
+ int ipsec_destroy(struct sip_msg *m, udomain_t *d, str *uri)
+ {
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.h b/src/modules/ims_ipsec_pcscf/cmd.h
+index 6031d26d99..f32d242b77 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.h
++++ b/src/modules/ims_ipsec_pcscf/cmd.h
+@@ -71,6 +71,7 @@ struct udomain_t;
+ 
+ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags);
+ int ipsec_forward(struct sip_msg *m, udomain_t *d, int _cflags);
++int ipsec_verify(struct sip_msg *m, udomain_t *d);
+ int ipsec_destroy(struct sip_msg *m, udomain_t *d, str *uri);
+ int ipsec_cleanall();
+ int ipsec_restore_tunnels();
+diff --git a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
+index 9f08b148bb..89094747fb 100644
+--- a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
++++ b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
+@@ -64,6 +64,7 @@ static int child_init(int);
+ static void mod_destroy(void);
+ static int w_create(struct sip_msg *_m, char *_d, char *_cflags);
+ static int w_forward(struct sip_msg *_m, char *_d, char *_cflags);
++static int w_verify(struct sip_msg *_m, char *_d, char *_p2);
+ static int w_destroy(struct sip_msg *_m, char *_d, char *_aor);
+ static int w_destroy_by_contact(struct sip_msg *_m, char *_d, char *_aor,
+ 		char *_received_host, char *_received_port);
+@@ -94,6 +95,8 @@ static cmd_export_t cmds[] = {
+ 		0, REQUEST_ROUTE | ONREPLY_ROUTE },
+ 	{"ipsec_forward", (cmd_function)w_forward, 2, save_fixup2,
+ 		free_uint_fixup, REQUEST_ROUTE | ONREPLY_ROUTE },
++	{"ipsec_verify", (cmd_function)w_verify, 1, save_fixup2,
++		0, REQUEST_ROUTE },
+ 	{"ipsec_destroy", (cmd_function)w_destroy, 1, save_fixup2,
+ 		0, REQUEST_ROUTE | ONREPLY_ROUTE },
+ 	{"ipsec_destroy", (cmd_function)w_destroy, 2, unregister_fixup,
+@@ -563,6 +566,11 @@ static int w_create(struct sip_msg *_m, char *_d, char *_cflags)
+ 	return ipsec_create(_m, (udomain_t *)_d, 0);
+ }
+ 
++static int w_verify(struct sip_msg *_m, char *_d, char *_p2)
++{
++	return ipsec_verify(_m, (udomain_t *)_d);
++}
++
+ static int w_forward(struct sip_msg *_m, char *_d, char *_cflags)
+ {
+ 	if(_cflags) {
