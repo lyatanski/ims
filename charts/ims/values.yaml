@@ -62,10 +62,18 @@ gm:
       type: static
 
 # Ici, the interconnect (TS 23.228 Annex K) the IBCF meets the peers on, used
-# with cscf.border only. One IBCF per entry, `<release>-ibcf-<index>`, each
+# with cscf.border only. One IBCF per address, `<release>-ibcf-<index>`, each
 # keeping its address across restarts and rescheduling -- the address the
 # peers' own configuration names. IPv4, and the prefix length is required: it
 # is also what tells the IBCF which sources are on Ici.
+#
+# One Ici network, described by `interface`, `addresses` and `config`; or,
+# with `networks`, several -- an IPX and a direct peering, say -- and those
+# three are ignored. Every IBCF is then on every network and picks the one a
+# request leaves by from the peer it goes to (cscf.border.peers `network`),
+# 23.228 4.14's "selecting the appropriate signalling interconnect". The
+# networks share the IBCF's routing table, so they may not overlap, and
+# anything past a peer's own subnet needs a route in `config`.
 ici:
   # The device name inside the pod.
   interface: ici0
@@ -80,6 +88,21 @@ ici:
       ips: true
     ipam:
       type: static
+  # Per network:
+  #   name       [a-z0-9]+, quoted where YAML would read it as a boolean
+  #              (y, n, on, off). The IBCF's sockets on it are Ici-<name> and
+  #              IciT-<name>, and its media takes the TrGW templates
+  #              incoming-<name> and outgoing-<name>, which trgw.templates has
+  #              to define, through a trgw.media.interfaces entry on it
+  #   interface  the device name inside the pod, at most 15 characters
+  #   addresses  one per IBCF, in ordinal order: the same count everywhere
+  #   config     its CNI config, as `config` above
+  networks: []
+  # - name: ipx
+  #   interface: ici-ipx
+  #   addresses: [10.40.0.10/24]
+  #   config: {cniVersion: 0.3.1, type: macvlan, master: eth1, mode: bridge,
+  #            capabilities: {ips: true}, ipam: {type: static}}
 
 # Seconds between reconciles of the UE route.
 # loop rather than a one-shot because a pod's routing table does not survive rescheduling
@@ -128,17 +151,23 @@ test:
   # as the peer network on Ici and an S-CSCF on the pod network, driving the
   # IBCF from both sides. Needs cscf.border, a test.image that carries the
   # script, this `address` among a peer's `entry` and `+<dial>` among its
-  # `routes`, and trgw `vips` on `internal` and `external` -- the TrGW
-  # addresses the SDP has to name, one pair per replica.
+  # `routes`, that peer on the first Ici network, and trgw `vips` on
+  # `internal` and `external` (`external-<name>` with ici.networks, the first
+  # one's) -- the TrGW addresses the SDP has to name, one pair per replica.
   border:
     enabled: false
-    # The peer's Ici address, on the first IBCF's attachment
+    # The peer's Ici address, on the first Ici network
     address: 10.40.0.30/24
     # The peer network's E.164 country code
     dial: "999"
     # rtpengine's `timeout`, how long a call without media lasts; 0 skips
     # the check that waits it out
     mediaTimeout: 60
+    # A peer on each further Ici network to check, by ici.networks name,
+    # each with its own pod: `address` and `dial` as above, which that
+    # network's peer has to have the same way, and optionally `mediaTimeout`.
+    networks: {}
+    #   peering: {address: 10.41.0.30/24, dial: "998", mediaTimeout: 0}
 
 podAnnotations: {}
 
@@ -205,11 +234,14 @@ cscf:
     #           request on Ici is taken only from one of these addresses
     #   routes  what goes to it: Request-URI domains, E.164 prefixes ("+44"),
     #           or "*" for anything else; the longest matching prefix wins
+    #   network the ici.networks entry it is on, the only one it is sent to
+    #           and taken from; required with more than one
     peers: []
     # - name: peer
     #   trust: false
     #   entry: [sip:10.40.0.30:5060]
     #   routes: [ims.mnc099.mcc001.3gppnetwork.org, "+999"]
+    #   network: ipx
     # The topology hiding key, which every IBCF has to share. Empty: one is
     # generated at install and kept in a Secret across upgrades.
     thkey: ""

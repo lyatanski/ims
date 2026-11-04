@@ -27,7 +27,6 @@ jobs:
   # A single KinD node with the charts' Multus attachments on. They are the
   # shape the charts ship -- transport-mode IPsec does not survive the DNAT a
   # Service does, so testing without them tests a path no deployment uses.
-  # kind.sh does the same interactively; this is kept self-contained.
   test:
     needs:
     - publish
@@ -107,17 +106,28 @@ jobs:
 
     # kindnet SNATs anything leaving the pod CIDR, and transport-mode ESP does
     # not survive that: the plain REGISTER and the 401 ride through and only
-    # the protected REGISTER disappears. The Gm and media subnets from the IMS
-    # values below, and the same again for IPv6.
+    # the protected REGISTER disappears. The Gm, media and both Ici subnets
+    # from the IMS values below, and the same again for IPv6.
     - name: Exempt the secondary subnets from masquerading
       run: |
         NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
-        for net in 10.20.0.0/24 10.30.0.0/24; do
+        for net in 10.20.0.0/24 10.30.0.0/24 10.40.0.0/24 10.41.0.0/24; do
           docker exec "$NODE" iptables -t nat -I KIND-MASQ-AGENT 1 -d "$net" -j RETURN
         done
         for net in fd20::/64 fd30::/64; do
           docker exec "$NODE" ip6tables -t nat -I KIND-MASQ-AGENT 1 -d "$net" -j RETURN
         done
+
+    # The node's rp_filter is strict, and the border test is asymmetric by
+    # construction: its stand-in S-CSCF sits on the pod network and talks to
+    # the IBCF's Ici address and the TrGW's media address, which answer from
+    # those addresses over their pods' eth0 -- their default route -- while
+    # the node's route back to them is the bridge. Loose only asks that the
+    # source be routable at all.
+    - name: Loosen rp_filter for the border test
+      run: |
+        NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+        docker exec "$NODE" sysctl -qw net.ipv4.conf.all.rp_filter=2
 
     # The chart defaults request 5.8 cores between them -- the measured demand
     # of one capacity unit (SIZING.md) -- against the runner's 4 vCPU, so both
@@ -172,13 +182,27 @@ jobs:
             isGateway: true
             master: null
             mode: null
+        # Two Ici networks, a bridge each, so the IBCF picks the one a call
+        # leaves by from the peer it goes to. The TrGW's attachments below
+        # share them.
         ici:
-          config:
-            cniVersion: 0.3.1
-            type: bridge
-            bridge: ici0
-            master: null
-            mode: null
+          networks:
+          - name: ipx
+            interface: ici-ipx
+            addresses: [10.40.0.10/24]
+            config:
+              cniVersion: 0.3.1
+              type: bridge
+              bridge: ici0
+              ipam: {type: static}
+          - name: peering
+            interface: ici-peering
+            addresses: [10.41.0.10/24]
+            config:
+              cniVersion: 0.3.1
+              type: bridge
+              bridge: ici1
+              ipam: {type: static}
         global:
           ue:
             via: 10.20.0.1
@@ -186,10 +210,16 @@ jobs:
         cscf:
           border:
             enabled: true
+            # One peer per Ici network, each the border test's on it
             peers:
             - name: peer
+              network: ipx
               entry: [sip:10.40.0.30:5060]
               routes: [ims.mnc099.mcc001.3gppnetwork.org, "+999"]
+            - name: neighbour
+              network: peering
+              entry: [sip:10.41.0.30:5060]
+              routes: [ims.mnc098.mcc001.3gppnetwork.org, "+998"]
             resources:
               requests: {cpu: 50m, memory: 64Mi}
               limits: {cpu: 1, memory: 256Mi}
@@ -237,12 +267,16 @@ jobs:
                       gw: 10.30.0.1
                     - dst: fd10:10::/48
                       gw: fd30::1
-            - name: external
+            # The TrGW's side of each Ici network, on the IBCF's bridge, the
+            # addresses past rangeEnd again. The bridge address (isGateway)
+            # is how the border test's stand-in S-CSCF, on the pod network,
+            # gets to Ici at all.
+            - name: external-ipx
               address: ici0
               vips: [10.40.0.251, 10.40.0.252]
               network:
                 enabled: true
-                name: ici
+                name: ici-ipx
                 config:
                   cniVersion: 0.3.1
                   type: bridge
@@ -255,6 +289,33 @@ jobs:
                         gateway: 10.40.0.1
                         rangeStart: 10.40.0.100
                         rangeEnd: 10.40.0.250
+            - name: external-peering
+              address: ici1
+              vips: [10.41.0.251, 10.41.0.252]
+              network:
+                enabled: true
+                name: ici-peering
+                config:
+                  cniVersion: 0.3.1
+                  type: bridge
+                  bridge: ici1
+                  isGateway: true
+                  ipam:
+                    type: host-local
+                    ranges:
+                    - - subnet: 10.41.0.0/24
+                        gateway: 10.41.0.1
+                        rangeStart: 10.41.0.100
+                        rangeEnd: 10.41.0.250
+          # A pair per Ici network, which the IBCF names by the peer's. The
+          # unsuffixed pair is no network's, but has to name an interface
+          templates:
+            incoming: direction=external-ipx direction=internal strict-source replace-origin
+            outgoing: direction=internal direction=external-ipx strict-source replace-origin
+            incoming-ipx: direction=external-ipx direction=internal strict-source replace-origin
+            outgoing-ipx: direction=internal direction=external-ipx strict-source replace-origin
+            incoming-peering: direction=external-peering direction=internal strict-source replace-origin
+            outgoing-peering: direction=internal direction=external-peering strict-source replace-origin
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 2, memory: 512Mi}
@@ -266,6 +327,14 @@ jobs:
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 1, memory: 256Mi}
+        # The interconnect check on both Ici networks, one pod each. The media
+        # timeout teardown is the TrGW's whatever the network, so only the
+        # first waits it out.
+        test:
+          border:
+            enabled: true
+            networks:
+              peering: {address: 10.41.0.30/24, dial: "998", mediaTimeout: 0}
         EOF
 
     - name: Test

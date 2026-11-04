@@ -1,11 +1,16 @@
 {{- /*
 The IBCF (cscf/border.cfg), TS 23.228 4.14: the entry and exit point on Ici,
-with rtpengine as its TrGW. One single-replica StatefulSet per
-`ici.addresses` entry, for the P-CSCF's reason: the cfg binds its Ici address
-by value, and that is also the address the peers' configuration names, so each
-pod has to know its own at start. No Diameter and no state store; Ready once
-the peers are loaded. The Service is what the S-CSCF's ibcf.<ims realm>
+with rtpengine as its TrGW. One single-replica StatefulSet per address on the
+Ici networks, for the P-CSCF's reason: the cfg binds its Ici addresses by
+value, and those are also the addresses the peers' configuration names, so
+each pod has to know its own at start. No Diameter and no state store; Ready
+once the peers are loaded. The Service is what the S-CSCF's ibcf.<ims realm>
 resolves to.
+
+Every IBCF is on every Ici network, and picks the interconnect itself
+(23.228 4.14 "Selecting the appropriate signalling interconnect"): the peer
+a request goes to is on one of them, which decides the socket it leaves by
+and the TrGW templates its media takes.
 */}}
 {{- with .Values.cscf.border }}
 {{- if .enabled }}
@@ -13,11 +18,27 @@ resolves to.
 {{- with $ }}
 {{- $peers := $b.peers }}
 {{- if not $peers }}{{ fail "cscf.border.peers: at least one peer network" }}{{ end }}
+{{- $nets := (include "ims.ici.networks" . | fromJson).nets }}
+{{- /* Each peer's Ici network, in `peers` order */}}
+{{- $peernet := list }}
+{{- range $net := $nets }}
+{{- $t := $.Subcharts.trgw.Values.templates }}
+{{- range $dir := list "incoming" "outgoing" }}
+{{- if not (hasKey $t (printf "%s%s" $dir $net.sfx)) }}
+{{- fail (printf "trgw.templates: no %q for the Ici network %q" (printf "%s%s" $dir $net.sfx) $net.name) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- /* `<match>=<set>` per route, the set being the peer's position */}}
 {{- $routes := list }}
 {{- range $i, $p := $peers }}
 {{- if not $p.name }}{{ fail (printf "cscf.border.peers[%d] has no name" $i) }}{{ end }}
 {{- if not $p.entry }}{{ fail (printf "cscf.border.peers[%d] (%s) has no entry point" $i $p.name) }}{{ end }}
+{{- $net := "" }}
+{{- range $c := $nets }}{{ if eq $c.name ($p.network | default (first $nets).name | toString) }}{{ $net = $c }}{{ end }}{{ end }}
+{{- if not $net }}{{ fail (printf "cscf.border.peers[%d] (%s): network %q is none of ici.networks" $i $p.name $p.network) }}{{ end }}
+{{- if and (gt (len $nets) 1) (not $p.network) }}{{ fail (printf "cscf.border.peers[%d] (%s): a network is required with more than one Ici network" $i $p.name) }}{{ end }}
+{{- $peernet = append $peernet $net }}
 {{- range $r := $p.routes }}{{ $routes = append $routes (printf "%s=%d" $r (add1 $i)) }}{{ end }}
 {{- end }}
 {{- $secret := lookup "v1" "Secret" .Release.Namespace (printf "%s-ibcf" .Release.Name) }}
@@ -45,12 +66,22 @@ metadata:
   labels: {{- include "ims.labels" . | nindent 4 }}
 data:
   # setid destination flags priority attributes. A set's destinations are
-  # tried highest priority first, which is `entry` order
+  # tried highest priority first, which is `entry` order, and sent to from
+  # the peer's Ici network
   peers.list: |
     {{- range $i, $p := $peers }}
+    {{- $net := index $peernet $i }}
     {{- range $j, $d := $p.entry }}
-    {{ add1 $i }} {{ $d }} 0 {{ sub (len $p.entry) $j }} peer={{ $p.name }};trust={{ ternary 1 0 (eq true $p.trust) }};sockname=Ici
+    {{ add1 $i }} {{ $d }} 0 {{ sub (len $p.entry) $j }} peer={{ $p.name }};trust={{ ternary 1 0 (eq true $p.trust) }};{{ with $net.name }}net={{ . }};{{ end }}sockname=Ici{{ $net.sfx }}
     {{- end }}
+    {{- end }}
+  # The Ici sockets, a pair per network at the address its variable holds
+  ici.cfg: |
+    #!define ICI_LISTENS
+    {{- range $net := $nets }}
+    #!defenv {{ $net.env }}
+    listen = udp:{{ $net.env }}:5060 name "Ici{{ $net.sfx }}"
+    listen = tcp:{{ $net.env }}:5060 name "IciT{{ $net.sfx }}"
     {{- end }}
 ---
 apiVersion: v1
@@ -73,15 +104,18 @@ spec:
   publishNotReadyAddresses: true
   selector: {{- include "ims.selectorLabels" . | nindent 4 }}
     role: ibcf
-{{- range $i, $ici := required "ici.addresses: one address per IBCF" .Values.ici.addresses }}
-{{- if or (not (contains "/" $ici)) (contains ":" $ici) }}
-{{- fail (printf "ici.addresses: %q is not an IPv4 address with its prefix length" $ici) }}
-{{- end }}
+{{- range $i, $_ := (first $nets).addresses }}
 {{- with $ }}
-{{- /* Ici, and the control interface's network when rtpengine's ng socket is on its vips */}}
-{{- $nets := list (dict "name" (printf "%s-ici" .Release.Name) "interface" .Values.ici.interface "ips" (list $ici)) }}
+{{- /* Its address on each Ici network, and the control interface's network
+when rtpengine's ng socket is on its vips */}}
+{{- $attach := list }}
+{{- $icinet := list }}
+{{- range $net := $nets }}
+{{- $attach = append $attach (dict "name" $net.nad "interface" $net.interface "ips" (list (index $net.addresses $i))) }}
+{{- $icinet = append $icinet (index $net.addresses $i) }}
+{{- end }}
 {{- with include "rtpengine.ng.network" .Subcharts.trgw }}
-{{- $nets = append $nets (fromJson .) }}
+{{- $attach = append $attach (fromJson .) }}
 {{- end }}
 ---
 apiVersion: apps/v1
@@ -103,9 +137,9 @@ spec:
   template:
     metadata:
       annotations:
-        # peers.list is read at startup only
-        checksum/peers: {{ toJson $peers | sha256sum }}
-        k8s.v1.cni.cncf.io/networks: {{ toJson $nets | quote }}
+        # peers.list and ici.cfg are read at startup only
+        checksum/peers: {{ toJson (list $peers $nets) | sha256sum }}
+        k8s.v1.cni.cncf.io/networks: {{ toJson $attach | quote }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -130,12 +164,14 @@ spec:
         env:
         - name: REALM
           value: {{ tpl .Values.domain . }}
-        - name: ICI
-          value: {{ (split "/" $ici)._0 | quote }}
-        # The Ici sources: the IBCF's own address with its prefix, which
-        # is_in_subnet masks the same way as the source
+        {{- range $net := $nets }}
+        - name: {{ $net.env }}
+          value: {{ (split "/" (index $net.addresses $i))._0 | quote }}
+        {{- end }}
+        # The Ici sources: the IBCF's own addresses with their prefixes,
+        # which is_in_subnet masks the same way as the source
         - name: ICINET
-          value: {{ $ici | quote }}
+          value: {{ join "," $icinet | quote }}
         - name: RTPADR
           value: {{ include "rtpengine.ng" .Subcharts.trgw | quote }}
         - name: ROUTES
@@ -174,6 +210,9 @@ spec:
         - name: peers
           mountPath: /etc/cscf/peers.list
           subPath: peers.list
+        - name: peers
+          mountPath: /etc/cscf/ici.cfg
+          subPath: ici.cfg
       volumes:
       - name: peers
         configMap:

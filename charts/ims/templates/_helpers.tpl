@@ -198,6 +198,48 @@ Call with (dict "root" $ "name" <gm|ici> "config" <its config>).
 {{- end }}
 
 {{/*
+The Ici networks, as JSON {"nets": [...]}: `ici.networks`, or without it the
+single unnamed one `ici.interface`, `ici.addresses` and `ici.config` describe.
+Each entry adds what the rest of the chart derives from the name:
+  sfx   "" or "-<name>": the suffix of its sockets in cscf/border.cfg ("Ici",
+        "IciT"), of its TrGW templates and of its NetworkAttachmentDefinition
+  env   the variable an IBCF's address on it is passed in, ICI[_<NAME>]
+  nad   the NetworkAttachmentDefinition, <release>-ici<sfx>
+Every IBCF is on every network, so the address lists are one per IBCF and
+all the same length.
+*/}}
+{{- define "ims.ici.networks" -}}
+{{- $in := .Values.ici.networks }}
+{{- if not $in }}
+{{- $in = list (dict "name" "" "interface" .Values.ici.interface "addresses" .Values.ici.addresses "config" .Values.ici.config) }}
+{{- end }}
+{{- $out := list }}
+{{- $names := list }}
+{{- $n := len ((first $in).addresses | default list) }}
+{{- range $k, $net := $in }}
+{{- if and (hasKey $net "name") (not (kindIs "string" $net.name)) }}{{ fail (printf "ici.networks[%d]: name %v is not a string (quote it: YAML reads y, n, on, off as booleans)" $k $net.name) }}{{ end }}
+{{- $name := $net.name | default "" }}
+{{- if and (gt (len $in) 1) (not $name) }}{{ fail (printf "ici.networks[%d]: a name is required" $k) }}{{ end }}
+{{- if and $name (not (regexMatch "^[a-z0-9]+$" $name)) }}{{ fail (printf "ici.networks[%d]: %q is not [a-z0-9]+" $k $name) }}{{ end }}
+{{- if has $name $names }}{{ fail (printf "ici.networks: %q twice" $name) }}{{ end }}
+{{- $names = append $names $name }}
+{{- if not $net.interface }}{{ fail (printf "ici.networks[%d] (%s): no interface" $k $name) }}{{ end }}
+{{- if gt (len $net.interface) 15 }}{{ fail (printf "ici.networks[%d] (%s): interface %q is over 15 characters" $k $name $net.interface) }}{{ end }}
+{{- if not $net.addresses }}{{ fail (printf "ici.networks[%d] (%s): one address per IBCF" $k $name) }}{{ end }}
+{{- if ne (len $net.addresses) $n }}{{ fail (printf "ici.networks[%d] (%s): %d addresses where the first network has %d, and every IBCF is on every network" $k $name (len $net.addresses) $n) }}{{ end }}
+{{- range $a := $net.addresses }}
+{{- if or (not (contains "/" $a)) (contains ":" $a) }}
+{{- fail (printf "ici: %q is not an IPv4 address with its prefix length" $a) }}
+{{- end }}
+{{- end }}
+{{- $sfx := ternary (printf "-%s" $name) "" (ne $name "") }}
+{{- $env := ternary (printf "ICI_%s" (upper $name)) "ICI" (ne $name "") }}
+{{- $out = append $out (dict "name" $name "sfx" $sfx "env" $env "nad" (printf "%s-ici%s" $.Release.Name $sfx) "interface" $net.interface "addresses" $net.addresses "config" $net.config) }}
+{{- end }}
+{{- toJson (dict "nets" $out) -}}
+{{- end }}
+
+{{/*
 The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
 */}}
 {{- define "ims.ueroute" -}}
