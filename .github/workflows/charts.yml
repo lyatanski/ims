@@ -184,12 +184,13 @@ jobs:
             mode: null
         # Two Ici networks, a bridge each, so the IBCF picks the one a call
         # leaves by from the peer it goes to. The TrGW's attachments below
-        # share them.
+        # share them. Two addresses on ipx, both received on, the first sent
+        # from.
         ici:
           networks:
           - name: ipx
             interface: ici-ipx
-            addresses: [10.40.0.10/24]
+            addresses: [10.40.0.10/24, 10.40.0.11/24]
             config:
               cniVersion: 0.3.1
               type: bridge

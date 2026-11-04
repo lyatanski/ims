@@ -203,10 +203,8 @@ single unnamed one `ici.interface`, `ici.addresses` and `ici.config` describe.
 Each entry adds what the rest of the chart derives from the name:
   sfx   "" or "-<name>": the suffix of its sockets in cscf/border.cfg ("Ici",
         "IciT"), of its TrGW templates and of its NetworkAttachmentDefinition
-  env   the variable an IBCF's address on it is passed in, ICI[_<NAME>]
   nad   the NetworkAttachmentDefinition, <release>-ici<sfx>
-Every IBCF is on every network, so the address lists are one per IBCF and
-all the same length.
+The one IBCF is on every network, at every address listed for it.
 */}}
 {{- define "ims.ici.networks" -}}
 {{- $in := .Values.ici.networks }}
@@ -215,7 +213,6 @@ all the same length.
 {{- end }}
 {{- $out := list }}
 {{- $names := list }}
-{{- $n := len ((first $in).addresses | default list) }}
 {{- range $k, $net := $in }}
 {{- if and (hasKey $net "name") (not (kindIs "string" $net.name)) }}{{ fail (printf "ici.networks[%d]: name %v is not a string (quote it: YAML reads y, n, on, off as booleans)" $k $net.name) }}{{ end }}
 {{- $name := $net.name | default "" }}
@@ -225,16 +222,14 @@ all the same length.
 {{- $names = append $names $name }}
 {{- if not $net.interface }}{{ fail (printf "ici.networks[%d] (%s): no interface" $k $name) }}{{ end }}
 {{- if gt (len $net.interface) 15 }}{{ fail (printf "ici.networks[%d] (%s): interface %q is over 15 characters" $k $name $net.interface) }}{{ end }}
-{{- if not $net.addresses }}{{ fail (printf "ici.networks[%d] (%s): one address per IBCF" $k $name) }}{{ end }}
-{{- if ne (len $net.addresses) $n }}{{ fail (printf "ici.networks[%d] (%s): %d addresses where the first network has %d, and every IBCF is on every network" $k $name (len $net.addresses) $n) }}{{ end }}
+{{- if not $net.addresses }}{{ fail (printf "ici.networks[%d] (%s): no addresses" $k $name) }}{{ end }}
 {{- range $a := $net.addresses }}
 {{- if or (not (contains "/" $a)) (contains ":" $a) }}
 {{- fail (printf "ici: %q is not an IPv4 address with its prefix length" $a) }}
 {{- end }}
 {{- end }}
 {{- $sfx := ternary (printf "-%s" $name) "" (ne $name "") }}
-{{- $env := ternary (printf "ICI_%s" (upper $name)) "ICI" (ne $name "") }}
-{{- $out = append $out (dict "name" $name "sfx" $sfx "env" $env "nad" (printf "%s-ici%s" $.Release.Name $sfx) "interface" $net.interface "addresses" $net.addresses "config" $net.config) }}
+{{- $out = append $out (dict "name" $name "sfx" $sfx "nad" (printf "%s-ici%s" $.Release.Name $sfx) "interface" $net.interface "addresses" $net.addresses "config" $net.config) }}
 {{- end }}
 {{- toJson (dict "nets" $out) -}}
 {{- end }}

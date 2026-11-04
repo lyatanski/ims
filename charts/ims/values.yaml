@@ -62,14 +62,15 @@ gm:
       type: static
 
 # Ici, the interconnect (TS 23.228 Annex K) the IBCF meets the peers on, used
-# with cscf.border only. One IBCF per address, `<release>-ibcf-<index>`, each
-# keeping its address across restarts and rescheduling -- the address the
-# peers' own configuration names. IPv4, and the prefix length is required: it
-# is also what tells the IBCF which sources are on Ici.
+# with cscf.border only. One IBCF, `<release>-ibcf-0`, holding every address
+# listed, kept across restarts and rescheduling -- the addresses the peers'
+# own configuration names. It receives on all of them and sends to a peer
+# from its network's first. IPv4, and the prefix length is required: it is
+# also what tells the IBCF which sources are on Ici.
 #
 # One Ici network, described by `interface`, `addresses` and `config`; or,
 # with `networks`, several -- an IPX and a direct peering, say -- and those
-# three are ignored. Every IBCF is then on every network and picks the one a
+# three are ignored. The IBCF is then on every network and picks the one a
 # request leaves by from the peer it goes to (cscf.border.peers `network`),
 # 23.228 4.14's "selecting the appropriate signalling interconnect". The
 # networks share the IBCF's routing table, so they may not overlap, and
@@ -95,7 +96,7 @@ ici:
   #              incoming-<name> and outgoing-<name>, which trgw.templates has
   #              to define, through a trgw.media.interfaces entry on it
   #   interface  the device name inside the pod, at most 15 characters
-  #   addresses  one per IBCF, in ordinal order: the same count everywhere
+  #   addresses  the IBCF's on it, the first the one it sends from
   #   config     its CNI config, as `config` above
   networks: []
   # - name: ipx

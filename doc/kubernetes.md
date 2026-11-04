@@ -266,12 +266,14 @@ S-CSCF to PSTN connectivity. When S-CSCF is sending packet it will be sent by de
 `cscf.border` (off by default) runs `images/kamailio/cscf/border.cfg`, the
 entry and exit point on Ici, with rtpengine as its TrGW:
 
-- **Ici** is an attachment of its own, `ici` in the values, the Gm pattern
-  again: one single-replica StatefulSet per `ici.addresses` entry,
-  `<release>-ibcf-<i>`. The cfg binds the address by value, and it is the one
-  the peers' configuration names, so each pod has to know it at start.
-  `ICINET` is that address with its prefix, which is how the IBCF tells
-  sources on Ici from the rest (metrics, rtpengine's teardown RPC).
+- **Ici** is an attachment of its own, `ici` in the values: one IBCF,
+  `<release>-ibcf-0`, on every Ici network (`ici.networks`, or the single
+  one `ici.addresses` describes) at every address listed, picking the network
+  a request leaves by from the peer it goes to. The cfg binds the addresses
+  by value, as the chart's `ici.cfg` lists them; a peer is sent to from its
+  network's first address, and every address receives. `ICINET` is those
+  addresses with their prefixes, which is how the IBCF tells sources on Ici
+  from the rest (metrics, rtpengine's teardown RPC).
 - **Mx** is the pod network: the Service `<release>-ibcf` is what
   `ibcf.ims.<realm>` resolves to (the CoreDNS SRV template has to list
   `ibcf`, or the name falls through to the I-CSCF). With the IBCF on, the

@@ -1,7 +1,7 @@
 {{- /*
 The interconnect check (border.sh under compose): pro2call's ibcf_peer.lua
 plays the peer network on Ici and an S-CSCF on the pod network, and drives
-the first IBCF from both sides. Every check is a line of its log.
+the IBCF from both sides. Every check is a line of its log.
 
 One pod per Ici network checked: `<release>-test-border` on the first, with
 `address` and `dial`, and `<release>-test-border-<name>` for each entry of
@@ -66,7 +66,7 @@ spec:
     env:
     - {name: PEER_ICI,     value: {{ $peer | quote }}}
     - {name: PEER_IBCF,    value: {{ (split "/" (first $ici.addresses))._0 | quote }}}
-    - {name: PEER_IBCF_MX, value: {{ printf "%s-ibcf-0-0.%s-ibcf.%s.svc.cluster.local" .Release.Name .Release.Name .Release.Namespace }}}
+    - {name: PEER_IBCF_MX, value: {{ printf "%s-ibcf-0.%s-ibcf.%s.svc.cluster.local" .Release.Name .Release.Name .Release.Namespace }}}
     - {name: PEER_MX_IF,   value: eth0}
     - {name: PEER_TRGW,    value: {{ join " " $trgw.external | quote }}}
     - {name: PEER_TRGW_MX, value: {{ join " " $trgw.internal | quote }}}
