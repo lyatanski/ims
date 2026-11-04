@@ -1,4 +1,4 @@
-From e974bdc3ee775c81b9c03704b523af73f5703c27 Mon Sep 17 00:00:00 2001
+From a8ec368304b1df5519edc6db8d7e6d1d0d85f5de Mon Sep 17 00:00:00 2001
 From: Lyubomir Yatanski <lyubomir.yatanski@flolive.net>
 Date: Tue, 3 Nov 2026 11:43:08 +0000
 Subject: [PATCH] ims_ipsec_pcscf: check Security-Verify against the tunnel
@@ -11,14 +11,20 @@ way to the UE went unnoticed.
 ipsec_verify() checks it against the tunnel the request came in over, the
 established one or the one a 401 has just offered, and on a mismatch puts
 the tunnel's Security-Server on the reply for the 494 the RFC asks for.
+
+The contact is looked for by the address the request came from, then by
+its Via, from both ends of the slot. A request on a protected port that
+came over no tunnel of a known contact is reported as such rather than
+let through unverified: the kernel passes in clear what no tunnel's policy
+selects.
 ---
- src/modules/ims_ipsec_pcscf/cmd.c             | 297 ++++++++++++++++++
+ src/modules/ims_ipsec_pcscf/cmd.c             | 362 ++++++++++++++++++
  src/modules/ims_ipsec_pcscf/cmd.h             |   1 +
  .../ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c     |   8 +
- 3 files changed, 306 insertions(+)
+ 3 files changed, 371 insertions(+)
 
 diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
-index 5f0db96b1a..ed87fedc71 100644
+index 5f0db96b1a..0c03ad60ba 100644
 --- a/src/modules/ims_ipsec_pcscf/cmd.c
 +++ b/src/modules/ims_ipsec_pcscf/cmd.c
 @@ -46,6 +46,7 @@
@@ -29,7 +35,17 @@ index 5f0db96b1a..ed87fedc71 100644
  #include "../../lib/ims/ims_getters.h"
  #include "../../modules/tm/tm_load.h"
  #include "../ims_usrloc_pcscf/usrloc.h"
-@@ -1901,6 +1902,302 @@ cleanup:
+@@ -66,6 +67,9 @@
+ extern str ipsec_listen_addr;
+ extern str ipsec_listen_addr6;
+ extern int ipsec_reuse_server_port;
++extern int ipsec_client_port;
++extern int ipsec_server_port;
++extern int ipsec_max_connections;
+ extern int ipsec_restore_oseq_rate;
+ extern ip_addr_t ipsec_listen_ip_addr;
+ extern ip_addr_t ipsec_listen_ip_addr6;
+@@ -1901,6 +1905,364 @@ cleanup:
  	return ret;
  }
  
@@ -255,66 +271,130 @@ index 5f0db96b1a..ed87fedc71 100644
 +	return 0;
 +}
 +
++// Whether a message came in on one of the protected ports the P-CSCF listens
++// on for tunnels, which only a message over a tunnel is meant to reach
++static int came_on_protected_port(struct receive_info *rcv)
++{
++	ip_addr_t *a = rcv->dst_ip.af == AF_INET6 ? &ipsec_listen_ip_addr6
++											  : &ipsec_listen_ip_addr;
++	int p = rcv->dst_port;
++
++	if(!ip_addr_cmp(&rcv->dst_ip, a)) {
++		return 0;
++	}
++	return (p >= ipsec_client_port
++				   && p < ipsec_client_port + ipsec_max_connections)
++		   || (p >= ipsec_server_port
++				   && p < ipsec_server_port + ipsec_max_connections);
++}
++
++// The tunnel of c a message came in over, the one a 401 has just offered
++// before the established one, or NULL when it came over neither
++static ipsec_t *tunnel_came_over(pcontact_t *c, struct receive_info *rcv)
++{
++	ipsec_t *pend = contact_tunnel(c->security_temp);
++	ipsec_t *est = contact_tunnel(c->security);
++
++	if(pend && came_over_tunnel(pend, rcv)) {
++		return pend;
++	}
++	if(est && came_over_tunnel(est, rcv)) {
++		return est;
++	}
++	return NULL;
++}
++
++/*
++ * The contact of the UE's slot a message came in over a tunnel of. The UE's
++ * Via names the slot; the contact is looked for by the address the message
++ * came from first, which is the client port of the tunnel or the UE's Contact
++ * port, then by the Via, from both ends of the slot each time, as a UE can have
++ * more than one contact there.
++ */
++static pcontact_t *contact_came_over(udomain_t *d, struct sip_msg *m,
++		struct via_body *vb, ipsec_t **s)
++{
++	struct pcontact_info ci;
++	pcontact_t *c;
++	char srcip[50];
++	int search, reverse;
++
++	memset(&ci, 0, sizeof(ci));
++	ci.via_host = vb->host;
++	ci.via_port = vb->port ? vb->port : SIP_PORT;
++	ci.via_prot = vb->proto;
++	ci.received_host.len = ip_addr2sbuf(&m->rcv.src_ip, srcip, sizeof(srcip));
++	ci.received_host.s = srcip;
++	ci.received_port = m->rcv.src_port;
++	ci.received_proto = m->rcv.proto;
++	ci.reg_state = PCONTACT_ANY;
++
++	for(search = 0; search <= 1; search++) {
++		for(reverse = 0; reverse <= 1; reverse++) {
++			// get_pcontact() can change the search flags in DB_ONLY mode
++			ci.searchflag = search == 0 ? SEARCH_RECEIVED : SEARCH_NORMAL;
++			ci.extra_search_criteria = 0;
++			c = NULL;
++			if(ul.get_pcontact(d, &ci, &c, reverse) != 0 || c == NULL) {
++				continue;
++			}
++			if((*s = tunnel_came_over(c, &m->rcv)) != NULL) {
++				return c;
++			}
++		}
++	}
++	return NULL;
++}
++
 +/*
 + * Check the Security-Verify of a request from the UE against the tunnel it came
 + * in over: an established one, or the one a 401 has just offered, which the
 + * REGISTER answering it is sent over.
 + *
 + * Returns 1 when it mirrors the tunnel's Security-Server, -1 when it does not
-+ * (the reply carries the Security-Server, for a 494), and -2 when the request
-+ * did not come over a tunnel of a known contact, so there is nothing to check
-+ * it against.
++ * (the reply carries the Security-Server, for a 494), -2 when the request came
++ * in on an unprotected port, where there is no tunnel to check it against, and
++ * -3 when it came in on a protected port over no tunnel of a known contact. A
++ * request there that is not verified is not let through: it may not have come
++ * over a security association at all, as the kernel lets through in clear what
++ * no tunnel's policy selects.
 + */
 +int ipsec_verify(struct sip_msg *m, udomain_t *d)
 +{
-+	struct pcontact_info ci;
-+	pcontact_t *pcontact = NULL;
++	pcontact_t *pcontact;
 +	struct via_body *vb;
-+	ipsec_t *s = NULL, *est, *pend;
-+	int ret = -2;
++	ipsec_t *s = NULL;
++	unsigned short via_port;
++	int ret;
 +
 +	if(m->first_line.type != SIP_REQUEST) {
 +		LM_ERR("only a request has a Security-Verify to check\n");
 +		return -2;
 +	}
++	if(!came_on_protected_port(&m->rcv)) {
++		LM_DBG("not on a protected port: nothing to verify against\n");
++		return -2;
++	}
 +	if(parse_headers(m, HDR_EOH_F, 0) < 0) {
 +		LM_ERR("failed to parse the headers\n");
-+		return -2;
++		return -3;
 +	}
 +	vb = cscf_get_ue_via(m);
 +	if(!vb) {
 +		LM_ERR("no via to find the contact by\n");
-+		return -2;
++		return -3;
 +	}
++	via_port = vb->port ? vb->port : SIP_PORT;
 +
-+	memset(&ci, 0, sizeof(ci));
-+	ci.via_host = vb->host;
-+	ci.via_port = vb->port ? vb->port : SIP_PORT;
-+	ci.via_prot = vb->proto;
-+	ci.searchflag = SEARCH_NORMAL;
-+	ci.reg_state = PCONTACT_ANY;
-+
-+	ul.lock_udomain(d, &ci.via_host, ci.via_port, ci.via_prot);
-+	if(ul.get_pcontact(d, &ci, &pcontact, 0) != 0 || pcontact == NULL) {
-+		LM_DBG("no contact for [%d://%.*s:%d]\n", (int)ci.via_prot,
-+				ci.via_host.len, ci.via_host.s, (int)ci.via_port);
-+		goto done;
-+	}
-+
-+	est = contact_tunnel(pcontact->security);
-+	pend = contact_tunnel(pcontact->security_temp);
-+	if(pend && came_over_tunnel(pend, &m->rcv)) {
-+		s = pend;
-+	} else if(est && came_over_tunnel(est, &m->rcv)) {
-+		s = est;
-+	}
-+	if(!s) {
-+		LM_DBG("[%.*s] did not come over a tunnel of its contact\n",
-+				pcontact->aor.len, pcontact->aor.s);
-+		goto done;
-+	}
-+
-+	if(sec_verify_matches(m, s)) {
++	ul.lock_udomain(d, &vb->host, via_port, vb->proto);
++	pcontact = contact_came_over(d, m, vb, &s);
++	if(!pcontact) {
++		LM_WARN("request on protected port %d from [%d://%.*s:%d] came over "
++				"no tunnel of a known contact\n",
++				(int)m->rcv.dst_port, (int)m->rcv.proto, vb->host.len,
++				vb->host.s, (int)m->rcv.src_port);
++		ret = -3;
++	} else if(sec_verify_matches(m, s)) {
 +		ret = 1;
 +	} else {
 +		LM_WARN("Security-Verify of [%.*s] does not mirror the Security-Server "
@@ -323,9 +403,7 @@ index 5f0db96b1a..ed87fedc71 100644
 +		add_security_server_reply(m, s);
 +		ret = -1;
 +	}
-+
-+done:
-+	ul.unlock_udomain(d, &ci.via_host, ci.via_port, ci.via_prot);
++	ul.unlock_udomain(d, &vb->host, via_port, vb->proto);
 +	return ret;
 +}
 +
