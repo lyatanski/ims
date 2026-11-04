@@ -1,7 +1,7 @@
 # Kubernetes
 
 Two charts, installed in either order. `ims` is the IMS core plus CoreDNS,
-rtpengine and the state store; `core` is the EPC — HSS, PCRF and the PGW
+the TrGW (rtpengine) and the state store; `core` is the EPC — HSS, PCRF and the PGW
 control/user plane split — plus MongoDB and a subscriber seed.
 
     kind create cluster
@@ -297,7 +297,7 @@ the Ici bridge so the stand-in S-CSCF on the pod network can reach Ici at
 all, and a loose `rp_filter` on the node, as the IBCF and the TrGW answer it
 from their Ici and media addresses over their pods' eth0.
 
-## rtpengine
+## TrGW (rtpengine)
 The same challenges as the Proxy-CSCF apply. [whereabouts](https://github.com/k8snetworkplumbingwg/whereabouts) with host device/macvlan could be utilised as the IP in the SDP is assigned by the rtpengine when offer/answer is forwarded to it. IP allocation pool could be used for these cases.
 
 ### Network attachment (implemented)

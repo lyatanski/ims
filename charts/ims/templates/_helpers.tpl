@@ -73,9 +73,9 @@ Wait redis! db_redis opens its connection at module init and does not retry
 Call with (dict "root" $ "cscf" <role>).
 */}}
 {{- define "ims.waitdb" -}}
-{{- $valkey := printf "-h %s -p %v" (include "valkey.name" .root.Subcharts.rtpengine.Subcharts.valkey) .root.Values.rtpengine.valkey.ports.valkey }}
+{{- $valkey := printf "-h %s -p %v" (include "valkey.name" .root.Subcharts.trgw.Subcharts.valkey) .root.Values.trgw.valkey.ports.valkey }}
 - name: wait-store
-  image: {{ .root.Values.rtpengine.valkey.image.repository }}:{{ .root.Values.rtpengine.valkey.image.tag }}
+  image: {{ .root.Values.trgw.valkey.image.repository }}:{{ .root.Values.trgw.valkey.image.tag }}
   {{- with .root.Values.sidecar.resources }}
   resources: {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -105,7 +105,7 @@ out when unset so the cfg's own default (112, 911) applies.
 {{- end }}
 
 {{- define "ims.regsrv" -}}
-addr={{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }};port={{ .Values.rtpengine.valkey.ports.valkey }};db={{ .Values.db.interrogating }}
+addr={{ template "valkey.name" .Subcharts.trgw.Subcharts.valkey }};port={{ .Values.trgw.valkey.ports.valkey }};db={{ .Values.db.interrogating }}
 {{- end }}
 
 {{/*

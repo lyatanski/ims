@@ -11,3 +11,4 @@ dependencies:
 - name: rtpengine
   version: "*"
   repository: file://../rtpengine
+  alias: trgw

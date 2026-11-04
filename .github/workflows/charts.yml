@@ -13,8 +13,6 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
-    # rtpengine before ims: ims vendors it from file://../rtpengine, which has
-    # to carry its own valkey dependency by then.
     - name: Lint
       run: |
         for c in core rtpengine ims; do helm dependency update charts/$c; done
@@ -160,23 +158,6 @@ jobs:
             limits: {cpu: 1500m, memory: 1Gi}
         EOF
 
-    # `bridge` rather than macvlan, whose child cannot reach its parent's host
-    # -- and here the UE sits behind the node. `host-local` for media rather
-    # than whereabouts, one operator fewer. Gm keeps the chart's `static` IPAM,
-    # and with no gateway to take from it the bridge's own address is the
-    # subnet's first, 10.20.0.1. The `null`s drop macvlan's keys, which Helm's
-    # map merge would otherwise keep beside these. rtpengine's interfaces are a
-    # list, which Helm replaces whole, so both are given in full and no
-    # `null`s are needed there. `external` is the TrGW's side of Ici, on the
-    # IBCF's bridge, its vips past rangeEnd like media's.
-    #
-    # The default `gm.addresses` is what makes the P-CSCF .10 -- move it
-    # together with ims.pcscf above.
-    #
-    # The IBCF is on, with one peer that nothing plays: its Ready only needs
-    # the peer loaded. The test that plays it (test.border) needs a pro2call
-    # with ibcf_peer.lua, which the published one is not yet; kind.sh runs it
-    # against a local build.
     - name: Install IMS
       run: |
         helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m -f - <<'EOF'
@@ -224,7 +205,7 @@ jobs:
             resources:
               requests: {cpu: 50m, memory: 64Mi}
               limits: {cpu: 2, memory: 768Mi}
-        rtpengine:
+        trgw:
           media:
             interfaces:
             - name: internal
@@ -295,5 +276,5 @@ jobs:
       run: |
         kubectl get pods,svc,net-attach-def
         kubectl describe pod -l app.kubernetes.io/instance=ims
-        # deploy,sts: the CSCFs, rtpengine and valkey are StatefulSets.
+        # deploy,sts: the CSCFs, the TrGW and valkey are StatefulSets.
         for d in $(kubectl get deploy,sts -o name); do echo "== $d"; kubectl logs "$d" --tail=100; done

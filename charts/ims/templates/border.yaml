@@ -80,7 +80,7 @@ spec:
 {{- with $ }}
 {{- /* Ici, and the control interface's network when rtpengine's ng socket is on its vips */}}
 {{- $nets := list (dict "name" (printf "%s-ici" .Release.Name) "interface" .Values.ici.interface "ips" (list $ici)) }}
-{{- with include "rtpengine.ng.network" .Subcharts.rtpengine }}
+{{- with include "rtpengine.ng.network" .Subcharts.trgw }}
 {{- $nets = append $nets (fromJson .) }}
 {{- end }}
 ---
@@ -137,7 +137,7 @@ spec:
         - name: ICINET
           value: {{ $ici | quote }}
         - name: RTPADR
-          value: {{ include "rtpengine.ng" .Subcharts.rtpengine | quote }}
+          value: {{ include "rtpengine.ng" .Subcharts.trgw | quote }}
         - name: ROUTES
           value: {{ join " " $routes | quote }}
         - name: THKEY

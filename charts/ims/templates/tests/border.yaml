@@ -17,12 +17,12 @@ the first IBCF from both sides. Every check is a line of its log.
 {{- end }}
 {{- /* The TrGW's addresses, one per replica on either side, in the same order */}}
 {{- $trgw := dict }}
-{{- range $if := .Values.rtpengine.media.interfaces }}
+{{- range $if := .Values.trgw.media.interfaces }}
 {{- if has $if.name (list "internal" "external") }}{{ $_ := set $trgw $if.name ($if.vips | default list) }}{{ end }}
 {{- end }}
 {{- range $side := list "internal" "external" }}
 {{- if not (get $trgw $side) }}
-{{- fail (printf "test.border: rtpengine's %q interface needs vips, the addresses the SDP is checked against" $side) }}
+{{- fail (printf "test.border: the TrGW's %q interface needs vips, the addresses the SDP is checked against" $side) }}
 {{- end }}
 {{- end }}
 apiVersion: v1

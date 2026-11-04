@@ -128,7 +128,7 @@ test:
   # as the peer network on Ici and an S-CSCF on the pod network, driving the
   # IBCF from both sides. Needs cscf.border, a test.image that carries the
   # script, this `address` among a peer's `entry` and `+<dial>` among its
-  # `routes`, and rtpengine `vips` on `internal` and `external` -- the TrGW
+  # `routes`, and trgw `vips` on `internal` and `external` -- the TrGW
   # addresses the SDP has to name, one pair per replica.
   border:
     enabled: false
@@ -190,9 +190,9 @@ cscf:
   # as its TrGW, and the S-CSCF's next hop for other networks' domains and,
   # unless `trunk` says otherwise, off-net numbers. Off by default, as there
   # is nothing for it to do without an interconnect agreement. On, it needs
-  # a peer, the `ici` attachment, and rtpengine's `external` interface where
+  # a peer, the `ici` attachment, and the TrGW's `external` interface where
   # the peers can reach it -- on Ici, through an attachment of its own (the
-  # rtpengine chart's media.interfaces).
+  # `trgw.media.interfaces`, the rtpengine chart's values).
   border:
     enabled: false
     # The peer networks, one dispatcher set each in this order; the IBCF is
@@ -235,7 +235,7 @@ affinity: {}
 dra:
   enabled: false
 
-rtpengine:
+trgw:
   # The IBCF ends a call whose media stopped (cscf/border.cfg route[XMLRPC])
   b2bUrl: http://%%:9090/RPC2
 

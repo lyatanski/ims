@@ -101,7 +101,7 @@ spec:
         {{- end }}
         {{- end }}
         - name: DBURL
-          value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ index .Values.db $cscf }}
+          value: {{ template "valkey.name" .Subcharts.trgw.Subcharts.valkey }}:{{ .Values.trgw.valkey.ports.valkey }}/{{ index .Values.db $cscf }}
         {{- if eq "serving" $cscf }}
         - name: REGSRV
           value: {{ include "ims.regsrv" . | quote }}
