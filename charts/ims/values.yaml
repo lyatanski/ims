@@ -145,8 +145,6 @@ podAnnotations: {}
 service:
   port: 5060
 
-resources: {}
-
 cscf:
   proxy:
     resources:

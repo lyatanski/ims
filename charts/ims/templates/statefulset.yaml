@@ -150,7 +150,7 @@ spec:
           periodSeconds: 20
           failureThreshold: 6
         # Per-role, because the three roles are not the same size
-        {{- with dig $cscf "resources" (.Values.resources | default dict) (.Values.cscf | default dict) }}
+        {{- with dig $cscf "resources" dict .Values.cscf }}
         resources: {{- toYaml . | nindent 10 }}
         {{- end }}
         volumeMounts:
