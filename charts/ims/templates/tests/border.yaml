@@ -32,16 +32,27 @@ One pod per Ici network checked: `<release>-test-border` on the first, with
 {{- if not $listed }}
 {{- fail (printf "test.border: %s is no entry point of a peer on the Ici network %q in cscf.border.peers" $peer $ici.name) }}
 {{- end }}
-{{- /* The TrGW's addresses, one per replica on either side, in the same
-order: `internal`, and `external<sfx>` on this Ici network */}}
+{{- /* The TrGW's IPv4 subnets on either side, `internal` and
+`external<sfx>` on this Ici network: its addresses are its attachments' IPAM
+pick, so the SDP is checked against where they come from */}}
 {{- $sides := dict "internal" "internal" (printf "external%s" $ici.sfx) "external" }}
 {{- $trgw := dict }}
 {{- range $if := .Values.trgw.media.interfaces }}
-{{- with get $sides $if.name }}{{ $_ := set $trgw . ($if.vips | default list) }}{{ end }}
+{{- with get $sides $if.name }}
+{{- $ipam := dig "network" "config" "ipam" dict $if }}
+{{- $subnets := list }}
+{{- with $ipam.range }}{{ $subnets = append $subnets (regexReplaceAll "-[^/]*" . "") }}{{ end }}
+{{- range $r := $ipam.ipRanges | default list }}{{ $subnets = append $subnets (regexReplaceAll "-[^/]*" $r.range "") }}{{ end }}
+{{- with $ipam.subnet }}{{ $subnets = append $subnets . }}{{ end }}
+{{- range $set := $ipam.ranges | default list }}{{ range $r := $set }}{{ $subnets = append $subnets $r.subnet }}{{ end }}{{ end }}
+{{- $v4 := list }}
+{{- range $subnets }}{{ if not (contains ":" .) }}{{ $v4 = append $v4 . }}{{ end }}{{ end }}
+{{- $_ := set $trgw . $v4 }}
+{{- end }}
 {{- end }}
 {{- range $name, $side := $sides }}
 {{- if not (get $trgw $side) }}
-{{- fail (printf "test.border: the TrGW's %q interface needs vips, the addresses the SDP is checked against" $name) }}
+{{- fail (printf "test.border: the TrGW's %q interface needs a network whose ipam names an IPv4 subnet, which the SDP is checked against" $name) }}
 {{- end }}
 {{- end }}
 ---

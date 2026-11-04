@@ -33,24 +33,27 @@ global:
   ue:
     subnet: 10.10.0.0/16
     mtu: 1452
-    via: ""
-    # The IPv6 UE pool (core's session.subnet6) and its next hop, routed the
-    # same way as the IPv4 one above; empty subnet6 routes none.
+    # The IPv6 UE pool (core's session.subnet6), routed the same way as the
+    # IPv4 one above; empty subnet6 routes none.
     subnet6: fd10:10::/48
-    via6: ""
 
 gm:
   enabled: true
   # The device name inside the pod.
   interface: gm0
-  # One P-CSCF per entry, `<release>-pcscf-<index>`, each keeping its address
-  # across restarts and rescheduling. The prefix length is required. Scale by
-  # adding entries, and keep core's `ims.pcscf` (the PCO) the same list. The
-  # Diameter identity is `<release>-pcscf-<index>`, so core's `ims.replicas`
-  # has to be at least the number of entries or the PCRF refuses Rx.
+  # The P-CSCF's Gm addresses, all on its one attachment and kept across
+  # restarts and rescheduling: one IPv4 (required, `IPSEC`) and at most one
+  # IPv6 (`IPSEC6`), each with its prefix length. They pin the P-CSCF to a
+  # single pod, `<release>-pcscf-0`, whatever `replicaCount` says. Keep core's
+  # `ims.pcscf` (the PCO) the same addresses, without the prefix lengths.
   addresses:
   - 10.20.0.10/24
-  addresses6: []
+  # The next hop to the UE pools over Gm, one per family like `addresses`. They
+  # become routes in the attachment's IPAM config, `global.ue.subnet` through
+  # the IPv4 one and, while an IPv6 address is listed, `global.ue.subnet6`
+  # through the IPv6 one, and the interface's MTU becomes `global.ue.mtu`.
+  gateways:
+  - 10.20.0.1
   config:
     cniVersion: 0.3.1
     type: macvlan
@@ -105,8 +108,8 @@ ici:
   #   config: {cniVersion: 0.3.1, type: macvlan, master: eth1, mode: bridge,
   #            capabilities: {ips: true}, ipam: {type: static}}
 
-# Seconds between reconciles of the UE route.
-# loop rather than a one-shot because a pod's routing table does not survive rescheduling
+# Seconds between reconciles of the UE route, for a P-CSCF without the Gm
+# attachment (with it the attachment carries the route).
 reconcile: 10
 
 # valkey database numbers, one per role.
@@ -143,7 +146,7 @@ test:
     digits: 9
   uri: tel
   # ipv4 | ipv6 | ipv4v6: the PDN the UE asks for. ipv6 and ipv4v6 register
-  # and call over IPv6, which needs gm.addresses6 and a dual-stack cluster.
+  # and call over IPv6, which needs an IPv6 gm.addresses entry and a dual-stack cluster.
   pdnType: ipv4
   resources:
     requests: {cpu: 100m, memory: 128Mi}
@@ -152,9 +155,10 @@ test:
   # as the peer network on Ici and an S-CSCF on the pod network, driving the
   # IBCF from both sides. Needs cscf.border, a test.image that carries the
   # script, this `address` among a peer's `entry` and `+<dial>` among its
-  # `routes`, that peer on the first Ici network, and trgw `vips` on
+  # `routes`, that peer on the first Ici network, and a trgw `network` on
   # `internal` and `external` (`external-<name>` with ici.networks, the first
-  # one's) -- the TrGW addresses the SDP has to name, one pair per replica.
+  # one's) whose ipam names an IPv4 subnet -- where the TrGW addresses the SDP
+  # has to name come from.
   border:
     enabled: false
     # The peer's Ici address, on the first Ici network

@@ -3,26 +3,23 @@
 {{- $cscf := . -}}
 {{- with $dot }}
 {{- /*
-With Gm attached, one single-replica P-CSCF StatefulSet per `gm.addresses`
-entry, each pinning its address: an ordinal of one shared StatefulSet has no
-way to name its own address, since the networks annotation lives in the one
-pod template. `$gm` is that address, empty everywhere else.
+With Gm attached the P-CSCF is a single pod with every `gm.addresses` entry on
+its one attachment: the networks annotation lives in the pod template, so a
+second replica would claim the same addresses. `$gm` and `$gm6` are its IPv4
+and IPv6 address, empty everywhere else.
 */}}
-{{- $gms := list "" }}
-{{- if and (eq "proxy" $cscf) .Values.gm.enabled }}
-{{- $gms = required "gm.addresses: one address per P-CSCF" .Values.gm.addresses }}
+{{- $g := dict }}
+{{- if eq "proxy" $cscf }}
+{{- $g = include "ims.gm" . | fromJson }}
 {{- end }}
-{{- range $i, $gm := $gms }}
-{{- $gm6 := "" }}
-{{- if and $gm (lt $i (len ($dot.Values.gm.addresses6 | default list))) }}
-{{- $gm6 = index $dot.Values.gm.addresses6 $i }}
-{{- end }}
-{{- with $dot }}
+{{- $gms := $g.ips | default list }}
+{{- $gm := $g.v4 | default "" }}
+{{- $gm6 := $g.v6 | default "" }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ .Release.Name }}-{{ trunc 1 $cscf }}cscf{{ if $gm }}-{{ $i }}{{ end }}
+  name: {{ .Release.Name }}-{{ trunc 1 $cscf }}cscf
   labels: {{- include "ims.labels" . | nindent 4 }}
     role: {{ trunc 1 $cscf }}cscf
 spec:
@@ -34,24 +31,18 @@ spec:
   selector:
     matchLabels: {{- include "ims.selectorLabels" . | nindent 6 }}
       role: {{ trunc 1 $cscf }}cscf
-      {{- if $gm }}
-      gm: {{ $i | quote }}
-      {{- end }}
   template:
     metadata:
       annotations:
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- if $gm }}
-        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" (compact (list $gm $gm6))) | toJson | quote }}
+        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" $gms) | toJson | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels: {{- include "ims.labels" . | nindent 8 }}
         role: {{ trunc 1 $cscf }}cscf
-        {{- if $gm }}
-        gm: {{ $i | quote }}
-        {{- end }}
     spec:
       dnsPolicy: None
       dnsConfig:
@@ -63,7 +54,7 @@ spec:
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
-      {{- include "ims.identity" (dict "root" . "instance" (ternary (printf "%s-pcscf-%d" .Release.Name $i) "" (ne $gm ""))) | nindent 6 }}
+      {{- include "ims.identity" . | nindent 6 }}
       {{- include "ims.waitdb" (dict "root" . "cscf" $cscf) | nindent 6 }}
       {{- if eq "proxy" $cscf }}
       {{- include "ims.ipsec" . | nindent 6 }}
@@ -163,7 +154,8 @@ spec:
             add:
             - NET_ADMIN
         {{- end }}
-      {{- if and (eq "proxy" $cscf) .Values.global.ue.subnet }}
+      {{- /* With Gm attached the route is in the attachment instead (ims.gm.config) */}}
+      {{- if and (eq "proxy" $cscf) (not $gm) .Values.global.ue.subnet }}
       {{- include "ims.ueroute" . | nindent 6 }}
       {{- end }}
       volumes:
@@ -187,7 +179,5 @@ spec:
       {{- with .Values.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
-{{- end }}
-{{- end }}
 {{- end }}
 {{- end }}

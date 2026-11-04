@@ -108,16 +108,12 @@ spec:
   publishNotReadyAddresses: true
   selector: {{- include "ims.selectorLabels" . | nindent 4 }}
     role: ibcf
-{{- /* All its addresses on each Ici network, and the control interface's
-network when rtpengine's ng socket is on its vips */}}
+{{- /* All its addresses on each Ici network */}}
 {{- $attach := list }}
 {{- $icinet := list }}
 {{- range $net := $nets }}
 {{- $attach = append $attach (dict "name" $net.nad "interface" $net.interface "ips" $net.addresses) }}
 {{- $icinet = concat $icinet $net.addresses }}
-{{- end }}
-{{- with include "rtpengine.ng.network" .Subcharts.trgw }}
-{{- $attach = append $attach (fromJson .) }}
 {{- end }}
 ---
 apiVersion: apps/v1

@@ -5,7 +5,7 @@ metadata:
   name: {{ .Release.Name }}-gm
   labels: {{- include "ims.labels" . | nindent 4 }}
 spec:
-  config: {{ include "ims.network.config" (dict "root" . "name" "gm" "config" .Values.gm.config) | quote }}
+  config: {{ include "ims.network.config" (dict "root" . "name" "gm" "config" (include "ims.gm.config" . | fromJson)) | quote }}
 {{- end }}
 {{- if .Values.cscf.border.enabled }}
 {{- range $net := (include "ims.ici.networks" . | fromJson).nets }}

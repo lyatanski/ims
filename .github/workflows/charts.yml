@@ -137,7 +137,7 @@ jobs:
     # ims.pcscf is the P-CSCF's Gm address rather than the `ims-pcscf` Service:
     # the protected ports bind on gm0, and a protected REGISTER arriving on the
     # pod address has no SA to match. A literal, because core installs before
-    # ims exists to be asked -- it is the ims chart's default `gm.addresses`.
+    # ims exists to be asked -- the `gm.addresses` of Install IMS below.
     - name: Install Open5GS
       run: |
         helm install core oci://ghcr.io/${{ github.actor }}/core -f - <<'EOF'
@@ -173,8 +173,12 @@ jobs:
         helm install ims oci://ghcr.io/${{ github.actor }}/ims --wait --timeout 10m -f - <<'EOF'
         gm:
           enabled: true
-          addresses6:
+          addresses:
+          - 10.20.0.10/24
           - fd20::10/64
+          gateways:
+          - 10.20.0.1
+          - fd20::1
           config:
             cniVersion: 0.3.1
             type: bridge
@@ -204,10 +208,6 @@ jobs:
               type: bridge
               bridge: ici1
               ipam: {type: static}
-        global:
-          ue:
-            via: 10.20.0.1
-            via6: fd20::1
         cscf:
           border:
             enabled: true
@@ -241,9 +241,6 @@ jobs:
             interfaces:
             - name: internal
               address: media0
-              # one per replica, past the host-local rangeEnd below
-              vips: [10.30.0.251, 10.30.0.252]
-              vips6: [fd30::fb, fd30::fc]
               network:
                 enabled: true
                 name: media
@@ -268,13 +265,11 @@ jobs:
                       gw: 10.30.0.1
                     - dst: fd10:10::/48
                       gw: fd30::1
-            # The TrGW's side of each Ici network, on the IBCF's bridge, the
-            # addresses past rangeEnd again. The bridge address (isGateway)
-            # is how the border test's stand-in S-CSCF, on the pod network,
+            # The TrGW's side of each Ici network, on the IBCF's bridge. The
+            # bridge address (isGateway) is how the border test's stand-in S-CSCF, on the pod network,
             # gets to Ici at all.
             - name: external-ipx
               address: ici0
-              vips: [10.40.0.251, 10.40.0.252]
               network:
                 enabled: true
                 name: ici-ipx
@@ -292,7 +287,6 @@ jobs:
                         rangeEnd: 10.40.0.250
             - name: external-peering
               address: ici1
-              vips: [10.41.0.251, 10.41.0.252]
               network:
                 enabled: true
                 name: ici-peering
