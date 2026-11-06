@@ -73,7 +73,7 @@ spec:
         - name: REALM
           value: {{ tpl .Values.domain . }}
         - name: DBURL
-          value: {{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }}:{{ .Values.rtpengine.valkey.ports.valkey }}/{{ .Values.db.telephony }}
+          value: {{ template "valkey.name" .Subcharts.trgw.Subcharts.valkey }}:{{ .Values.trgw.valkey.ports.valkey }}/{{ .Values.db.telephony }}
         ports:
         - name: tcp
           containerPort: {{ .Values.service.port }}

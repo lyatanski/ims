@@ -33,7 +33,8 @@ ims:
   # must reach is the one Multus gave the Gm interface, and that is in no field
   # Kubernetes can project and no name this Service resolves to: Endpoints
   # carry the primary CNI's address and nothing else. So it is named here, as
-  # literal addresses, one per P-CSCF.
+  # literal addresses: the P-CSCF's IPv4 Gm address and, for IPv6 PDNs, its
+  # IPv6 one.
   #
   # Nothing checks it. Point it at the wrong interface and the UE registers
   # over the one the attachment exists to replace -- which works, so the only

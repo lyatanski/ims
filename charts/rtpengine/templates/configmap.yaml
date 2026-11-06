@@ -17,7 +17,6 @@ data:
     {{- if gt (int .Values.valkey.cluster.primaries) 1 }}
       {{- fail "rtpengine: valkey.cluster.primaries > 1; rtpengine cannot use a valkey cluster" }}
     {{- end }}
-    {{- $per := include "rtpengine.vip.names" . | fromJsonArray }}
     {{- range $i := until $n }}
     {{- $own := add $off $i }}
     {{- $pod := printf "%s-%d" (include "rtpengine.name" $) $i }}
@@ -57,40 +56,12 @@ data:
     redis-resolve-on-reconnect = true
     {{ end }}
     {{- /*
-    Interfaces, per replica, because the first one rtpengine reads is its
-    default and a replica's default has to be its own address. An interface
-    with vips is one logical interface per owner -- this replica, then the one
-    it is standby for -- since a restored call finds its interface by name and
-    position, not address: a single shared name would rebind the peer's calls
-    on this replica's own address. The section name only has to be unique;
-    `name` is the logical interface, which is how its two address families
-    become one.
+    Interfaces and templates, per replica: a replica's own section names
+    them (`interfaces-config`, `templates`), and the first interface rtpengine
+    reads is its default.
     */}}
     {{- range $i := until $n }}
-    {{- $owners := uniq (list (int $i) (int (mod (add1 $i) $n))) }}
     {{- range $if := $.Values.media.interfaces }}
-    {{- if has $if.name $per }}
-    {{- range $k := $owners }}
-    {{- if $if.alias }}
-    [interface-{{ $i }}-{{ $if.name }}-{{ $k }}]
-    name = {{ $if.name }}-{{ $k }}
-    alias = {{ $if.alias }}-{{ $k }}
-    {{ end }}
-    {{- range $fam, $vips := dict "4" $if.vips "6" $if.vips6 }}
-    {{- with $vips }}
-    [interface-{{ $i }}-{{ $if.name }}-{{ $k }}-{{ $fam }}]
-    name = {{ $if.name }}-{{ $k }}
-    address = {{ index . $k }}
-    {{- with $if.portMin }}
-    port-min = {{ . }}
-    {{- end }}
-    {{- with $if.portMax }}
-    port-max = {{ . }}
-    {{- end }}
-    {{ end }}
-    {{- end }}
-    {{- end }}
-    {{- else }}
     [interface-{{ $i }}-{{ $if.name }}]
     {{- with $if.alias }}
     alias = {{ . }}
@@ -108,18 +79,10 @@ data:
     port-max = {{ . }}
     {{- end }}
     {{ end }}
-    {{- end }}
     {{- with $.Values.templates }}
     [templates-{{ $i }}]
     {{- range $name, $flags := . }}
-    {{- range $p := $per }}
-    {{- $flags = regexReplaceAll (printf "direction=%s(\\s|$)" (regexQuoteMeta $p)) $flags (printf "direction=%s-%d${1}" $p $i) }}
-    {{- end }}
     {{ $name }} = {{ $flags }}
     {{- end }}
     {{ end }}
     {{- end }}
-  {{- with include "rtpengine.vip.script" . }}
-  vip.sh: |
-    {{- . | nindent 4 }}
-  {{- end }}

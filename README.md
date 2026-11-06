@@ -16,7 +16,7 @@ architecture-beta
     service icscf(server)[ICSCF]
     service scscf(server)[SCSCF]
     service ibcf(server)[IBCF]
-    service rtp(server)[rtpengine]
+    service trgw(server)[TrGW]
     service ocs(server)[OCS]
     junction Mw
 
@@ -26,7 +26,7 @@ architecture-beta
     smf:R -- L:pcrf
     pcrf:B -- T:pcscf
     upf:R -- L:pcscf
-    upf:B -- L:rtp
+    upf:B -- L:trgw
     icscf:R -- L:hss
     scscf:T -- B:hss
     scscf:R -- L:ocs
@@ -34,7 +34,7 @@ architecture-beta
     icscf:B -- T:Mw
     scscf:L -- R:Mw
     scscf:B -- T:ibcf
-    ibcf:L -- R:rtp
+    ibcf:L -- R:trgw
 ```
 
 Why the setup?

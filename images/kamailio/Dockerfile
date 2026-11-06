@@ -1,3 +1,11 @@
+# Build exactly the modules the cfgs load. Kept in its own stage so a cfg edit
+# that leaves the module set unchanged does not invalidate the cmake layer.
+FROM alpine:latest AS modules
+COPY cscf/ /cfg/cscf/
+COPY as/ /cfg/as/
+RUN grep -rhE '^[[:space:]]*loadmodule' /cfg \
+    | sed -E 's/.*"([^"/.]+)(\.so)?".*/\1/' | sort -u > /modules.txt
+
 FROM alpine:latest AS build
 
 RUN apk --no-cache upgrade \
@@ -22,29 +30,14 @@ RUN apk --no-cache upgrade \
         nghttp2-dev \
         mariadb-dev \
     && ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/
-RUN git clone --depth=1 https://github.com/kamailio/kamailio.git
+# Re-checks master on every build, so a cached clone never lags upstream
+ADD --keep-git-dir https://github.com/kamailio/kamailio.git#master /kamailio
 COPY patches/ /patches/
 RUN for p in /patches/*.patch; do echo "== $p"; git -C /kamailio apply --verbose "$p" || exit 1; done
+COPY --from=modules /modules.txt /
 RUN cmake -S /kamailio -B /out -G Ninja -D CMAKE_BUILD_TYPE=Release \
         -D MODULE_GROUP_NAME="" \
-        -D INCLUDE_MODULES="xlog debugger \
-            kex siputils textops textopsx \
-            pv rr sl tm \
-            sanity \
-            enum \
-            xhttp xhttp_prom \
-            db_redis ndb_redis \
-            cdp cdp_avp \
-            ims_dialog \
-            pua ims_registrar_pcscf ims_usrloc_pcscf ims_ipsec_pcscf ims_qos \
-            ims_icscf \
-            ims_registrar_scscf ims_usrloc_scscf ims_auth ims_isc ims_charging \
-            presence \
-            dispatcher htable \
-            rtpengine \
-            userblocklist acc \
-            topoh dialog uac pike xmlrpc ipops \
-            http_client nghttp2" \
+        -D INCLUDE_MODULES="$(cat /modules.txt)" \
     && cmake --build /out --target install
 
 FROM alpine:latest

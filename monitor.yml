@@ -589,7 +589,7 @@ configs:
       // ---- domain palette (block fill) ----
       local core  = 'semi-dark-blue';    // open5gs EPC (SMF/UPF/HSS/PCRF)
       local cscf  = 'semi-dark-green';   // Kamailio IMS core (P/I/S-CSCF)
-      local media = 'semi-dark-orange';  // rtpengine
+      local media = 'semi-dark-orange';  // TrGW (rtpengine)
       local ocsc  = 'dark-red';          // online charging
 
       // ---- protocol palette (line colour + badge accent) ----
@@ -624,7 +624,7 @@ configs:
         { id: 'pcscf', t: 'P-CSCF',    c: 'contacts',      col: 1, row: 1, bg: cscf,  e: 'sum(kamailio_ims_usrloc_pcscf_registered_contacts{job="pcscf"})' },
         { id: 'scscf', t: 'S-CSCF',    c: 'reg IMPUs',     col: 3, row: 1, bg: cscf,  e: 'sum(kamailio_ims_usrloc_scscf_active_impus{job="scscf"})' },
         { id: 'ocs',   t: 'OCS',       c: 'Ro sessions',   col: 4, row: 1, bg: ocsc,  e: 'sum(kamailio_ims_charging_active_ro_sessions{job="scscf"})' },
-        { id: 'rtp',   t: 'rtpengine', c: 'own sessions',  col: 1, row: 2, bg: media, e: 'sum(rtpengine_sessions{type="own",job="rtpengine"})' },
+        { id: 'rtp',   t: 'TrGW',      c: 'own sessions',  col: 1, row: 2, bg: media, e: 'sum(rtpengine_sessions{type="own",job="trgw"})' },
       ];
       local hasVal(n) = std.objectHas(n, 'e');
 
@@ -973,7 +973,7 @@ configs:
         static_configs:
         - targets:
           - scscf:9090
-      - job_name: rtpengine
+      - job_name: trgw
         honor_timestamps: false
         static_configs:
         - targets:

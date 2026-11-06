@@ -1,7 +1,7 @@
 # Kubernetes
 
 Two charts, installed in either order. `ims` is the IMS core plus CoreDNS,
-rtpengine and the state store; `core` is the EPC — HSS, PCRF and the PGW
+the TrGW (rtpengine) and the state store; `core` is the EPC — HSS, PCRF and the PGW
 control/user plane split — plus MongoDB and a subscriber seed.
 
     kind create cluster
@@ -81,15 +81,18 @@ different way the user plane dies without them:
   those is folded away. The kernel keeps the device, drops the nexthop, and ARPs
   for the *UE* address on the UPF's veth, which nothing answers.
 
-- **An MTU on the P-CSCF's route to the pool.** The UPF adds 36 bytes of GTP-U;
+- **An MTU on the P-CSCF's path to the pool.** The UPF adds 36 bytes of GTP-U;
   a response that no longer fits is fragmented, and a fragment carries no GTP
   header for anything downstream to classify, so both halves are lost. Capping
-  the route makes the P-CSCF fragment the inner packet first, before the tunnel,
-  where each fragment is its own G-PDU. It shows up on exactly the messages that
+  the path makes the P-CSCF fragment the inner packet first, before the tunnel,
+  where each fragment is its own G-PDU. With Gm attached the cap is the Gm
+  interface's `mtu` and the route is in the attachment (below); without it a
+  `ueroute` sidecar routes the pool through the default gateway with an `mtu`
+  on the route. It shows up on exactly the messages that
   matter — the reg-event NOTIFY and a terminating INVITE go missing while the
   786-byte REGISTER 200 OK on the same SA arrives.
 
-All three are reconcile loops rather than one-shots: the TUN device is recreated
+The TUN sidecar and the node route are reconcile loops rather than one-shots: the TUN device is recreated
 whenever `upfd` restarts, and the node route is derived from the UPF pod
 address, which moves when the pod is rescheduled.
 
@@ -116,12 +119,11 @@ work with:
   single-stack on purpose: open5gs resolves `gtpu.server.advertise` with
   `AF_UNSPEC`, and a dual-stack `-gtpu` would put an IPv6 address in every
   F-TEID;
-- the P-CSCF's `ueroute` sidecar routes `global.ue.subnet6`, through
-  `global.ue.via6` when the pool is reached over Gm's router.
+- the P-CSCF routes `global.ue.subnet6` too: through the IPv6 entry of
+  `gm.gateways` with Gm attached, through the default IPv6 route without.
 
-The P-CSCF registers those UEs on an IPv6 Gm address, `gm.addresses6`, entry
-*i* being the second address of the P-CSCF `gm.addresses` entry *i* names. It
-becomes `IPSEC6`, which `ims_ipsec_pcscf` binds its protected ports on, and
+The P-CSCF registers those UEs on an IPv6 Gm address, the IPv6 entry of
+`gm.addresses`, on the same attachment as the IPv4 one. It becomes `IPSEC6`, which `ims_ipsec_pcscf` binds its protected ports on, and
 goes into `ims.pcscf` beside the IPv4 one -- the SMF sorts the list into the
 PCO's IPv4 and IPv6 containers. With it set, the P-CSCF's IPsec port pool
 halves: every port is bound once per family, and the socket budget is what
@@ -131,11 +133,10 @@ halves: every port is bound once per family, and the socket budget is what
 gm:
   addresses:
   - 10.20.0.10/24
-  addresses6:
   - fd20::10/64
-global:
-  ue:
-    via6: fd20::1
+  gateways:
+  - 10.20.0.1
+  - fd20::1
 ```
 
 `test.pdnType` (`ipv4`, `ipv6`, `ipv4v6`) is what the helm test's UE asks for.
@@ -185,26 +186,25 @@ ports bind to and what the kernel SAs and xfrm policies are keyed on, and
 `ims_ipsec_pcscf` parses it with `str2ipbuf()` (`ims_ipsec_pcscf_mod.c:226`): a
 numeric IPv4 literal, never an interface name, and `mod_init` returns -1 for
 anything else. So the address cannot come from an IPAM pool, which assigns it
-at pod creation where no value Helm renders can see it. `gm.addresses` lists
-them instead, and the chart renders one single-replica StatefulSet per entry,
-`<release>-pcscf-<index>`, whose networks annotation names that address in
-`ips` and whose `IPSEC` is the same address. The NAD's `static` IPAM with the
-`ips` capability is what makes the annotation's address the interface's.
+at pod creation where no value Helm renders can see it. `gm.addresses` names
+them instead: one IPv4 address, which becomes `IPSEC`, and optionally one IPv6
+address, `IPSEC6`. Both go in the `ips` of the P-CSCF's single attachment, and
+the NAD's `static` IPAM with the `ips` capability is what makes the
+annotation's addresses the interface's.
 
 ```yaml
 gm:
-  addresses:            # one P-CSCF each; the prefix length is required
+  addresses:            # one IPv4, at most one IPv6; prefix lengths required
   - 10.20.0.10/24
-  - 10.20.0.11/24
+  - fd20::10/64
 ```
 
-Scaling is adding an entry, not `replicaCount`, which the P-CSCF ignores while
-Gm is attached. The pods are `<release>-pcscf-<index>-0`, but the Diameter
-identity stays `<release>-pcscf-<index>`: that is the name the PCRF's
-`ConnectPeer` list in the core chart enumerates up to `ims.replicas`, and a
-P-CSCF outside it never gets Rx, which surfaces as a call whose 200 OK never
-reaches the caller. Nothing allocates or tracks these addresses, so keep them out of
-any other pool on the subnet. Without the attachment the P-CSCF is one
+The networks annotation lives in the pod template, so a second replica would
+claim the same addresses: while Gm is attached the P-CSCF is one pod,
+`<release>-pcscf-0`, and `replicaCount` does not apply to it. Its Diameter
+identity is the pod name, the first of the names the PCRF's `ConnectPeer` list
+in the core chart enumerates up to `ims.replicas`. Nothing allocates or tracks
+these addresses, so keep them out of any other pool on the subnet. Without the attachment the P-CSCF is one
 StatefulSet of `replicaCount` again and `IPSEC` is `status.podIP`.
 
 Two things do not follow automatically:
@@ -212,16 +212,19 @@ Two things do not follow automatically:
 - **The PCO.** What the UE dials is the P-CSCF list the SMF hands out, and the
   core chart fills it from the P-CSCF's headless Service, which publishes pod
   addresses — Kubernetes Endpoints carry the primary CNI's address and nothing
-  else. Set `ims.pcscf` in `charts/core/values.yaml` to the Gm addresses, one
-  per P-CSCF, or the UE keeps registering over the interface this was meant to
+  else. Set `ims.pcscf` in `charts/core/values.yaml` to the Gm addresses, or
+  the UE keeps registering over the interface this was meant to
   replace — the same list as `gm.addresses`, without the prefix lengths.
   Empty, it falls back to the Service name. Nothing checks it: pointed
   at the wrong interface, registration still works, so the only symptom is that
   the DNAT-free path is silently unused.
-- **The route to the UE pool.** The `ueroute` sidecar derives its next hop from
-  the pod's default route, which still points at the primary CNI. When the pool
-  is reached through the Gm network's router instead, name it in
-  `global.ue.via`.
+- **The route to the UE pool.** `gm.gateways` names the next hop on the Gm
+  network, one per family, and the chart puts `global.ue.subnet` (and, with an
+  IPv6 Gm address, `global.ue.subnet6`) through it as `routes` in the
+  attachment's IPAM config, so CNI installs them with the interface and
+  nothing has to reconcile them. The MTU the tunnel leaves goes on the
+  interface as the config's `mtu`: CNI's route type has an `mtu` field, but
+  the bridge and macvlan plugins drop it when they add the route.
 - **Masquerade on the way in.** Whatever forwards the UE's packets to the Gm
   address must not SNAT them. A cluster that masquerades traffic leaving the pod
   CIDR will rewrite the source of a packet the UPF forwards to a Gm address that
@@ -253,7 +256,7 @@ Two things do not follow automatically:
 
 Each P-CSCF keeps its Gm address across restarts and rescheduling, since the
 address belongs to its StatefulSet rather than to a pool. That is the
-prerequisite for HA-PLAN Tier 1's takeover, not the whole of it.
+prerequisite for a takeover, not the whole of it.
 
 
 
@@ -266,12 +269,14 @@ S-CSCF to PSTN connectivity. When S-CSCF is sending packet it will be sent by de
 `cscf.border` (off by default) runs `images/kamailio/cscf/border.cfg`, the
 entry and exit point on Ici, with rtpengine as its TrGW:
 
-- **Ici** is an attachment of its own, `ici` in the values, the Gm pattern
-  again: one single-replica StatefulSet per `ici.addresses` entry,
-  `<release>-ibcf-<i>`. The cfg binds the address by value, and it is the one
-  the peers' configuration names, so each pod has to know it at start.
-  `ICINET` is that address with its prefix, which is how the IBCF tells
-  sources on Ici from the rest (metrics, rtpengine's teardown RPC).
+- **Ici** is an attachment of its own, `ici` in the values: one IBCF,
+  `<release>-ibcf-0`, on every Ici network (`ici.networks`, or the single
+  one `ici.addresses` describes) at every address listed, picking the network
+  a request leaves by from the peer it goes to. The cfg binds the addresses
+  by value, as the chart's `ici.cfg` lists them; a peer is sent to from its
+  network's first address, and every address receives. `ICINET` is those
+  addresses with their prefixes, which is how the IBCF tells sources on Ici
+  from the rest (metrics, rtpengine's teardown RPC).
 - **Mx** is the pod network: the Service `<release>-ibcf` is what
   `ibcf.ims.<realm>` resolves to (the CoreDNS SRV template has to list
   `ibcf`, or the name falls through to the I-CSCF). With the IBCF on, the
@@ -283,8 +288,8 @@ entry and exit point on Ici, with rtpengine as its TrGW:
 - **The TrGW** is rtpengine's `external` interface, which has to be where the
   peers can reach it: on Ici, through an attachment of its own to the same
   network (`bridge`/`master`), with an IPAM range clear of the IBCF and peer
-  addresses. The IBCF reaches the ng socket the way any client does, Service
-  or control VIPs, and `b2bUrl` points rtpengine's media timeout back at the
+  addresses. The IBCF reaches the ng socket the way any client does, through
+  the Service, and `b2bUrl` points rtpengine's media timeout back at the
   IBCF (`dlg.terminate_dlg`).
 
 `test.border` is a helm test of its own: pro2call's `ibcf_peer.lua`, the
@@ -295,9 +300,12 @@ it off. In KinD two things are test plumbing rather than the chart: the
 rtpengine Ici attachment's `isGateway`, which gives the node an address on
 the Ici bridge so the stand-in S-CSCF on the pod network can reach Ici at
 all, and a loose `rp_filter` on the node, as the IBCF and the TrGW answer it
-from their Ici and media addresses over their pods' eth0.
+from their Ici and media addresses over their pods' eth0. The TrGW's addresses
+are its attachments' IPAM pick, so the test is handed the IPv4 subnets of the
+`internal` and `external` networks instead, and the SDP is checked against
+those.
 
-## rtpengine
+## TrGW (rtpengine)
 The same challenges as the Proxy-CSCF apply. [whereabouts](https://github.com/k8snetworkplumbingwg/whereabouts) with host device/macvlan could be utilised as the IP in the SDP is assigned by the rtpengine when offer/answer is forwarded to it. IP allocation pool could be used for these cases.
 
 ### Network attachment (implemented)
@@ -313,15 +321,15 @@ Could not parse 'media0' as network address, checking to see if it's an interfac
 Determined address 10.30.0.5 for interface 'media0'
 ```
 
-Only media moves. Without `vips` (below) the ng control socket stays on
-`0.0.0.0` behind the ClusterIP Service its client addresses. Without an attachment the interface binds whatever
+Only media moves. The ng control socket stays on the pod address, behind the
+ClusterIP Service its client addresses. Without an attachment the interface binds whatever
 its `address` names on the pod itself — `any` being every address it has, which
 under Kubernetes is the pod address.
 
 Unlike Gm, an address out of a whereabouts pool is reachable from the UE but
-is not one the ordinal keeps across rescheduling, which is what HA-PLAN §5.5
-needs before media can follow a takeover. `vips` is that address — see
-[Per-owner addresses](#per-owner-addresses-implemented).
+is not one the ordinal keeps across rescheduling, so media cannot follow a
+takeover: a replica comes back on whatever address its IPAM hands out next.
+See [Per-owner addresses](#per-owner-addresses-dropped).
 
 The one thing that is not optional is the **return route**, which is why the
 shipped `config` carries an `ipam.routes` entry for the UE pool. rtpengine
@@ -418,52 +426,29 @@ a valkey, driven over the ng socket:
 On its own this does not give media that survives the takeover. A restored
 call keeps its ports but is bound by logical interface name and position, not
 address, so replica 1 rebinds replica 0's call on *its own* address — 31244 on
-172.19.0.4 where the far end is still sending to 172.19.0.3. That is what
-per-owner addresses below are for. Two more things seen on the way: a failed-back replica leaves its
+172.19.0.4 where the far end is still sending to 172.19.0.3. A restart restores
+a replica's own calls, but they only keep their media if the IPAM hands it its
+old address back. Two more things seen on the way: a failed-back replica leaves its
 stale key for a promoted call in its own database, and the first answer on a
 restored call logs `List of codecs empty`.
 
 rtpengine cannot use a valkey cluster — it has no MOVED handling and keyspace
 notifications are node-local — so the chart refuses `valkey.cluster.primaries > 1`.
 
-### Per-owner addresses (implemented)
+### Per-owner addresses (dropped)
 
-An interface with `vips` (and/or `vips6`) — one address per replica, outside
-the attachment's IPAM range — answers offers from that address rather than
-the pool's, and becomes one logical interface per owner, `<name>-<k>`. Each
-replica configures two of them: its own first, which makes it its default,
-and the one of the replica it is standby for. Every `direction=<name>` in
-`templates` is rewritten per replica (`[templates-<i>]`), so the client still
-names only `internal`/`outgoing`/`incoming`. A privileged init container
-(`vip.sh` in the ConfigMap) sets `ip_nonlocal_bind` — the standby binds the
-peer's address before it has it — and puts the replica's own address on the
-device, with an unsolicited ARP for the MAC the previous pod left behind.
+An earlier version gave each replica fixed addresses outside the attachment's
+IPAM range, one logical interface per owner, and the ng socket on those
+addresses. That needed a privileged init container per pod, to set
+`ip_nonlocal_bind` (the standby bound its peer's address before it had it) and
+put the replica's own address on the device. Nothing in Kubernetes can set
+that address instead: a StatefulSet has one pod template, so its
+`k8s.v1.cni.cncf.io/networks` annotation, and with it any `static` IPAM `ips`,
+is the same for every replica, and no NAD IPAM keys an address on the
+ordinal. The addresses are now the attachments' IPAM pick and the ng socket
+is behind the Service. A leftover `vips`/`vips6` in the values fails the
+render rather than being ignored.
 
-The ng control address follows: kamailio's rtpengine module keeps a call on
-the node it was hashed to and never moves an existing call elsewhere, so
-`RTPADR` becomes one node per replica on the control interface's VIP, and the
-client has to be attached to that interface's network to reach it. Each
-replica's `listen-ng` binds its own control VIP and its standby peer's, the
-latter before it is on the pod (`ip_nonlocal_bind` again), so a VIP that has
-moved is answered from where it now is. Without vips it binds the pod address
-the Service leads to. It used to be `0.0.0.0`, which is how the table below
-was measured; that also answered ng on every other interface, the TrGW's
-on Ici included, and the HTTP port (`listen-http`, now the pod address too)
-takes ng as well, at `POST /ng-plain`.
-
-Nothing here moves an address yet. Measured with the rendered config in docker,
-the address moved by hand (`ip addr add` + `arping -U` in the standby's netns)
-in place of the failover that will do it:
-
-| step | result |
-| --- | --- |
-| offer/answer on VIP0, RTP both ways | 20/20 each way from 172.30.0.251:36376 / :30284 |
-| standby (replica 1) | foreign copy, and `netstat` shows it bound on 172.30.0.251:30284/36376 |
-| replica 0 and its netns removed | 0/5 |
-| VIP0 added to replica 1 | 20/20 each way, same address and ports; call promoted to own on the first packet |
-| `query`/`delete` to 172.30.0.251:9910 | answered by replica 1 |
-
-The validation refuses an interface whose vips are not one per replica, one
-that is an alias or in a `base:suffix` round-robin group (the rest of the
-group would be handed to its calls), one with an `advertised` address, and one
-whose `address` is not a device.
+Moving an address on failure would need it back: keepalived (VRRP) on an L2
+media network, or a BGP speaker per pod on a routed fabric, where the
+addresses sit on `lo` and need neither ARP nor the nonlocal bind.

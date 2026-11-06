@@ -13,14 +13,12 @@ re-register, and nothing tells them to.
 
 In the same namespace the tunnels need not go anywhere, so keep them:
 
-- ims_usrloc_pcscf: preload_udomain() reads the 15 t_* columns back into
-  security_temp and the unprefixed ones into security. That set has no
-  protocol column of its own ("protocol" is the contact's transport), so prot
-  is left empty; the tunnel is always esp. The writers now store r_ealg/r_alg -
-  the algorithms the UE offered and the tunnel is built with - in the ealg/ialg
-  columns of both sets; they stored ealg/alg, which nothing ever sets, so those
-  columns were always empty. A new walk_pcontacts() API visits every in-memory
-  contact under its slot lock.
+- ims_usrloc_pcscf: preload_udomain() reads the 14 t_* columns back into
+  security_temp and the unprefixed ones into security. The writers now store
+  r_ealg/r_alg - the algorithms the UE offered and the tunnel is built with -
+  in the ealg/ialg columns of both sets; they stored ealg/alg, which nothing
+  ever sets, so those columns were always empty. A new walk_pcontacts() API
+  visits every in-memory contact under its slot lock.
 - ims_ipsec_pcscf: ipsec_preserve_tunnels (default 0) skips the flush at
   startup and shutdown. In the PROC_SIPINIT child, after the preload,
   ipsec_restore_tunnels() removes the tunnels no preloaded contact accounts for
@@ -44,7 +42,7 @@ A new namespace still starts empty and the contacts then hold tunnels the kernel
 does not; patch 0016 installs them again from what was preloaded.
 
 diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
-index 1636fe4..edf3b51 100644
+index f33653f..b2a687e 100644
 --- a/src/modules/ims_ipsec_pcscf/cmd.c
 +++ b/src/modules/ims_ipsec_pcscf/cmd.c
 @@ -1234,7 +1234,7 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
@@ -56,7 +54,7 @@ index 1636fe4..edf3b51 100644
  		clear_spi_pair(pend);
  		pend_retired = 1;
  	}
-@@ -1989,6 +1989,131 @@ int ipsec_reconfig()
+@@ -2019,6 +2019,131 @@ int ipsec_reconfig()
  	return ret;
  }
  
@@ -445,10 +443,10 @@ index ea15baa..28ee839 100644
  ppublic_t *mem_insert_ppublic(
  		pcontact_t *_r /*, str* _c, ucontact_info_t* _ci*/);
 diff --git a/src/modules/ims_usrloc_pcscf/udomain.c b/src/modules/ims_usrloc_pcscf/udomain.c
-index dca635d..72e3db4 100644
+index dca635d..f0b037d 100644
 --- a/src/modules/ims_usrloc_pcscf/udomain.c
 +++ b/src/modules/ims_usrloc_pcscf/udomain.c
-@@ -1078,6 +1078,106 @@ static inline pcontact_info_t *dbrow2info(db_val_t *vals, str *contact)
+@@ -1078,6 +1078,101 @@ static inline pcontact_info_t *dbrow2info(db_val_t *vals, str *contact)
  	return &ci;
  }
  
@@ -495,18 +493,14 @@ index dca635d..72e3db4 100644
 + * the tunnels its preloaded contacts still hold; without it they come back
 + * looking registered but with no tunnel at all.
 + *
-+ * The established set has no protocol column of its own - "protocol" is the
-+ * contact's transport - so it is read with prot NULL; the tunnel is always esp.
-+ *
 + * SPIs are unsigned 32-bit and the columns are int: db_str2int() accepts the
 + * whole unsigned range and the cast below takes it back.
 + *
 + * \param vals the security type value
-+ * \param prot the protocol value, or NULL when the set has none
 + * \param rest the 13 values that follow, mode to spi_us
 + * \return the security in shm, or NULL when the row carries none
 + */
-+static security_t *dbrow2security(db_val_t *vals, db_val_t *prot, db_val_t *rest)
++static security_t *dbrow2security(db_val_t *vals, db_val_t *rest)
 +{
 +	security_t *sec;
 +	ipsec_t *ipsec;
@@ -530,8 +524,7 @@ index dca635d..72e3db4 100644
 +	sec->type = SECURITY_IPSEC;
 +	sec->data.ipsec = ipsec;
 +
-+	if((prot && dbval2shm_str(prot, &ipsec->prot) < 0)
-+			|| dbval2shm_str(rest + 0, &ipsec->mod) < 0
++	if(dbval2shm_str(rest + 0, &ipsec->mod) < 0
 +			|| dbval2shm_str(rest + 1, &ipsec->ck) < 0
 +			|| dbval2shm_str(rest + 2, &ipsec->ik) < 0
 +			|| dbval2shm_str(rest + 3, &ipsec->r_ealg) < 0
@@ -555,77 +548,76 @@ index dca635d..72e3db4 100644
  /*!
   * \brief Load all records from a udomain
   *
-@@ -1091,7 +1191,7 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+@@ -1091,7 +1186,7 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
  {
  	pcontact_info_t *ci;
  	db_row_t *row;
 -	db_key_t columns[15];
-+	db_key_t columns[44];
++	db_key_t columns[43];
  	db1_res_t *res = NULL;
  	str aor;
  	int i, n;
-@@ -1115,6 +1215,35 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+@@ -1115,6 +1210,34 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
  	columns[12] = &service_routes_col;
  	columns[13] = &public_ids_col;
  	columns[14] = &path_col;
 +	columns[15] = &t_security_type_col;
-+	columns[16] = &t_protocol_col;
-+	columns[17] = &t_mode_col;
-+	columns[18] = &t_ck_col;
-+	columns[19] = &t_ik_col;
-+	columns[20] = &t_ealg_col;
-+	columns[21] = &t_ialg_col;
-+	columns[22] = &t_port_pc_col;
-+	columns[23] = &t_port_ps_col;
-+	columns[24] = &t_port_uc_col;
-+	columns[25] = &t_port_us_col;
-+	columns[26] = &t_spi_pc_col;
-+	columns[27] = &t_spi_ps_col;
-+	columns[28] = &t_spi_uc_col;
-+	columns[29] = &t_spi_us_col;
-+	columns[30] = &security_type_col;
-+	columns[31] = &mode_col;
-+	columns[32] = &ck_col;
-+	columns[33] = &ik_col;
-+	columns[34] = &ealg_col;
-+	columns[35] = &ialg_col;
-+	columns[36] = &port_pc_col;
-+	columns[37] = &port_ps_col;
-+	columns[38] = &port_uc_col;
-+	columns[39] = &port_us_col;
-+	columns[40] = &spi_pc_col;
-+	columns[41] = &spi_ps_col;
-+	columns[42] = &spi_uc_col;
-+	columns[43] = &spi_us_col;
++	columns[16] = &t_mode_col;
++	columns[17] = &t_ck_col;
++	columns[18] = &t_ik_col;
++	columns[19] = &t_ealg_col;
++	columns[20] = &t_ialg_col;
++	columns[21] = &t_port_pc_col;
++	columns[22] = &t_port_ps_col;
++	columns[23] = &t_port_uc_col;
++	columns[24] = &t_port_us_col;
++	columns[25] = &t_spi_pc_col;
++	columns[26] = &t_spi_ps_col;
++	columns[27] = &t_spi_uc_col;
++	columns[28] = &t_spi_us_col;
++	columns[29] = &security_type_col;
++	columns[30] = &mode_col;
++	columns[31] = &ck_col;
++	columns[32] = &ik_col;
++	columns[33] = &ealg_col;
++	columns[34] = &ialg_col;
++	columns[35] = &port_pc_col;
++	columns[36] = &port_ps_col;
++	columns[37] = &port_uc_col;
++	columns[38] = &port_us_col;
++	columns[39] = &spi_pc_col;
++	columns[40] = &spi_ps_col;
++	columns[41] = &spi_uc_col;
++	columns[42] = &spi_us_col;
  
  	if(ul_dbf.use_table(_c, _d->name) < 0) {
  		LM_ERR("sql use_table failed\n");
-@@ -1126,7 +1255,7 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+@@ -1126,7 +1249,7 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
  #endif
  
  	if(DB_CAPABILITY(ul_dbf, DB_CAP_FETCH)) {
 -		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 15, 0, 0) < 0) {
-+		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 44, 0, 0) < 0) {
++		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 43, 0, 0) < 0) {
  			LM_ERR("db_query (1) failed\n");
  			return -1;
  		}
-@@ -1135,7 +1264,7 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+@@ -1135,7 +1258,7 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
  			return -1;
  		}
  	} else {
 -		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 15, 0, &res) < 0) {
-+		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 44, 0, &res) < 0) {
++		if(ul_dbf.query(_c, 0, 0, 0, columns, 0, 43, 0, &res) < 0) {
  			LM_ERR("db_query failed\n");
  			return -1;
  		}
-@@ -1181,6 +1310,10 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+@@ -1181,6 +1304,10 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
  				}
  				goto error1;
  			}
-+			c->security_temp = dbrow2security(ROW_VALUES(row) + 15,
-+					ROW_VALUES(row) + 16, ROW_VALUES(row) + 17);
++			c->security_temp = dbrow2security(
++					ROW_VALUES(row) + 15, ROW_VALUES(row) + 16);
 +			c->security = dbrow2security(
-+					ROW_VALUES(row) + 30, NULL, ROW_VALUES(row) + 31);
++					ROW_VALUES(row) + 29, ROW_VALUES(row) + 30);
  			//c->flags = c->flags|(1<<FLAG_READFROMDB);
  			//TODO: need to subscribe to s-cscf for first public identity
  			unlock_udomain(_d, &ci->via_host, ci->via_port, ci->via_prot);
@@ -642,10 +634,10 @@ index 93423ad..c361636 100644
  	api->update_temp_security = update_temp_security;
  	api->register_ulcb = register_ulcb;
 diff --git a/src/modules/ims_usrloc_pcscf/usrloc.h b/src/modules/ims_usrloc_pcscf/usrloc.h
-index 34b6cfe..84ff68e 100644
+index 3e48b65..fdb2e3a 100644
 --- a/src/modules/ims_usrloc_pcscf/usrloc.h
 +++ b/src/modules/ims_usrloc_pcscf/usrloc.h
-@@ -284,6 +284,9 @@ typedef int (*register_udomain_t)(const char *_n, struct udomain **_d);
+@@ -283,6 +283,9 @@ typedef int (*register_udomain_t)(const char *_n, struct udomain **_d);
  typedef int (*get_udomain_t)(const char *_n, udomain_t **_d);
  typedef int (*get_all_ucontacts_t)(void *buf, int len, unsigned int flags,
  		unsigned int part_idx, unsigned int part_max);
@@ -655,7 +647,7 @@ index 34b6cfe..84ff68e 100644
  
  /*security related API signatures */
  typedef int (*update_security_t)(struct udomain *_d, security_type _t,
-@@ -325,6 +328,7 @@ typedef struct usrloc_api
+@@ -324,6 +327,7 @@ typedef struct usrloc_api
  	is_ulcb_registered_t is_ulcb_registered;
  	register_ulcb_t register_ulcb_method;
  	db_load_pcontact_t db_load_pcontact;
@@ -664,10 +656,10 @@ index 34b6cfe..84ff68e 100644
  
  /*! usrloc API export bind function */
 diff --git a/src/modules/ims_usrloc_pcscf/usrloc_db.c b/src/modules/ims_usrloc_pcscf/usrloc_db.c
-index 047bcab..6f29bb6 100644
+index 81324fd..305fd3e 100644
 --- a/src/modules/ims_usrloc_pcscf/usrloc_db.c
 +++ b/src/modules/ims_usrloc_pcscf/usrloc_db.c
-@@ -425,11 +425,11 @@ int db_update_pcontact_security_temp(
+@@ -420,11 +420,11 @@ int db_update_pcontact_security_temp(
  
  			VAL_TYPE(values + ++i) = DB1_STR;
  			VAL_NULL(values + i) = ipsec ? 0 : 1;
@@ -681,7 +673,7 @@ index 047bcab..6f29bb6 100644
  
  			VAL_TYPE(values + ++i) = DB1_INT;
  			VAL_NULL(values + i) = ipsec ? 0 : 1;
-@@ -546,11 +546,11 @@ int db_update_pcontact_security(
+@@ -540,11 +540,11 @@ int db_update_pcontact_security(
  
  			VAL_TYPE(values + ++i) = DB1_STR;
  			VAL_NULL(values + i) = ipsec ? 0 : 1;
@@ -696,10 +688,10 @@ index 047bcab..6f29bb6 100644
  			VAL_TYPE(values + ++i) = DB1_INT;
  			VAL_NULL(values + i) = ipsec ? 0 : 1;
 diff --git a/src/modules/ims_usrloc_pcscf/usrloc_db.h b/src/modules/ims_usrloc_pcscf/usrloc_db.h
-index 688387b..1d5aab0 100644
+index 71ff01a..49cf4da 100644
 --- a/src/modules/ims_usrloc_pcscf/usrloc_db.h
 +++ b/src/modules/ims_usrloc_pcscf/usrloc_db.h
-@@ -120,6 +120,35 @@ extern str expires_col;
+@@ -119,6 +119,34 @@ extern str expires_col;
  extern str service_routes_col;
  extern str socket_col;
  extern str public_ids_col;
@@ -718,7 +710,6 @@ index 688387b..1d5aab0 100644
 +extern str spi_uc_col;
 +extern str spi_us_col;
 +extern str t_security_type_col;
-+extern str t_protocol_col;
 +extern str t_mode_col;
 +extern str t_ck_col;
 +extern str t_ik_col;

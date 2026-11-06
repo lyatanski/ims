@@ -25,16 +25,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-The Diameter identity, `<instance>.<ims realm>`: the pod name, or `instance`
-when given. A P-CSCF StatefulSet per Gm address passes its own name, so
-`<release>-pcscf-<index>` stays the identity core's ConnectPeer list
-enumerates rather than becoming `<release>-pcscf-<index>-0`.
-
-Call with (dict "root" $ "instance" <name or "">).
+The Diameter identity, `<pod name>.<ims realm>`: `<release>-<role>-<ordinal>`,
+the names core's ConnectPeer list enumerates.
 */}}
 {{- define "ims.identity" -}}
-{{- $root := .root -}}
-{{- with $root }}
 - name: identity
   image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
   imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -43,13 +37,9 @@ Call with (dict "root" $ "instance" <name or "">).
   {{- end }}
   env:
   - name: INSTANCE
-    {{- with $.instance }}
-    value: {{ . | quote }}
-    {{- else }}
     valueFrom:
       fieldRef:
         fieldPath: metadata.name
-    {{- end }}
   command:
   - sh
   - -ec
@@ -65,7 +55,6 @@ Call with (dict "root" $ "instance" <name or "">).
   - name: identity
     mountPath: /run/cscf
 {{- end }}
-{{- end }}
 
 {{/*
 Wait redis! db_redis opens its connection at module init and does not retry
@@ -73,9 +62,9 @@ Wait redis! db_redis opens its connection at module init and does not retry
 Call with (dict "root" $ "cscf" <role>).
 */}}
 {{- define "ims.waitdb" -}}
-{{- $valkey := printf "-h %s -p %v" (include "valkey.name" .root.Subcharts.rtpengine.Subcharts.valkey) .root.Values.rtpengine.valkey.ports.valkey }}
+{{- $valkey := printf "-h %s -p %v" (include "valkey.name" .root.Subcharts.trgw.Subcharts.valkey) .root.Values.trgw.valkey.ports.valkey }}
 - name: wait-store
-  image: {{ .root.Values.rtpengine.valkey.image.repository }}:{{ .root.Values.rtpengine.valkey.image.tag }}
+  image: {{ .root.Values.trgw.valkey.image.repository }}:{{ .root.Values.trgw.valkey.image.tag }}
   {{- with .root.Values.sidecar.resources }}
   resources: {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -105,7 +94,7 @@ out when unset so the cfg's own default (112, 911) applies.
 {{- end }}
 
 {{- define "ims.regsrv" -}}
-addr={{ template "valkey.name" .Subcharts.rtpengine.Subcharts.valkey }};port={{ .Values.rtpengine.valkey.ports.valkey }};db={{ .Values.db.interrogating }}
+addr={{ template "valkey.name" .Subcharts.trgw.Subcharts.valkey }};port={{ .Values.trgw.valkey.ports.valkey }};db={{ .Values.db.interrogating }}
 {{- end }}
 
 {{/*
@@ -181,6 +170,16 @@ both need tpl before anything can be appended.
 {{- end }}
 
 {{/*
+The IBCF's SIP URI with cscf.border on, empty without it. The CSCFs' default
+exit towards other networks and the trunk.
+*/}}
+{{- define "ims.ibcf" -}}
+{{- if .Values.cscf.border.enabled -}}
+sip:ibcf.{{ include "ims.realm.ims" . }}
+{{- end -}}
+{{- end }}
+
+{{/*
 A NetworkAttachmentDefinition's `spec.config`: the CNI config verbatim, with
 `name` defaulted to the attachment's own so the two cannot drift. `merge` lets
 the config win, so an explicit `name` in it is still honoured, and deepCopy
@@ -198,7 +197,107 @@ Call with (dict "root" $ "name" <gm|ici> "config" <its config>).
 {{- end }}
 
 {{/*
-The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
+The Ici networks, as JSON {"nets": [...]}: `ici.networks`, or without it the
+single unnamed one `ici.interface`, `ici.addresses` and `ici.config` describe.
+Each entry adds what the rest of the chart derives from the name:
+  sfx   "" or "-<name>": the suffix of its sockets in cscf/border.cfg ("Ici",
+        "IciT"), of its TrGW templates and of its NetworkAttachmentDefinition
+  nad   the NetworkAttachmentDefinition, <release>-ici<sfx>
+The one IBCF is on every network, at every address listed for it.
+*/}}
+{{- define "ims.ici.networks" -}}
+{{- $in := .Values.ici.networks }}
+{{- if not $in }}
+{{- $in = list (dict "name" "" "interface" .Values.ici.interface "addresses" .Values.ici.addresses "config" .Values.ici.config) }}
+{{- end }}
+{{- $out := list }}
+{{- $names := list }}
+{{- range $k, $net := $in }}
+{{- if and (hasKey $net "name") (not (kindIs "string" $net.name)) }}{{ fail (printf "ici.networks[%d]: name %v is not a string (quote it: YAML reads y, n, on, off as booleans)" $k $net.name) }}{{ end }}
+{{- $name := $net.name | default "" }}
+{{- if and (gt (len $in) 1) (not $name) }}{{ fail (printf "ici.networks[%d]: a name is required" $k) }}{{ end }}
+{{- if and $name (not (regexMatch "^[a-z0-9]+$" $name)) }}{{ fail (printf "ici.networks[%d]: %q is not [a-z0-9]+" $k $name) }}{{ end }}
+{{- if has $name $names }}{{ fail (printf "ici.networks: %q twice" $name) }}{{ end }}
+{{- $names = append $names $name }}
+{{- if not $net.interface }}{{ fail (printf "ici.networks[%d] (%s): no interface" $k $name) }}{{ end }}
+{{- if gt (len $net.interface) 15 }}{{ fail (printf "ici.networks[%d] (%s): interface %q is over 15 characters" $k $name $net.interface) }}{{ end }}
+{{- if not $net.addresses }}{{ fail (printf "ici.networks[%d] (%s): no addresses" $k $name) }}{{ end }}
+{{- range $a := $net.addresses }}
+{{- if or (not (contains "/" $a)) (contains ":" $a) }}
+{{- fail (printf "ici: %q is not an IPv4 address with its prefix length" $a) }}
+{{- end }}
+{{- end }}
+{{- $sfx := ternary (printf "-%s" $name) "" (ne $name "") }}
+{{- $out = append $out (dict "name" $name "sfx" $sfx "nad" (printf "%s-ici%s" $.Release.Name $sfx) "interface" $net.interface "addresses" $net.addresses "config" $net.config) }}
+{{- end }}
+{{- toJson (dict "nets" $out) -}}
+{{- end }}
+
+{{/*
+The Gm attachment, as JSON: `gm.addresses` split by family into `v4` (required,
+IPSEC) and `v6` (optional, IPSEC6), with the list itself as `ips`, and
+`gm.gateways` the same way into `gw` and `gw6`, each the next hop to that
+family's UE pool. `{}` while Gm is off.
+*/}}
+{{- define "ims.gm" -}}
+{{- $root := . }}
+{{- $out := dict }}
+{{- if .Values.gm.enabled }}
+{{- $_ := set $out "ips" (required "gm.addresses: the P-CSCF's Gm addresses" .Values.gm.addresses) }}
+{{- range $out.ips }}
+{{- if not (contains "/" .) }}{{ fail (printf "gm.addresses: %s has no prefix length" .) }}{{ end }}
+{{- $k := ternary "v6" "v4" (contains ":" .) }}
+{{- if hasKey $out $k }}{{ fail (printf "gm.addresses: one %s address at most" (ternary "IPv6" "IPv4" (eq $k "v6"))) }}{{ end }}
+{{- $_ := set $out $k . }}
+{{- end }}
+{{- if not $out.v4 }}{{ fail "gm.addresses: an IPv4 address is required, it is what IPSEC binds" }}{{ end }}
+{{- range .Values.gm.gateways }}
+{{- if contains "/" . }}{{ fail (printf "gm.gateways: %s is an address, not a prefix" .) }}{{ end }}
+{{- $k := ternary "gw6" "gw" (contains ":" .) }}
+{{- if hasKey $out $k }}{{ fail (printf "gm.gateways: one %s gateway at most" (ternary "IPv6" "IPv4" (eq $k "gw6"))) }}{{ end }}
+{{- $_ := set $out $k . }}
+{{- end }}
+{{- if and $root.Values.global.ue.subnet (not $out.gw) }}{{ fail "gm.gateways: an IPv4 gateway is required, the next hop to global.ue.subnet" }}{{ end }}
+{{- if and $out.v6 $root.Values.global.ue.subnet6 (not $out.gw6) }}{{ fail "gm.gateways: an IPv6 gateway is required with an IPv6 address, the next hop to global.ue.subnet6" }}{{ end }}
+{{- end }}
+{{- toJson $out }}
+{{- end }}
+
+{{/*
+`gm.config` plus the route to the UE pool, so that CNI installs it when it
+configures the interface. One route per family, through `gm.gateways`, and only
+the IPv6 one while the P-CSCF has an IPv6 address. The MTU the GTP-U tunnel
+leaves (`global.ue.mtu`) is the interface's own `mtu`, unless the config sets
+one: CNI's route type has an `mtu`, but the bridge and macvlan plugins (v1.9.1)
+add routes with priority, table and scope only and drop it silently. Every
+packet on Gm is a UE's, so capping the interface is the same as capping the
+route.
+*/}}
+{{- define "ims.gm.config" -}}
+{{- $g := include "ims.gm" . | fromJson }}
+{{- $c := deepCopy .Values.gm.config }}
+{{- $ipam := $c.ipam | default dict }}
+{{- $routes := $ipam.routes | default list }}
+{{- with .Values.global.ue.subnet }}
+{{- $routes = append $routes (dict "dst" . "gw" $g.gw) }}
+{{- end }}
+{{- if and $g.v6 .Values.global.ue.subnet6 }}
+{{- $routes = append $routes (dict "dst" .Values.global.ue.subnet6 "gw" $g.gw6) }}
+{{- end }}
+{{- if $routes }}
+{{- $_ := set $ipam "routes" $routes }}
+{{- end }}
+{{- $_ := set $c "ipam" $ipam }}
+{{- if not (hasKey $c "mtu") }}
+{{- $_ := set $c "mtu" (int .Values.global.ue.mtu) }}
+{{- end }}
+{{- toJson $c }}
+{{- end }}
+
+{{/*
+The route to the UE pool through the default route's gateway, capped to the
+MTU the GTP-U tunnel leaves -- for a P-CSCF without the Gm attachment, which
+carries this route itself when it is there.
 */}}
 {{- define "ims.ueroute" -}}
 - name: ueroute
@@ -217,29 +316,21 @@ The route to the UE pool, capped to the MTU the GTP-U tunnel leaves.
   - |
     pool={{ .Values.global.ue.subnet }}
     mtu={{ .Values.global.ue.mtu }}
-    via={{ .Values.global.ue.via | quote }}
     pool6={{ .Values.global.ue.subnet6 | quote }}
-    via6={{ .Values.global.ue.via6 | quote }}
 
-    # $1 family flag, $2 pool, $3 next hop or empty for the default route's
+    # $1 family flag, $2 pool
     route() {
       [ -n "$2" ] || return 0
+      # "default via <gw> dev <dev>" -> "<gw> <dev>"
+      set -- "$1" "$2" $(ip "$1" route | awk '$1 == "default" { print $3, $5; exit }')
       if [ -n "$3" ]; then
-        # An explicit next hop: the kernel resolves the device from it, which
-        # is the Gm one whenever that is the interface the hop is on-link on.
-        ip "$1" route replace "$2" via "$3" mtu "$mtu"
-      else
-        # "default via <gw> dev <dev>" -> "<gw> <dev>"
-        set -- "$1" "$2" $(ip "$1" route | awk '$1 == "default" { print $3, $5; exit }')
-        if [ -n "$3" ]; then
-          ip "$1" route replace "$2" via "$3" dev "$4" mtu "$mtu"
-        fi
+        ip "$1" route replace "$2" via "$3" dev "$4" mtu "$mtu"
       fi
     }
 
     while :; do
-      route -4 "$pool" "$via"
-      route -6 "$pool6" "$via6"
+      route -4 "$pool"
+      route -6 "$pool6"
       sleep {{ .Values.reconcile }}
     done
 {{- end }}

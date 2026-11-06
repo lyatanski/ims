@@ -93,6 +93,15 @@ post-delivery NOTIFY nudge). An S-CSCF that never sends SCSCF-Restoration-Info
 -- one predating this patch, or a stock kamailio -- is unaffected: the AVP is
 optional on both sides of the exchange, and the answer carries none back.
 
+What is stored is the registration binding, so every de-registration type
+(USER_, TIMEOUT_ and ADMINISTRATIVE_DEREGISTRATION, their _STORE_SERVER_NAME
+forms, DEREGISTRATION_TOO_MUCH_DATA) clears it again. Kept past a
+de-registration, it was handed back on the next UNREGISTERED_USER SAR -- the
+one a terminating request for the now unregistered user makes -- and the
+S-CSCF restored a binding to a UE that was gone: the request went to the
+P-CSCF for it and timed out, where it should have got the unregistered
+services or a 480.
+
 diff --git a/lib/diameter/cx/message.c b/lib/diameter/cx/message.c
 index 33155e0..ad6966b 100644
 --- a/lib/diameter/cx/message.c
@@ -277,7 +286,7 @@ index 1fe0ddc..249f02b 100644
          char *user_name, char *visited_network_identifier,
          ogs_ims_data_t *ims_data);
 diff --git a/src/hss/hss-cx-path.c b/src/hss/hss-cx-path.c
-index ab89036..744f4e5 100644
+index ab89036..5985ccd 100644
 --- a/src/hss/hss-cx-path.c
 +++ b/src/hss/hss-cx-path.c
 @@ -1068,6 +1068,160 @@ out:
@@ -513,7 +522,7 @@ index ab89036..744f4e5 100644
  
              /* Get User-Data-Already-Available AVP (Mandatory) */
              ret = fd_msg_search_avp(
-@@ -1479,6 +1671,96 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+@@ -1479,6 +1671,114 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
              }
          }
  
@@ -575,6 +584,24 @@ index ab89036..744f4e5 100644
 +        }
 +
 +        /*
++         * What was backed up is the registration binding: once the user is
++         * de-registered -- by the UE, by expiry, by the network, for any of
++         * the de-registration types -- there is none left to restore.
++         * Kept, it is handed back on the next UNREGISTERED_USER SAR, the one
++         * a terminating request for the now unregistered user makes, and the
++         * S-CSCF restores a binding to a UE that is gone instead of applying
++         * the unregistered services (or answering 480).
++         */
++        if (sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_TIMEOUT_DEREGISTRATION ||
++                sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_USER_DEREGISTRATION ||
++                sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_TIMEOUT_DEREGISTRATION_STORE_SERVER_NAME ||
++                sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_USER_DEREGISTRATION_STORE_SERVER_NAME ||
++                sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_ADMINISTRATIVE_DEREGISTRATION ||
++                sa_type == OGS_DIAM_CX_SERVER_ASSIGNMENT_DEREGISTRATION_TOO_MUCH_DATA) {
++            hss_cx_set_restoration_info(public_identity, NULL, NULL);
++        }
++
++        /*
 +         * TS 23.380 4.6.2/4.2.3: a restoring S-CSCF asks for the profile with
 +         * NO_ASSIGNMENT (originating) or UNREGISTERED_USER (terminating) --
 +         * the same two types that just downloaded User-Data above. Hand back
@@ -610,7 +637,7 @@ index ab89036..744f4e5 100644
          /* Send the answer */
          ret = fd_msg_send(msg, NULL, NULL);
          if (ret != 0) {
-@@ -1501,6 +1783,10 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+@@ -1501,6 +1801,10 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
          if (user_name) ogs_free(user_name);
          if (public_identity) ogs_free(public_identity);
          if (server_name) ogs_free(server_name);
@@ -621,7 +648,7 @@ index ab89036..744f4e5 100644
  
          return 0;
      }
-@@ -1513,7 +1799,11 @@ out:
+@@ -1513,7 +1817,11 @@ out:
                  ans, OGS_DIAM_CX_APPLICATION_ID);
  
          /* Set the Experimental-Result, Origin-Host and Origin-Realm AVPs */
@@ -634,7 +661,7 @@ index ab89036..744f4e5 100644
              ret = ogs_diam_message_experimental_rescode_set(ans, result_code);
          }
  
-@@ -1527,6 +1817,13 @@ out:
+@@ -1527,6 +1835,13 @@ out:
              }
          }
  
@@ -648,7 +675,7 @@ index ab89036..744f4e5 100644
          ret = fd_msg_send(msg, NULL, NULL);
          if (ret != 0) {
              ogs_error("Failed to send error response");
-@@ -1544,6 +1841,8 @@ out:
+@@ -1544,6 +1859,8 @@ out:
      if (user_name) ogs_free(user_name);
      if (public_identity) ogs_free(public_identity);
      if (server_name) ogs_free(server_name);

@@ -86,10 +86,10 @@ answer carries no Server-Name, for a terminating request to an unregistered
 user -- and is deliberately left alone here.
 
 diff --git a/src/modules/ims_icscf/cxdx_uar.c b/src/modules/ims_icscf/cxdx_uar.c
-index cec1ceadf4..d0fe0e427e 100644
+index 7dc0283d93..0bd4017fff 100644
 --- a/src/modules/ims_icscf/cxdx_uar.c
 +++ b/src/modules/ims_icscf/cxdx_uar.c
-@@ -226,6 +226,15 @@ void async_cdp_uar_callback(
+@@ -224,6 +224,15 @@ void async_cdp_uar_callback(
  
  success:
  	LM_DBG("successful UAA response\n");
@@ -135,7 +135,7 @@ index 0adb8ed459..0602b32868 100644
  	} else {
  		for(i = 0; i < cap_cnt; i++) {
 diff --git a/src/modules/ims_icscf/doc/ims_icscf_admin.xml b/src/modules/ims_icscf/doc/ims_icscf_admin.xml
-index e3c552a1c5..781871dbbe 100644
+index 9073cba75e..75d1ecf60f 100644
 --- a/src/modules/ims_icscf/doc/ims_icscf_admin.xml
 +++ b/src/modules/ims_icscf/doc/ims_icscf_admin.xml
 @@ -111,6 +111,34 @@ modparam("ims_icscf","scscf_entry_expiry", 300)
@@ -174,7 +174,7 @@ index e3c552a1c5..781871dbbe 100644
        <title><varname>db_url</varname> (string)</title>
  
 diff --git a/src/modules/ims_icscf/ims_icscf_mod.c b/src/modules/ims_icscf/ims_icscf_mod.c
-index 29328735a1..684c46c092 100644
+index c102e4e38b..9c28a10677 100644
 --- a/src/modules/ims_icscf/ims_icscf_mod.c
 +++ b/src/modules/ims_icscf/ims_icscf_mod.c
 @@ -81,6 +81,11 @@ char *ims_icscf_db_capabilities_table =
@@ -189,7 +189,7 @@ index 29328735a1..684c46c092 100644
  
  /* parameters storage */
  char *cxdx_dest_realm_s = "ims.smilecoms.com";
-@@ -135,6 +140,7 @@ static param_export_t params[] = {
+@@ -137,6 +142,7 @@ static param_export_t params[] = {
  	{"route_lir_user_unknown", PARAM_STRING, &route_lir_user_unknown},
  	{"route_uar_user_unknown", PARAM_STRING, &route_uar_user_unknown},
  	{"scscf_entry_expiry", PARAM_INT, &scscf_entry_expiry},
@@ -197,7 +197,7 @@ index 29328735a1..684c46c092 100644
  	{"db_url", PARAM_STRING, &ims_icscf_db_url},
  	{"db_nds_table", PARAM_STRING, &ims_icscf_db_nds_table},
  	{"db_scscf_table", PARAM_STRING, &ims_icscf_db_scscf_table},
-@@ -224,9 +230,17 @@ static int mod_init(void)
+@@ -227,9 +233,17 @@ static int mod_init(void)
  	ims_icscf_db_init(ims_icscf_db_url, ims_icscf_db_nds_table,
  			ims_icscf_db_scscf_table, ims_icscf_db_capabilities_table);
  
@@ -216,12 +216,12 @@ index 29328735a1..684c46c092 100644
  
  	if(!i_hash_table_init(ims_icscf_hash_size)) {
 diff --git a/src/modules/ims_icscf/scscf_list.c b/src/modules/ims_icscf/scscf_list.c
-index 36831b71f2..c67446d055 100644
+index 79b948ebc1..32d69bc70b 100644
 --- a/src/modules/ims_icscf/scscf_list.c
 +++ b/src/modules/ims_icscf/scscf_list.c
-@@ -56,50 +56,154 @@ extern struct tm_binds tmb; //Structure with pointers to tm funcs
- extern int use_preferred_scscf_uri;
+@@ -57,53 +57,157 @@ extern int use_preferred_scscf_uri;
  extern str preferred_scscf_uri;
+ extern str ims_icscf_selected_scscf_avp;
  
 +extern int scscf_reload_interval;
 +
@@ -275,6 +275,9 @@ index 36831b71f2..c67446d055 100644
 +	}
 +	shm_free(caps);
 +}
+ 
+ /* Forward declarations */
+ static int create_selected_scscf_pv(str scscf_name);
  
  /**
   * Refreshes the capabilities list reading them from the db.
@@ -400,7 +403,7 @@ index 36831b71f2..c67446d055 100644
  }
  
  /**
-@@ -207,17 +311,25 @@ scscf_entry *I_get_capab_ordered(str scscf_name, int *m, int mcnt, int *o,
+@@ -211,17 +315,25 @@ scscf_entry *I_get_capab_ordered(str scscf_name, int *m, int mcnt, int *o,
  	for(i = 0; i < pcnt; i++)
  		list = I_add_to_scscf_list(list, p[i], INT_MAX - i, orig);
  
