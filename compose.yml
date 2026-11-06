@@ -75,7 +75,7 @@ services:
       #DBURL: redis:6379/3
       REGSRV: addr=redis;port=6379;db=2
       ENUM: e164.${REALM}.
-      # Off-net numbers (the BGCF role) and other networks' domains both
+      # Off-net numbers and other networks' domains both
       # leave through the IBCF, which anchors their media
       TRUNK: sip:ibcf.ims.${REALM}
       IBCF: sip:ibcf.ims.${REALM}
@@ -95,8 +95,10 @@ services:
     environment:
       REALM: ${REALM}
       # <service>[@<cell prefix>]=<uri> entries (cscf/emergency.cfg). Nothing
-      # answers at the default: point it at a PSAP, and set BGCF for tel URIs
+      # answers at the default: point it at a PSAP
       PSAP: ${PSAP:-sos=sip:psap.ims.${REALM}}
+      # A tel: PSAP leaves through the IBCF, like the S-CSCF's off-net numbers
+      TRUNK: sip:ibcf.ims.${REALM}
 
   # Interconnection Border Control Function: the network's entry and exit
   # point on Ici (TS 23.228 4.14, Annex I), with rtpengine as its TrGW

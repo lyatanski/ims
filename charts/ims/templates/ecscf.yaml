@@ -71,9 +71,9 @@ spec:
           value: {{ tpl .Values.domain . }}
         - name: PSAP
           value: {{ tpl (join " " (required "cscf.emergency.psap: at least one PSAP" $e.psap)) $ | quote }}
-        {{- with $e.bgcf }}
-        # Left out when unset: an empty value would still define BGCF
-        - name: BGCF
+        {{- with $e.trunk | default (include "ims.ibcf" .) }}
+        # Left out when unset: an empty value would still define TRUNK
+        - name: TRUNK
           value: {{ tpl . $ | quote }}
         {{- end }}
         {{- with include "ims.sosnum" . }}

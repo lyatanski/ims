@@ -18,7 +18,7 @@ dialplan:
   idd: "00"
   ndd: "0"
 
-# BGCF next hop (TS 23.228 4.3.4) for a number the ENUM tree does not claim.
+# The next hop for a number the ENUM tree does not claim.
 # Empty with cscf.border on: the IBCF, which routes it by its peers' `routes`.
 trunk: ""
 
@@ -204,8 +204,10 @@ cscf:
     # answers at the default: point it at a PSAP.
     psap:
     - sos=sip:psap.{{ include "ims.realm.ims" . }}
-    # The next hop for a tel: PSAP. Unset, those requests are refused.
-    bgcf: ""
+    # The next hop for a tel: PSAP. Empty with cscf.border on: the IBCF, which
+    # routes it by its peers' `routes`. Empty without it, those requests are
+    # refused.
+    trunk: ""
     # Emergency numbers, <number>=<service URN>, for the P-CSCF and the
     # E-CSCF. Empty keeps 112 and 911, both urn:service:sos.
     numbers: []

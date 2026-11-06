@@ -27,8 +27,8 @@ unprovisioned number matched on hop-by-hop identifier:
     LIA  Result-Code = <absent>  Experimental-Result-Code = 2004
 
 The same 2004 also defeats ims_icscf's route_lir_user_unknown modparam, which
-exists precisely so a deployment can re-target an unknown number -- to a BGCF,
-a trunk, a lookup of its own -- instead of rejecting it. That hook is keyed on
+exists precisely so a deployment can re-target an unknown number -- to a trunk,
+a lookup of its own -- instead of rejecting it. That hook is keyed on
 5001 and so never fires against this HSS, which makes the behaviour impossible
 to work around in configuration and is why the fix belongs here.
 

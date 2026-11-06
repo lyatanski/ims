@@ -170,6 +170,16 @@ both need tpl before anything can be appended.
 {{- end }}
 
 {{/*
+The IBCF's SIP URI with cscf.border on, empty without it. The CSCFs' default
+exit towards other networks and the trunk.
+*/}}
+{{- define "ims.ibcf" -}}
+{{- if .Values.cscf.border.enabled -}}
+sip:ibcf.{{ include "ims.realm.ims" . }}
+{{- end -}}
+{{- end }}
+
+{{/*
 A NetworkAttachmentDefinition's `spec.config`: the CNI config verbatim, with
 `name` defaulted to the attachment's own so the two cannot drift. `merge` lets
 the config win, so an explicit `name` in it is still honoured, and deepCopy
