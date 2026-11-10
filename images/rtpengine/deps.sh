@@ -88,9 +88,13 @@ pc_package() {
 
 	# Several providers: pc:hiredis is offered by hiredis-dev and by the
 	# hiredict fork, pc:spandsp by spandsp-dev and spandsp3-dev.  Prefer the
-	# candidate whose name is the module's own.
+	# candidate whose name is the module's own, or failing that its family's:
+	# pc:hiredis_ssl is the TLS half of hiredis and has to come from the same
+	# package as pc:hiredis, because hiredis-dev and hiredict-dev conflict.
 	base=${mod%%-[0-9]*}
-	for want in "$mod-dev" "$base-dev" "lib${base#lib}-dev" "${base#lib}-dev"; do
+	fam=${base%%_*}
+	for want in "$mod-dev" "$base-dev" "lib${base#lib}-dev" "${base#lib}-dev" \
+		"$fam-dev" "lib${fam#lib}-dev" "${fam#lib}-dev"; do
 		for cand; do
 			[ "$cand" = "$want" ] || continue
 			echo "$cand"
