@@ -35,6 +35,9 @@ jobs:
       CALL_GAP_MS: 2000
       CALL_MEDIA: -1       # RTP on every call: the UPF and the bearers are soaked too
       CALL_REPORT_S: 300
+      # The UEs share one OCS account (billing.yml): 10.00 runs out after
+      # about 45 minutes of talk and every later INVITE gets 402
+      CREDIT: 1000000
     steps:
     - uses: actions/checkout@v7
     - name: Length

@@ -301,7 +301,8 @@ configs:
       }
 
   # The tariff plan LoaderS reads. Every subscriber shares account IMS: five
-  # free minutes, then 0.22 a minute billed by the second out of 10.00.
+  # free minutes, then 0.22 a minute billed by the second out of CREDIT
+  # (10.00 unless set; about 45 minutes of talk across all subscribers).
   Rates.csv:
     content: |
       #Tenant,ID,FilterIDs,Weights,MinCost,MaxCost,MaxCostStrategy,RateID,RateFilterIDs,RateActivationStart,RateWeights,RateBlocker,RateIntervalStart,RateFixedFee,RateRecurrentFee,RateUnit,RateIncrement
@@ -311,4 +312,4 @@ configs:
     content: |
       #Tenant,ID,FilterIDs,Weights,Blockers,Opts,BalanceID,BalanceFilterIDs,BalanceWeights,BalanceBlockers,BalanceType,BalanceUnits,BalanceUnitFactors,BalanceOpts,BalanceCostIncrements,BalanceAttributeIDs,BalanceRateProfileIDs,ThresholdIDs
       cgrates.org,IMS,*prefix:~*req.Account:${DIAL}|${MCC}${MNC},;10,,,VOICE_5M,*string:~*req.ToR:*voice,;20,,*abstract,5m,,,;0;0;;1s,,,*none
-      cgrates.org,IMS,,,,,MONETARY,,;10,,*concrete,10,,,;;;;1s,,RP_VOICE,
+      cgrates.org,IMS,,,,,MONETARY,,;10,,*concrete,${CREDIT:-10},,,;;;;1s,,RP_VOICE,

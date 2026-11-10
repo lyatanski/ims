@@ -1,0 +1,43 @@
+Let lookup() release the usrloc slot before freeing the AOR it locked by.
+
+lookup() locks the udomain slot by the AOR it builds in pkg memory, and on
+both ways out frees that AOR first and unlocks after:
+
+	pkg_free(aor.s);
+	ul.unlock_udomain(_d, &aor);
+
+unlock_udomain() finds the slot by hashing aor (core_hash()), so it hashes
+freed memory. Once that memory is reused before the unlock - another
+process cannot do it, but a pkg allocator that writes into freed fragments
+can - the hash lands on a different slot: the wrong lock is released and the
+IMPU's stays held, which wedges every later request for any IMPU in that
+slot. memcheck with system malloc (-X sm) reports it on every terminating
+request: "Invalid read of size 4 at core_hash, by unlock_udomain, by lookup".
+
+Unlock first, then free.
+
+diff --git a/src/modules/ims_registrar_scscf/lookup.c b/src/modules/ims_registrar_scscf/lookup.c
+index 46122054ae..25af84aace 100644
+--- a/src/modules/ims_registrar_scscf/lookup.c
++++ b/src/modules/ims_registrar_scscf/lookup.c
+@@ -133,8 +133,8 @@ int lookup(struct sip_msg *_m, udomain_t *_d, char *ue_type_c)
+ 	res = ul.get_impurecord(_d, &aor, &r);
+ 	if(res != 0) {
+ 		LM_DBG("'%.*s' Not found in usrloc\n", aor.len, ZSW(aor.s));
+-		pkg_free(aor.s);
+ 		ul.unlock_udomain(_d, &aor);
++		pkg_free(aor.s);
+ 		return -1;
+ 	}
+ 	ret = -1;
+@@ -247,8 +247,9 @@ int lookup(struct sip_msg *_m, udomain_t *_d, char *ue_type_c)
+ 	}
+ 
+ done:
+-	pkg_free(aor.s);
++	/* the lock is found by hashing aor: free it only once released */
+ 	ul.unlock_udomain(_d, &aor);
++	pkg_free(aor.s);
+ 	return ret;
+ }
+ 

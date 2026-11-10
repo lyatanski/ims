@@ -1,0 +1,47 @@
+Format a reg-info contact without a q with the format that has no q.
+
+process_xml_for_contact() has a branch for a contact with a q and one
+without, but both format with contact_s_q, whose q="%.3f" then prints a
+double that was never passed: whatever is in xmm0 lands in the full reg-info
+of every NOTIFY, for every contact that registered without a q - which is
+all of them for a UE that sends none. process_xml_for_explit_dereg_contact()
+does the same, and also hands %p an int. memcheck reports it as
+"Conditional jump or move depends on uninitialised value(s)" in sprintf from
+process_xml_for_contact().
+
+Use contact_s there, as the partial reg-info path (the per-contact loop of
+the NOTIFY body) already does, and give %p a pointer.
+
+diff --git a/src/modules/ims_registrar_scscf/registrar_notify.c b/src/modules/ims_registrar_scscf/registrar_notify.c
+index 71ec0c91b3..dcafbc8dc4 100644
+--- a/src/modules/ims_registrar_scscf/registrar_notify.c
++++ b/src/modules/ims_registrar_scscf/registrar_notify.c
+@@ -1912,8 +1912,8 @@ static void process_xml_for_explit_dereg_contact(
+ 	 * de-REGISTER, by the network (reg_rpc_dereg_impu()), or replaced by a
+ 	 * later registration - it did not run out: "unregistered" (RFC 3680),
+ 	 * one of the values TS 24.229 5.4.2.1.2 allows for a removed binding */
+-	sprintf(pad->s, contact_s_q.s, 1, r_terminated.len, r_terminated.s,
+-			r_unregistered.len, r_unregistered.s, 0);
++	sprintf(pad->s, contact_s.s, (void *)1, r_terminated.len,
++			r_terminated.s, r_unregistered.len, r_unregistered.s, 0);
+ 
+ 	pad->len = strlen(pad->s);
+ 	STR_APPEND(*buf, *pad);
+@@ -1944,7 +1944,7 @@ static void process_xml_for_contact(str *buf, str *pad, ucontact_t *ptr)
+ 			sprintf(pad->s, contact_s_q.s, ptr, r_terminated.len,
+ 					r_terminated.s, r_expired.len, r_expired.s, expires, q);
+ 		} else {
+-			sprintf(pad->s, contact_s_q.s, ptr, r_terminated.len,
++			sprintf(pad->s, contact_s.s, ptr, r_terminated.len,
+ 					r_terminated.s, r_expired.len, r_expired.s, expires);
+ 		}
+ 	} else {
+@@ -1953,7 +1953,7 @@ static void process_xml_for_contact(str *buf, str *pad, ucontact_t *ptr)
+ 			sprintf(pad->s, contact_s_q.s, ptr, r_active.len, r_active.s,
+ 					r_registered.len, r_registered.s, expires, q);
+ 		} else {
+-			sprintf(pad->s, contact_s_q.s, ptr, r_active.len, r_active.s,
++			sprintf(pad->s, contact_s.s, ptr, r_active.len, r_active.s,
+ 					r_registered.len, r_registered.s, expires);
+ 		}
+ 	}

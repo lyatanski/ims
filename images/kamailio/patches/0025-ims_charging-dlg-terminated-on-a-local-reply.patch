@@ -1,0 +1,40 @@
+Don't read tm's local reply as a SIP message in ims_charging's dlg_terminated().
+
+When the S-CSCF ends a call itself - ims_charging kills it because a CCR-U
+went unanswered or the credit ran out - ims_dialog sends a BYE each way and
+runs DLGCB_TERMINATED from bye_reply_cb() with the reply tm handed it. If the
+BYE gets no answer, or cannot be sent at all (its next hop does not
+resolve), that reply is tm's own: FAKED_REPLY, ((struct sip_msg *)-1).
+dlg_terminated() only checks rpl for NULL and then reads
+rpl->first_line.u.reply.statuscode, i.e. address 0x47:
+
+	Process terminating with default action of signal 11 (SIGSEGV)
+	 Access not within mapped region at address 0x47
+	   at dlg_terminated (dialog.c:205)
+	   by run_dlg_callbacks (dlg_cb.c:273)
+	   by bye_reply_cb (dlg_req_within.c:209)
+	   by run_trans_callbacks (t_hooks.c:257)
+	   by local_reply (t_reply.c:2335)
+	   by fake_reply (timer.c:375)
+
+Seen 2026-11-10 in a 30-minute soak under valgrind, with the host loaded
+enough for CCAs to time out: two S-CSCF timer processes died within a
+second of each other, and the main process took the S-CSCF down with them.
+
+Treat FAKED_REPLY as what it is, a local reply with nothing to log from.
+
+diff --git a/src/modules/ims_charging/dialog.c b/src/modules/ims_charging/dialog.c
+index ffafead5b4..953ad45d0f 100644
+--- a/src/modules/ims_charging/dialog.c
++++ b/src/modules/ims_charging/dialog.c
+@@ -201,6 +201,10 @@ void dlg_terminated(struct dlg_cell *dlg, int type, unsigned int termcode,
+ 			LM_DBG("reason header is [%.*s]\n", h->body.len, h->body.s);
+ 			s_reason = h->body;
+ 		}
++	} else if(_params->rpl == FAKED_REPLY) {
++		/* tm's own final reply: a BYE this side sent that timed out or
++		 * could not be sent at all */
++		LM_DBG("Reply is a local one\n");
+ 	} else if(_params->rpl) {
+ 		LM_DBG("Reply is [%d - %.*s]\n",
+ 				_params->rpl->first_line.u.reply.statuscode,

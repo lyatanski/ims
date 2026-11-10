@@ -1,0 +1,80 @@
+NUL-terminate the buffers find_contact_from_impu() searches with strstr().
+
+find_contact_from_impu() matches a dialog's contact against the IMPU's
+bindings by copying both into 512-byte stack buffers (filter_default_port()
+drops a ":5060" on the way) and then strstr()-ing them for '@', ':' and '~'.
+filter_default_port() copies exactly len bytes and never terminates, so:
+
+- the search AOR's buffer is never cleared: strstr() runs on into
+  uninitialised stack until it happens on a NUL, and can match a '@' or '~'
+  past the end of the AOR. memcheck reports "Conditional jump or move depends
+  on uninitialised value(s) at find_contact_from_impu" with the origin at its
+  stack frame, on every dialog callback for a contact;
+- the bindings' buffer is memset each time round, so it is only terminated
+  while the contact is shorter than 512 bytes;
+- the ":5060" branch copied before checking the room, so a long contact
+  overran the buffer.
+
+Have filter_default_port() check the room first on both branches and
+terminate what it copies, with the callers leaving a byte for the NUL.
+
+diff --git a/src/modules/ims_usrloc_scscf/contact_dlg_handlers.c b/src/modules/ims_usrloc_scscf/contact_dlg_handlers.c
+index 0e7dd87174..6a1b98a4f5 100644
+--- a/src/modules/ims_usrloc_scscf/contact_dlg_handlers.c
++++ b/src/modules/ims_usrloc_scscf/contact_dlg_handlers.c
+@@ -46,6 +46,8 @@ void contact_dlg_create_handler(
+ 
+ 
+ /** removes the default port ':5060' from the string in order compare later
++ *  dst->len is the room in dst->s; one byte more must be there for the
++ *  terminating NUL the callers' strstr() needs
+  *  returns:
+  *  0 => found
+  *  1 => not found
+@@ -56,19 +58,21 @@ static int filter_default_port(str *src, str *dst)
+ 	str default_port = str_init(":5060");
+ 	char *port;
+ 
++	if(dst->len < src->len) {
++		LM_BUG("dst len < src len\n");
++		return -1;
++	}
+ 	if((port = str_search(src, &default_port))) {
+ 		dst->len = port - src->s;
+ 		memcpy(dst->s, src->s, dst->len);
+ 		memcpy(dst->s + dst->len, port + 5, src->len - dst->len - 5);
+ 		dst->len = src->len - 5;
++		dst->s[dst->len] = '\0';
+ 		return 0;
+ 	}
+-	if(dst->len < src->len) {
+-		LM_BUG("dst len < src len\n");
+-		return -1;
+-	}
+ 	dst->len = src->len;
+ 	memcpy(dst->s, src->s, src->len);
++	dst->s[dst->len] = '\0';
+ 	return 1;
+ }
+ 
+@@ -87,7 +91,7 @@ static inline int find_contact_from_impu(
+ 	char *c_term;
+ 	char *alias_term;
+ 	char sbuf[512], cbuf[512];
+-	str str_aor = {sbuf, 512}, str_c = {cbuf, 512};
++	str str_aor = {sbuf, sizeof(sbuf) - 1}, str_c = {cbuf, sizeof(cbuf) - 1};
+ 	if(!search_aor)
+ 		return 1;
+ 
+@@ -123,9 +127,8 @@ static inline int find_contact_from_impu(
+ 
+ 	while(impucontact) {
+ 		if(impucontact->contact) {
+-			// clean up previous contact
+-			str_c.len = 512;
+-			memset(str_c.s, 0, 512);
++			// the room filter_default_port() may fill
++			str_c.len = sizeof(cbuf) - 1;
+ 
+ 			if(filter_default_port(&impucontact->contact->c, &str_c) < 0) {
+ 				LM_DBG("Skipping %.*s\n", STR_FMT(&impucontact->contact->c));

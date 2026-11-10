@@ -1,0 +1,117 @@
+Answer the requests that no cdp handler answered.
+
+RFC 6733 6.2: a request processed locally gets an answer. cdp hands each
+request to every registered request handler and sends what they return;
+when all of them return NULL nothing is sent, so the peer retransmits and
+times out. That happens for every command a module does not support (a RAR
+to ims_qos, a PPR to ims_registrar_scscf) and whenever a handler fails.
+
+When no handler answered, send:
+- 3001 DIAMETER_COMMAND_UNSUPPORTED for a base protocol (application 0)
+  command, since cdp handles the ones it supports itself;
+- 3007 DIAMETER_APPLICATION_UNSUPPORTED for an application not in our
+  configuration;
+- 5012 DIAMETER_UNABLE_TO_COMPLY otherwise, as cdp cannot tell an
+  unsupported command from a failed one.
+3001 and 3007 are protocol errors and set the E bit (7.2).
+
+An ASR with a Session-Id is left alone: the session state machine answers
+it before the handlers run.
+
+diff --git a/src/modules/cdp/api_process.c b/src/modules/cdp/api_process.c
+index 9284febf9a..3d60848dee 100644
+--- a/src/modules/cdp/api_process.c
++++ b/src/modules/cdp/api_process.c
+@@ -48,13 +48,61 @@
+ #include "receiver.h"
+ #include "peerstatemachine.h"
+ #include "cdp_stats.h"
++#include "config.h"
++#include "diameter_ims.h"
+ 
+ extern unsigned int *latency_threshold_p; /**<max delay for Diameter call */
+ extern struct cdp_counters_h cdp_cnts_h;
++extern dp_config *config;
+ 
+ handler_list *handlers = 0; /**< list of handlers */
+ gen_lock_t *handlers_lock;	/**< lock for list of handlers */
+ 
++/**
++ * Builds the answer for a request that no handler answered, so the peer is
++ * not left to retransmit and time out (RFC 6733 6.2). A base protocol
++ * command that reaches here is one cdp does not support, 3001
++ * DIAMETER_COMMAND_UNSUPPORTED; an application we did not advertise gets 3007
++ * DIAMETER_APPLICATION_UNSUPPORTED; both are protocol errors and set the E
++ * bit (7.2). Otherwise the handler failed or does not support the command:
++ * 5012 DIAMETER_UNABLE_TO_COMPLY.
++ * @param req - the request
++ * @returns the answer or NULL on error
++ */
++static AAAMessage *unanswered_request_answer(AAAMessage *req)
++{
++	AAAMessage *ans;
++	int i, rc;
++	char x[4];
++
++	if(req->applicationId == 0) {
++		rc = AAA_COMMAND_UNSUPPORTED;
++	} else {
++		rc = AAA_APPLICATION_UNSUPPORTED;
++		for(i = 0; i < config->applications_cnt; i++)
++			if(config->applications[i].id == req->applicationId) {
++				rc = AAA_UNABLE_TO_COMPLY;
++				break;
++			}
++	}
++	LM_WARN("No handler answered request %d for app %d, answering %d\n",
++			req->commandCode, req->applicationId, rc);
++
++	ans = AAACreateResponse(req);
++	if(!ans)
++		return 0;
++	if(rc != AAA_UNABLE_TO_COMPLY)
++		ans->flags |= 0x20;
++	set_4bytes(x, rc);
++	if(AAACreateAndAddAVPToMessage(
++			   ans, AVP_Result_Code, AAA_AVP_FLAG_MANDATORY, 0, x, 4)
++			!= AAA_ERR_SUCCESS) {
++		AAAFreeMessage(&ans);
++		return 0;
++	}
++	return ans;
++}
++
+ /**
+  * This callback is added as an internal message listener and used to process
+  * transaction requests.
+@@ -73,6 +121,7 @@ int api_callback(peer *p, AAAMessage *msg, void *ptr)
+ 	handler x;
+ 	enum handler_types type;
+ 	AAAMessage *rsp;
++	int answered = 0;
+ 	if(is_req(msg))
+ 		type = REQUEST_HANDLER;
+ 	else
+@@ -88,6 +137,7 @@ int api_callback(peer *p, AAAMessage *msg, void *ptr)
+ 				if(rsp) {
+ 					//peer_send_msg(p,rsp);
+ 					sm_process(p, Send_Message, rsp, 0, 0);
++					answered = 1;
+ 				}
+ 				lock_get(handlers_lock);
+ 			} else {
+@@ -99,6 +149,14 @@ int api_callback(peer *p, AAAMessage *msg, void *ptr)
+ 	}
+ 	lock_release(handlers_lock);
+ 
++	/* cdp answers an ASR with a Session-Id itself, in Rcv_Process() */
++	if(is_req(msg) && !answered
++			&& !(msg->commandCode == IMS_ASR && msg->sessionId)) {
++		rsp = unanswered_request_answer(msg);
++		if(rsp)
++			sm_process(p, Send_Message, rsp, 0, 0);
++	}
++
+ 	if(!is_req(msg)) {
+ 		/* take care of transactional callback if any */
+ 		t = cdp_take_trans(msg);

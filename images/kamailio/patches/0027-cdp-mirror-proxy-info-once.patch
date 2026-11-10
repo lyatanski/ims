@@ -1,0 +1,33 @@
+Stop cdp's AAANewMessage() looping on a request with Proxy-Info.
+
+When building an answer, AAANewMessage() mirrors the request's Proxy-Info
+AVPs (RFC 6733 6.2). It searched with AAAFindMatchingAVP() starting at the
+AVP it had just found, and that search checks its start AVP first, so it
+returned the same Proxy-Info forever, cloning it into the answer each time.
+Any request with Proxy-Info that cdp answers itself, a DWR for one, sent the
+receiver process into a loop until shm ran out; that peer got no more
+answers and its watchdog failed.
+
+Continue the search after the AVP just mirrored.
+
+diff --git a/src/modules/cdp/diameter_msg.c b/src/modules/cdp/diameter_msg.c
+index 569f21784c..1d4fa8e7c8 100644
+--- a/src/modules/cdp/diameter_msg.c
++++ b/src/modules/cdp/diameter_msg.c
+@@ -299,10 +299,12 @@ AAAMessage *AAANewMessage(AAACommandCode commandCode,
+ 
+ 		msg->res_code = 0;
+ 		/* mirror all the proxy-info avp in the same order */
+-		avp_t = request->avpList.head;
+-		while((avp_t = AAAFindMatchingAVP(
+-					   request, avp_t, 284, 0, AAA_FORWARD_SEARCH))
+-				!= 0) {
++		for(avp_t = request->avpList.head; avp_t; avp_t = avp_t->next) {
++			/* the search starts at, and can return, avp_t itself */
++			avp_t = AAAFindMatchingAVP(
++					request, avp_t, AVP_Proxy_Info, 0, AAA_FORWARD_SEARCH);
++			if(!avp_t)
++				break;
+ 			if((avp = AAACloneAVP(avp_t, 1)) == 0
+ 					|| AAAAddAVPToMessage(msg, avp, msg->avpList.tail)
+ 							   != AAA_ERR_SUCCESS)

@@ -1,0 +1,176 @@
+Send cdp's ASA back to the peer the ASR came from, once.
+
+cdp answers an ASR itself, from the session state machine, before the
+request handlers run. That ASA was built with AAANewMessage(IMS_ASA, 0, ...),
+so it had Application-Id 0 instead of the request's, and:
+- with no session it said 2001 and went out through AAASendMessage(), which
+  routes on the Application-Id AVPs an ASA does not have, so it was never
+  sent and the peer timed out;
+- with a session it went to the peer named by Origin-Host, which is not the
+  one it came from when the ASR crossed a relay.
+RFC 6733 6.2: an answer carries the request's Application-Id and goes back
+to the peer the request came from; 8.5.2: an ASR for a session that is not
+active is answered with 5002 DIAMETER_UNKNOWN_SESSION_ID.
+
+Build the ASA with AAACreateResponse(), answer 5002 when there is no
+session, and send it to the peer the ASR came from (now recorded in the
+message's in_peer), Origin-Host only as a fallback.
+
+Mark the request as answered, so a request handler's answer to it is
+dropped instead of being sent as a second answer (ims_charging also answers
+a Ro ASR that cdp answered for lack of a session), and the no-answer
+fallback skips it. That replaces the "ASR with a Session-Id" exception of
+the fallback: an ASR the state machine did not answer, in a state where it
+does not, now gets 5012 instead of nothing. Only one answer goes out when
+several handlers return one.
+
+diff --git a/src/modules/cdp/api_process.c b/src/modules/cdp/api_process.c
+index 4432dffcb5..3750a23514 100644
+--- a/src/modules/cdp/api_process.c
++++ b/src/modules/cdp/api_process.c
+@@ -49,7 +49,6 @@
+ #include "peerstatemachine.h"
+ #include "cdp_stats.h"
+ #include "config.h"
+-#include "diameter_ims.h"
+ 
+ extern unsigned int *latency_threshold_p; /**<max delay for Diameter call */
+ extern struct cdp_counters_h cdp_cnts_h;
+@@ -134,7 +133,12 @@ int api_callback(peer *p, AAAMessage *msg, void *ptr)
+ 			if(h->type == REQUEST_HANDLER) {
+ 				lock_release(handlers_lock);
+ 				rsp = (x.handler.requestHandler)(msg, h->param);
+-				if(rsp) {
++				if(rsp && (answered || msg->answered)) {
++					LM_DBG("request %d already answered, dropping the "
++						   "handler's answer\n",
++							msg->commandCode);
++					AAAFreeMessage(&rsp);
++				} else if(rsp) {
+ 					//peer_send_msg(p,rsp);
+ 					sm_process(p, Send_Message, rsp, 0, 0);
+ 					answered = 1;
+@@ -149,9 +153,7 @@ int api_callback(peer *p, AAAMessage *msg, void *ptr)
+ 	}
+ 	lock_release(handlers_lock);
+ 
+-	/* cdp answers an ASR with a Session-Id itself, in Rcv_Process() */
+-	if(is_req(msg) && !answered
+-			&& !(msg->commandCode == IMS_ASR && msg->sessionId)) {
++	if(is_req(msg) && !answered && !msg->answered) {
+ 		rsp = unanswered_request_answer(msg);
+ 		if(rsp)
+ 			sm_process(p, Send_Message, rsp, 0, 0);
+diff --git a/src/modules/cdp/authstatemachine.c b/src/modules/cdp/authstatemachine.c
+index bbd20ce742..9d09c5a4c4 100644
+--- a/src/modules/cdp/authstatemachine.c
++++ b/src/modules/cdp/authstatemachine.c
+@@ -796,54 +796,45 @@ error:
+ 	return 0;
+ }
+ 
++/**
++ * Answers an ASR, with 5002 DIAMETER_UNKNOWN_SESSION_ID when there is no
++ * session. Like any answer it carries the request's Application-Id and goes
++ * back to the peer the request came from (RFC 6733 6.2): an ASA has no
++ * Destination-Host nor Auth-Application-Id AVP to route it by.
++ * @param s - the session, NULL if unknown
++ * @param msg - the ASR, marked as answered
++ */
+ void Send_ASA(cdp_session_t *s, AAAMessage *msg)
+ {
+ 	AAAMessage *asa;
+ 	char x[4];
+ 	AAA_AVP *avp;
+-	LM_INFO("sending ASA\n");
+-	if(!s) {
+-		//send an ASA for UNKNOWN_SESSION_ID - use AAASendMessage()
+-		// msg is the ASR received
+-		asa = AAANewMessage(IMS_ASA, 0, 0, msg);
+-		if(!asa)
+-			return;
+-
+-		set_4bytes(x, AAA_SUCCESS);
+-		AAACreateAndAddAVPToMessage(
+-				asa, AVP_Result_Code, AAA_AVP_FLAG_MANDATORY, 0, x, 4);
++	peer *p = msg->in_peer;
+ 
+-		AAASendMessage(asa, 0, 0);
+-	} else {
+-		// send... many cases... maybe not needed.
+-		// for now we do the same
+-		asa = AAANewMessage(IMS_ASA, 0, 0, msg);
+-		if(!asa)
+-			return;
+-
+-		set_4bytes(x, AAA_SUCCESS);
+-		AAACreateAndAddAVPToMessage(
+-				asa, AVP_Result_Code, AAA_AVP_FLAG_MANDATORY, 0, x, 4);
++	LM_INFO("sending ASA\n");
++	asa = AAACreateResponse(msg);
++	if(!asa)
++		return;
++	set_4bytes(x, s ? AAA_SUCCESS : AAA_UNKNOWN_SESSION_ID);
++	AAACreateAndAddAVPToMessage(
++			asa, AVP_Result_Code, AAA_AVP_FLAG_MANDATORY, 0, x, 4);
+ 
++	if(!p) {
+ 		avp = AAAFindMatchingAVP(msg, 0, AVP_Origin_Host, 0, 0);
+-		if(avp) {
+-			// This is because AAASendMessage is not going to find a route to the
+-			// the PCRF because TS 29.214 says no Destination-Host and no Auth-Application-Id
+-			// in the ASA
+-			LM_INFO("sending ASA to peer %.*s\n", avp->data.len, avp->data.s);
+-			peer *p = get_peer_by_fqdn(&avp->data);
+-			if(!p) {
+-				LM_ERR("Peer not found\n");
+-			} else if(!peer_send_msg(p, asa)) {
+-				if(asa)
+-					AAAFreeMessage(&asa); //needed in frequency
+-			} else {
+-				LM_INFO("success sending ASA\n");
+-			}
+-		} else if(!AAASendMessage(asa, 0, 0)) {
+-			LM_ERR("error sending ASA\n");
+-		}
++		if(avp)
++			p = get_peer_by_fqdn(&avp->data);
++	}
++	if(!p) {
++		LM_ERR("no peer to send the ASA to\n");
++		AAAFreeMessage(&asa);
++		return;
++	}
++	if(!peer_send_msg(p, asa)) {
++		LM_ERR("error sending ASA to peer %.*s\n", p->fqdn.len, p->fqdn.s);
++		AAAFreeMessage(&asa);
++		return;
+ 	}
++	msg->answered = 1;
+ }
+ 
+ int add_vendor_specific_application_id_group(
+diff --git a/src/modules/cdp/diameter.h b/src/modules/cdp/diameter.h
+index 580dddf43d..fdaf59cf26 100644
+--- a/src/modules/cdp/diameter.h
++++ b/src/modules/cdp/diameter.h
+@@ -275,6 +275,7 @@ typedef struct _message_t
+ 	AAA_AVP_LIST avpList;	 /**< list of AVPs in the message */
+ 	str buf;				 /**< Diameter network representation */
+ 	void *in_peer;			 /**< Peer that this message was received from */
++	int answered;			 /**< request already answered by cdp itself */
+ } AAAMessage;
+ 
+ 
+diff --git a/src/modules/cdp/peerstatemachine.c b/src/modules/cdp/peerstatemachine.c
+index 98c16ee810..e8481eb83a 100644
+--- a/src/modules/cdp/peerstatemachine.c
++++ b/src/modules/cdp/peerstatemachine.c
+@@ -1346,6 +1346,7 @@ void Rcv_Process(peer *p, AAAMessage *msg)
+ 	if(!msg) {
+ 		return;
+ 	}
++	msg->in_peer = p;
+ 
+ 	if(msg->sessionId)
+ 		session = cdp_get_session(msg->sessionId->data);
