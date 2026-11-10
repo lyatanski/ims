@@ -397,10 +397,10 @@ index 8e34619..2397ad3 100644
  {
  	char l_msg_buf[MNL_SOCKET_BUFFER_SIZE];
  	char l_auth_algo_buf[XFRM_TMPLS_BUF_SIZE];
-@@ -248,6 +248,16 @@ int add_sa(struct mnl_socket *nl_sock, const struct ip_addr *src_addr_param,
- 	mnl_attr_put(l_nlh, XFRMA_ALG_CRYPT,
+@@ -428,6 +428,16 @@ int add_sa(struct mnl_socket *nl_sock, const struct ip_addr *src_addr_param,
  			sizeof(struct xfrm_algo) + l_enc_algo->alg_key_len, l_enc_algo);
  
+ send:
 +	// Start the outbound sequence number somewhere other than 1: an SA put
 +	// back for a tunnel the peer is still using has to number past what the
 +	// peer's replay window has already seen
