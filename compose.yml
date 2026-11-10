@@ -211,7 +211,7 @@ services:
   test:
     profiles:
     - test
-    image: ghcr.io/lyatanski/pro2call
+    image: ${PRO2CALL:-ghcr.io/lyatanski/pro2call}
     environment:
       PGW_IP:            smf
       IMS_PDN_TYPE:      ${PDN_TYPE:-ipv4}   # ipv6 / ipv4v6 run SIP and media over IPv6
@@ -229,6 +229,14 @@ services:
       IMS_MSISDN_DIGITS:  9
       CALL_URI:  ${CALL_URI:-tel}
       CALL_REVERSE_SLEEP_MS: 30000
+      # Passed through only when set, for the soak (.github/workflows/soak.yml):
+      # unset, pro2call's own defaults apply
+      CALL_DURATION_S:
+      CALL_GAP_MS:
+      CALL_HOLD_MS:
+      CALL_MEDIA:
+      CALL_REPORT_S:
+      REG_EVENT_EXPIRES:
     cap_add:
     - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
     - BPF         # loading the GTP-U datapath
