@@ -35,9 +35,9 @@ jobs:
       CALL_GAP_MS: 2000
       CALL_MEDIA: -1       # RTP on every call: the UPF and the bearers are soaked too
       CALL_REPORT_S: 300
-      # Each UE's OCS account (billing.yml) holds 10.00 unless set: about 45
-      # minutes of talk, then every later INVITE from it gets 402
-      CREDIT: 1000000
+      # Each UE's OCS account (billing.yml) holds 5 minutes of talk unless
+      # set, then every later INVITE from it gets 402
+      MINUTES: 100000
     steps:
     - uses: actions/checkout@v7
     - name: Length

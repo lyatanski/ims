@@ -18,27 +18,24 @@ services:
   # are written here, into the volume the engine reads them from.
   preload:
     image: alpine
-    configs:
-    - source: Rates.csv
-      target: /Rates.csv
     volumes:
     - tp:/tp
     command:
     - sh
     - -c
     - |
-      cp /Rates.csv /tp/
-      # One account per subscriber, named by its MSISDN. The CCR's
-      # Subscription-Id is the MSISDN, or the IMSI with RO_IMPI, so the
-      # filter takes either. MSISDN and IMSI follow open5gs/hss.yml.
+      # One account per subscriber, named by its MSISDN: MINUTES of voice
+      # (5 unless set), billed by the second at no cost, and nothing once
+      # they are spent. The CCR's Subscription-Id is the MSISDN, or the IMSI
+      # with RO_IMPI, so the filter takes either. MSISDN and IMSI follow
+      # open5gs/hss.yml.
       plmn=${MCC}${MNC}
       {
         echo '#Tenant,ID,FilterIDs,Weights,Blockers,Opts,BalanceID,BalanceFilterIDs,BalanceWeights,BalanceBlockers,BalanceType,BalanceUnits,BalanceUnitFactors,BalanceOpts,BalanceCostIncrements,BalanceAttributeIDs,BalanceRateProfileIDs,ThresholdIDs'
         for i in $$(seq 1 ${SCALE}); do
           msisdn=$$(printf '%s%09d' ${DIAL} $$i)
           imsi=$$(printf '%s%0*d' $$plmn $$((15 - $${#plmn})) $$i)
-          echo "cgrates.org,$$msisdn,*string:~*req.Account:$$msisdn|$$imsi,;10,,,VOICE_5M,*string:~*req.ToR:*voice,;20,,*abstract,5m,,,;0;0;;1s,,,*none"
-          echo "cgrates.org,$$msisdn,,,,,MONETARY,,;10,,*concrete,${CREDIT:-10},,,;;;;1s,,RP_VOICE,"
+          echo "cgrates.org,$$msisdn,*string:~*req.Account:$$msisdn|$$imsi,;10,,,VOICE,*string:~*req.ToR:*voice,;20,,*abstract,${MINUTES:-5}m,,,;0;0;;1s,,,*none"
         done
       } > /tp/Accounts.csv
       until wget -qO- --header 'Content-Type: application/json' \
@@ -99,22 +96,15 @@ configs:
                   "tpOutPath": "",
               },
           ],
-          "rates": {
-              "enabled": true,
-          },
           "accounts": {
               "enabled": true,
               // the account is picked by a *string filter on the number
               "stringIndexedFields": ["*req.Account"],
-              "conns": {
-                  "*rates": [{ "connIDs": ["*internal"] }],
-              },
           },
           "sessions": {
               "enabled": true,
               "conns": {
                   "*accounts": [{ "connIDs": ["*internal"] }],
-                  "*rates": [{ "connIDs": ["*internal"] }],
                   "*ees": [{ "connIDs": ["*internal"] }],
               },
           },
@@ -130,7 +120,6 @@ configs:
                           { "tag": "Account", "path": "*exp.Account", "type": "*variable", "value": "~*req.Account" },
                           { "tag": "Destination", "path": "*exp.Destination", "type": "*variable", "value": "~*req.Destination" },
                           { "tag": "Usage", "path": "*exp.Usage", "type": "*variable", "value": "~*opts.*accountsCost.Abstracts{*duration}" },
-                          { "tag": "Cost", "path": "*exp.Cost", "type": "*variable", "value": "~*opts.*accountsCost.Concretes" },
                       ],
                   },
               ],
@@ -317,14 +306,6 @@ configs:
           },
       }
 
-  # The rates LoaderS reads, beside the accounts `preload` writes. Every
-  # subscriber has an account of its own: five free minutes, then 0.22 a
-  # minute billed by the second out of CREDIT (10.00 unless set; about 45
-  # minutes of talk).
-  Rates.csv:
-    content: |
-      #Tenant,ID,FilterIDs,Weights,MinCost,MaxCost,MaxCostStrategy,RateID,RateFilterIDs,RateActivationStart,RateWeights,RateBlocker,RateIntervalStart,RateFixedFee,RateRecurrentFee,RateUnit,RateIncrement
-      cgrates.org,RP_VOICE,*string:~*req.ToR:*voice,;0,0,0,*free,RT_ANY,,"* * * * *",;0,false,0s,0,0.22,1m,1s
 
 volumes:
   tp:

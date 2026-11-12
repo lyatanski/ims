@@ -229,13 +229,16 @@ services:
       IMS_MSISDN_DIGITS:  9
       CALL_URI:  ${CALL_URI:-tel}
       CALL_REVERSE_SLEEP_MS: 30000
-      # Passed through only when set, for the soak (.github/workflows/soak.yml):
-      # unset, pro2call's own defaults apply
+      # Passed through only when set, for the soak (.github/workflows/soak.yml)
+      # and the charging limits test: unset, pro2call's own defaults apply
       CALL_DURATION_S:
       CALL_GAP_MS:
       CALL_HOLD_MS:
       CALL_MEDIA:
       CALL_REPORT_S:
+      CALL_REVERSE:
+      CALL_EXPECT_STATUS:
+      CALL_EXPECT_RELEASE:
       REG_EVENT_EXPIRES:
     cap_add:
     - NET_ADMIN   # ESP SAs and policies, the transparent UE socket, the TC hook
