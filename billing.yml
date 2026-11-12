@@ -4,25 +4,43 @@ services:
     configs:
     - source: cgrates.json
       target: /etc/cgrates/cgrates.json
-    - source: Rates.csv
-      target: /etc/cgrates/tp/Rates.csv
-    - source: Accounts.csv
-      target: /etc/cgrates/tp/Accounts.csv
+    volumes:
+    - tp:/etc/cgrates/tp
     expose:
     - 3868/tcp
     - 2012/tcp
     - 2080/tcp
 
-  # LoaderS reads the tariff plan (the *.csv configs below) into the engine's
-  # internal DB. It is told to once: a periodic run would put every balance
-  # back to its initial value, and an inotify one never sees files that were
-  # there before it started.
+  # LoaderS reads the tariff plan into the engine's internal DB. It is told
+  # to once: a periodic run would put every balance back to its initial
+  # value, and an inotify one never sees files that were there before it
+  # started. The engine image has no shell, so the per-subscriber accounts
+  # are written here, into the volume the engine reads them from.
   preload:
     image: alpine
+    configs:
+    - source: Rates.csv
+      target: /Rates.csv
+    volumes:
+    - tp:/tp
     command:
     - sh
     - -c
     - |
+      cp /Rates.csv /tp/
+      # One account per subscriber, named by its MSISDN. The CCR's
+      # Subscription-Id is the MSISDN, or the IMSI with RO_IMPI, so the
+      # filter takes either. MSISDN and IMSI follow open5gs/hss.yml.
+      plmn=${MCC}${MNC}
+      {
+        echo '#Tenant,ID,FilterIDs,Weights,Blockers,Opts,BalanceID,BalanceFilterIDs,BalanceWeights,BalanceBlockers,BalanceType,BalanceUnits,BalanceUnitFactors,BalanceOpts,BalanceCostIncrements,BalanceAttributeIDs,BalanceRateProfileIDs,ThresholdIDs'
+        for i in $$(seq 1 ${SCALE}); do
+          msisdn=$$(printf '%s%09d' ${DIAL} $$i)
+          imsi=$$(printf '%s%0*d' $$plmn $$((15 - $${#plmn})) $$i)
+          echo "cgrates.org,$$msisdn,*string:~*req.Account:$$msisdn|$$imsi,;10,,,VOICE_5M,*string:~*req.ToR:*voice,;20,,*abstract,5m,,,;0;0;;1s,,,*none"
+          echo "cgrates.org,$$msisdn,,,,,MONETARY,,;10,,*concrete,${CREDIT:-10},,,;;;;1s,,RP_VOICE,"
+        done
+      } > /tp/Accounts.csv
       until wget -qO- --header 'Content-Type: application/json' \
           --post-data '{"jsonrpc":"2.0","id":1,"method":"LoaderSv1.Run","params":[{"LoaderID":"*default"}]}' \
           http://ocs:2080/jsonrpc | tee /dev/stderr | grep -q '"error":null'
@@ -86,9 +104,8 @@ configs:
           },
           "accounts": {
               "enabled": true,
-              // the account is picked by a *prefix filter, and with indexed
-              // selects one only matches over an indexed field
-              "prefixIndexedFields": ["*req.Account"],
+              // the account is picked by a *string filter on the number
+              "stringIndexedFields": ["*req.Account"],
               "conns": {
                   "*rates": [{ "connIDs": ["*internal"] }],
               },
@@ -300,16 +317,14 @@ configs:
           },
       }
 
-  # The tariff plan LoaderS reads. Every subscriber shares account IMS: five
-  # free minutes, then 0.22 a minute billed by the second out of CREDIT
-  # (10.00 unless set; about 45 minutes of talk across all subscribers).
+  # The rates LoaderS reads, beside the accounts `preload` writes. Every
+  # subscriber has an account of its own: five free minutes, then 0.22 a
+  # minute billed by the second out of CREDIT (10.00 unless set; about 45
+  # minutes of talk).
   Rates.csv:
     content: |
       #Tenant,ID,FilterIDs,Weights,MinCost,MaxCost,MaxCostStrategy,RateID,RateFilterIDs,RateActivationStart,RateWeights,RateBlocker,RateIntervalStart,RateFixedFee,RateRecurrentFee,RateUnit,RateIncrement
       cgrates.org,RP_VOICE,*string:~*req.ToR:*voice,;0,0,0,*free,RT_ANY,,"* * * * *",;0,false,0s,0,0.22,1m,1s
 
-  Accounts.csv:
-    content: |
-      #Tenant,ID,FilterIDs,Weights,Blockers,Opts,BalanceID,BalanceFilterIDs,BalanceWeights,BalanceBlockers,BalanceType,BalanceUnits,BalanceUnitFactors,BalanceOpts,BalanceCostIncrements,BalanceAttributeIDs,BalanceRateProfileIDs,ThresholdIDs
-      cgrates.org,IMS,*prefix:~*req.Account:${DIAL}|${MCC}${MNC},;10,,,VOICE_5M,*string:~*req.ToR:*voice,;20,,*abstract,5m,,,;0;0;;1s,,,*none
-      cgrates.org,IMS,,,,,MONETARY,,;10,,*concrete,${CREDIT:-10},,,;;;;1s,,RP_VOICE,
+volumes:
+  tp:
