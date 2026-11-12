@@ -45,6 +45,13 @@ jobs:
     needs:
     - images
     runs-on: ubuntu-latest
+    env:
+      # Every pair places one call of each kind, each way. kill and nocredit
+      # go last: kill spends the caller's OCS credit, cut to CREDIT so the
+      # call ends within seconds, and nocredit then expects 402
+      CALL_MIX: ok,busy,noanswer,cancel,kill,nocredit
+      CREDIT: 20s
+      CALL_GAP_MS: 2000
     steps:
     - uses: actions/checkout@v7
     - name: Set Up

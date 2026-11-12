@@ -145,6 +145,11 @@ test:
     cc: "{{ .Values.global.e164.home }}"
     digits: 9
   uri: tel
+  # The calls each pair places, one after the other and then each the other
+  # way (pro2call's CALL_MIX): answered, 486 busy, CANCEL while ringing,
+  # CANCEL during early media. kill and nocredit need an OCS with a small
+  # balance, which the chart does not deploy
+  calls: ok,busy,noanswer,cancel
   # ipv4 | ipv6 | ipv4v6: the PDN the UE asks for. ipv6 and ipv4v6 register
   # and call over IPv6, which needs an IPv6 gm.addresses entry and a dual-stack cluster.
   pdnType: ipv4

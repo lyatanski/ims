@@ -24,9 +24,9 @@ services:
     - sh
     - -c
     - |
-      # One account per subscriber, named by its MSISDN: MINUTES of voice
-      # (5 unless set), billed by the second at no cost, and nothing once
-      # they are spent. The CCR's Subscription-Id is the MSISDN, or the IMSI
+      # One account per subscriber, named by its MSISDN: CREDIT of voice, a
+      # duration (5m unless set, 20s for a call the credit cuts short),
+      # billed by the second at no cost, and nothing once it is spent. The CCR's Subscription-Id is the MSISDN, or the IMSI
       # with RO_IMPI, so the filter takes either. MSISDN and IMSI follow
       # open5gs/hss.yml.
       plmn=${MCC}${MNC}
@@ -35,7 +35,7 @@ services:
         for i in $$(seq 1 ${SCALE}); do
           msisdn=$$(printf '%s%09d' ${DIAL} $$i)
           imsi=$$(printf '%s%0*d' $$plmn $$((15 - $${#plmn})) $$i)
-          echo "cgrates.org,$$msisdn,*string:~*req.Account:$$msisdn|$$imsi,;10,,,VOICE,*string:~*req.ToR:*voice,;20,,*abstract,${MINUTES:-5}m,,,;0;0;;1s,,,*none"
+          echo "cgrates.org,$$msisdn,*string:~*req.Account:$$msisdn|$$imsi,;10,,,VOICE,*string:~*req.ToR:*voice,;20,,*abstract,${CREDIT:-5m},,,;0;0;;1s,,,*none"
         done
       } > /tp/Accounts.csv
       until wget -qO- --header 'Content-Type: application/json' \

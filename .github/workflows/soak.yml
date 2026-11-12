@@ -37,7 +37,11 @@ jobs:
       CALL_REPORT_S: 300
       # Each UE's OCS account (billing.yml) holds 5 minutes of talk unless
       # set, then every later INVITE from it gets 402
-      MINUTES: 100000
+      CREDIT: 100000m
+      # Each pair's calls, in turn: a test of its own (pro2call's CALL_MIX).
+      # No kill/nocredit: they empty the account, which the loop never
+      # refills
+      CALL_MIX: ok,busy,noanswer,cancel
     steps:
     - uses: actions/checkout@v7
     - name: Length
