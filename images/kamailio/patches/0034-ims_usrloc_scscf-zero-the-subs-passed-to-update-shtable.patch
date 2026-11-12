@@ -1,0 +1,40 @@
+Zero the subs_t that update_subscriber() hands to presence.
+
+update_subscriber() fills in seven fields of a stack subs_t and passes it
+to presence's update_shtable() with REMOTE_TYPE. The rest of the struct is
+whatever the stack held, and update_shtable() reads more than those seven:
+
+	if(subs->received_time == 0)
+		subs->received_time = (unsigned int)time(NULL);
+	...
+	if((type & REMOTE_TYPE) && s->received_time > subs->received_time)
+		return 0;	/* LWW: skip a stale update */
+	...
+	s->remote_cseq = subs->remote_cseq;
+	s->received_time = subs->received_time;
+
+Since presence's last-write-wins check (b5cd0046f8) a non-zero garbage
+received_time lower than the entry's skips the update as stale - the
+reg-event subscription's expires in the dialog table is not refreshed -
+and a higher one is stored in the entry, so later genuine updates look
+stale in turn. remote_cseq is copied from the garbage either way. Seen
+under valgrind memcheck as the S-CSCF built reg-event NOTIFYs
+("Conditional jump or move depends on uninitialised value(s)" at
+update_shtable, origin the stack frame of update_subscriber).
+
+new_subscriber() and free_subscriber() in the same file already memset
+their subs_t; do the same here.
+
+diff --git a/src/modules/ims_usrloc_scscf/subscribe.c b/src/modules/ims_usrloc_scscf/subscribe.c
+index fd7b28c769..7be7233805 100644
+--- a/src/modules/ims_usrloc_scscf/subscribe.c
++++ b/src/modules/ims_usrloc_scscf/subscribe.c
+@@ -386,6 +386,8 @@ int update_subscriber(impurecord_t *urec, reg_subscriber **_reg_subscriber,
+ 	subs_t subs;
+ 	unsigned int hash_code = 0;
+ 	reg_subscriber *rs = *_reg_subscriber;
++
++	memset(&subs, 0, sizeof(subs_t));
+ 	if(expires) {
+ 		rs->expires = *expires;
+ 	} else {

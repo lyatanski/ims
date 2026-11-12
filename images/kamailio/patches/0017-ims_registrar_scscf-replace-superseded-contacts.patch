@@ -8,116 +8,202 @@ expires: lookup() forks terminating requests to it, the 200 OK lists it,
 and the P-CSCF keeps its contact and IPsec tunnel, since only a terminated
 reg-event contact removes those.
 
-New modparam replace_contacts, default 0. With it set, once the Contacts of
-a REGISTER are inserted or updated, every other valid binding of the IMPU
-that one of them replaces is de-registered:
+usrloc now keeps the private user identity that registered each binding:
+ucontact.private_identity, the new private_identity column of the contact
+table (version 7, NULL for older rows) and, for a binding restored from the
+HSS, the User-Name of the SCSCF-Restoration-Info AVP. save() takes it from
+the username of the REGISTER's credentials only: without them
+cscf_get_private_identity() falls back to the IMPU, the same string for
+every UE sharing it.
 
+Once the Contacts of a REGISTER are inserted or updated, every other valid
+binding of the IMPU that one of them replaces is de-registered (always on,
+there is no modparam):
+
+- Only a binding of the same IMPI is replaced: another IMPI sharing the
+  public user identity (TS 23.228 4.3.3.4) is another UE, and a binding
+  whose IMPI is not known is left alone.
 - A Contact with a reg-id (multiple registrations, RFC 5626) replaces the
   registration flow with the same +sip.instance (URN compared without its
   angle brackets) and reg-id - step 3.
-- A Contact without one replaces every earlier registration of the private
-  user identity with another contact address - step 2 - whatever its
-  +sip.instance, or none: a UE that sends no instance, or the same SIM in a
-  new handset, is replaced too. usrloc keeps no IMPI per binding, but an
-  IMPU record belongs to the one IMPI whose subscription it holds, so that
-  is every other binding of the IMPU.
+- A Contact without one replaces every other registration of the IMPI -
+  step 2 - whatever its +sip.instance, or none.
 - An emergency (sos) Contact only replaces an emergency binding and a normal
   one only a normal one (5.4.1.2.1D NOTE 2). A Contact being removed
-  (expires 0) replaces nothing, and neither is a binding the REGISTER itself
-  names, so several Contacts registered together stay.
+  (expires 0) replaces nothing, and a binding the REGISTER itself inserted
+  or refreshed is never replaced, so several Contacts registered together
+  stay.
 
-The replaced binding is de-registered on the spot, as reg_rpc_dereg_impu()
-does: CONTACT_DELETED, so VALID_CONTACT() is false for it at once and the
-usrloc timer only unlinks it, silently, and releases its dialogs when it
-deletes it. The NOTIFY goes out now rather than on the next timer run, to
-the subscribers of every IMPU of the implicit set: update_contacts_helper()
-runs once per IMPU and the binding is shared, so the bindings a REGISTER
-replaced are remembered for the later runs (per process, by message id and
-pid). It carries the binding as an explicit de-registration contact,
-terminated with event "unregistered": 5.4.2.1.2 allows only "unregistered",
-"deactivated" or "rejected" for "each replaced or removed binding", and a
-P-CSCF acts only on those under an active registration (5.2.5.2). The event
-type is IMS_REGISTRAR_CONTACT_UNREGISTERED_IMPLICIT: _UNREGISTERED and
-_EXPIRED make create_notifications() send Subscription-State: terminated,
-which would end the P-CSCF's subscription while the IMPU is still registered
-over the new contact.
+The replaced binding is unlinked from the IMPU on the spot, after a NOTIFY to
+the IMPU's subscribers that carries it as an explicit de-registration
+contact, terminated with event "unregistered": 5.4.2.1.2 allows only
+"unregistered", "deactivated" or "rejected" for "each replaced or removed
+binding", and a P-CSCF acts only on those under an active registration
+(5.2.5.2). The event type is IMS_REGISTRAR_CONTACT_UNREGISTERED_IMPLICIT:
+_UNREGISTERED and _EXPIRED make create_notifications() send
+Subscription-State: terminated, which would end the P-CSCF's subscription
+while the IMPU is still registered over the new contact.
+update_contacts_helper() runs once per IMPU of the registration, so each
+IMPU unlinks and notifies its own copy; generate_reginfo_full() skips an
+explicit de-registration contact that is still validly bound to the IMPU it
+renders, which lists it with its own state.
 
 process_xml_for_explit_dereg_contact() renders every explicit
 de-registration contact with event "unregistered" instead of "expired": the
-other two producers, the de-REGISTER in save.c and reg_rpc_dereg_impu()
-(patch 0006), remove a binding too, and "unregistered" is what RFC 3680 and
-5.4.2.1.2 / 5.4.1.5 call that.
+other producers, the de-REGISTER in save.c and reg_rpc_dereg_impu(), remove
+a binding too, and "unregistered" is what RFC 3680 and 5.4.2.1.2 / 5.4.1.5
+call that.
 
-diff --git a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
-index b134a00865..d5a31324ae 100644
---- a/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
-+++ b/src/modules/ims_registrar_scscf/doc/ims_registrar_scscf_admin.xml
-@@ -506,6 +506,39 @@ modparam("ims_registrar_scscf", "scscf_restoration_info_enabled", 1)
-       </example>
-     </section>
+diff --git a/src/lib/srdb1/schema/contact.xml b/src/lib/srdb1/schema/contact.xml
+index f4381ff2cb..895851d0a0 100644
+--- a/src/lib/srdb1/schema/contact.xml
++++ b/src/lib/srdb1/schema/contact.xml
+@@ -9,7 +9,7 @@
  
-+    <section>
-+      <title>replace_contacts (int)</title>
-+
-+      <para>If set to 1 - a REGISTER replaces the earlier bindings of the same
-+      UE, as TS 24.229 5.4.1.2.1 has it, e.g. after the UE came back from a new
-+      IP address without de-registering. A Contact with a reg-id (multiple
-+      registrations, RFC 5626) replaces the binding with the same
-+      +sip.instance and reg-id. A Contact without one replaces every other
-+      binding of the IMPU, with or without +sip.instance: the IMPU belongs to
-+      a single private user identity, and that identity registering a new
-+      contact address de-registers the old ones. An emergency (sos) Contact
-+      only replaces emergency bindings and a normal one only normal ones, and
-+      a Contact being removed (expires 0) replaces nothing.
-+      The replaced binding is de-registered at once: lookup() and the 200 OK
-+      stop using it, a NOTIFY listing it terminated with event "unregistered"
-+      goes to the subscribers of every IMPU of the implicit set (e.g. the
-+      P-CSCF), keeping their subscriptions active, and the next usrloc timer
-+      run removes it and releases its dialogs.
-+      If set to 0 - bindings are matched on the Contact URI only and an
-+      abandoned binding stays until it expires.
-+      </para>
-+
-+      <para><emphasis> Default value is 0. </emphasis></para>
-+
-+      <example>
-+        <title>Set <varname>replace_contacts</varname> parameter</title>
-+
-+        <programlisting format="linespecific">...
-+        modparam("ims_registrar_scscf", "replace_contacts", 1)
-+...</programlisting>
-+      </example>
-+    </section>
-+
-   </section>
+ <table id="contact" xmlns:db="http://docbook.org/ns/docbook">
+     <name>contact</name>
+-    <version>6</version>
++    <version>7</version>
+     <type db="db_mysql">&MYSQL_TABLE_TYPE;</type>
+     <description>
+         <db:para>Table for storage engine for SCSCF contacts. More information at:
+@@ -92,6 +92,15 @@
+       <description>Call-ID</description>
+     </column>
  
-   <section>
-diff --git a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
-index 888fd90672..a2fb2f6fba 100644
---- a/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
-+++ b/src/modules/ims_registrar_scscf/ims_registrar_scscf_mod.c
-@@ -105,6 +105,8 @@ unsigned int send_vs_callid_avp =
- 		1; /* flag to enable/disable proprietary use of a callid AVP. TODO: add call-id as per TS129.229 */
- int skip_multiple_bindings_on_reg_resp =
- 		0; /* For RE-REGISTRATION in 200 OK add only the current contact and skip all other bindings */
-+int replace_contacts =
-+		0; /* A REGISTER replaces the earlier bindings of the same UE (TS 24.229 5.4.1.2.1) */
++    <column id="private_identity">
++      <name>private_identity</name>
++      <type>string</type>
++      <size>&uri_len;</size>
++      <null/>
++      <default><null/></default>
++      <description>Private user identity (IMPI) that registered the contact</description>
++    </column>
++
+     <index>
+       <name>contact</name>
+       <colref linkend="contact_field"/>
+diff --git a/src/modules/ims_registrar_scscf/cxdx_avp.c b/src/modules/ims_registrar_scscf/cxdx_avp.c
+index 68d94690e7..212a94d1cd 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_avp.c
++++ b/src/modules/ims_registrar_scscf/cxdx_avp.c
+@@ -1047,12 +1047,14 @@ int cxdx_get_charging_info(
+ }
  
- int ue_unsubscribe_on_dereg =
- 		0; /*many UEs do not unsubscribe on de reg - therefore we should remove their subscription and not send a notify
-@@ -338,6 +340,7 @@ static param_export_t params[] = {
- 	{"notification_processes", PARAM_INT, &notification_processes},
- 	{"send_vs_callid_avp", PARAM_INT, &send_vs_callid_avp},
- 	{"skip_multiple_bindings_on_reg_resp", PARAM_INT, &skip_multiple_bindings_on_reg_resp},
-+	{"replace_contacts", PARAM_INT, &replace_contacts},
- 	{0, 0, 0}
- };
+ int cxdx_get_scscf_restoration_info(
+-		AAAMessage *msg, str *path, str *contact, str *call_id)
++		AAAMessage *msg, str *user_name, str *path, str *contact, str *call_id)
+ {
+ 	AAA_AVP_LIST list, ri_list;
+ 	AAA_AVP *avp;
+ 	int ret = 0;
  
++	user_name->s = 0;
++	user_name->len = 0;
+ 	path->s = 0;
+ 	path->len = 0;
+ 	contact->s = 0;
+@@ -1108,6 +1110,12 @@ int cxdx_get_scscf_restoration_info(
+ 		LM_WARN("Restoration-Info without Contact\n");
+ 	}
+ 
++	if(ret) {
++		avp = cdpb.AAAFindMatchingAVPList(list, 0, AVP_User_Name, 0, 0);
++		if(avp && avp->data.len)
++			*user_name = avp->data;
++	}
++
+ 	cdpb.AAAFreeAVPList(&ri_list);
+ 	cdpb.AAAFreeAVPList(&list);
+ 	return ret;
+diff --git a/src/modules/ims_registrar_scscf/cxdx_avp.h b/src/modules/ims_registrar_scscf/cxdx_avp.h
+index 109b7a35ee..084ddb5df9 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_avp.h
++++ b/src/modules/ims_registrar_scscf/cxdx_avp.h
+@@ -203,9 +203,11 @@ int cxdx_add_scscf_restoration_info(
+ 
+ /**
+  * Returns the Path/Contact/Call-ID of the first Restoration-Info in the first
+- * SCSCF-Restoration-Info AVP, if any. A Restoration-Info missing its Contact
+- * or its Path counts as absent.
++ * SCSCF-Restoration-Info AVP, if any, and that AVP's User-Name. A
++ * Restoration-Info missing its Contact or its Path counts as absent.
+  * @param msg - the Diameter message
++ * @param user_name - filled with the IMPI that registered the Contact, or
++ * {0,0} if absent
+  * @param path - filled with the Path, or {0,0} if absent
+  * @param contact - filled with the Contact, or {0,0} if absent
+  * @param call_id - filled with the Call-ID, or {0,0} if absent (optional in
+@@ -213,7 +215,7 @@ int cxdx_add_scscf_restoration_info(
+  * @returns 1 if a usable Restoration-Info was present, 0 otherwise
+  */
+ int cxdx_get_scscf_restoration_info(
+-		AAAMessage *msg, str *path, str *contact, str *call_id);
++		AAAMessage *msg, str *user_name, str *path, str *contact, str *call_id);
+ 
+ /**
+  * Creates and adds a Supported-Features AVP for Feature-List-ID 1, the Cx
+diff --git a/src/modules/ims_registrar_scscf/cxdx_sar.c b/src/modules/ims_registrar_scscf/cxdx_sar.c
+index 621fafed77..56d1880908 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_sar.c
++++ b/src/modules/ims_registrar_scscf/cxdx_sar.c
+@@ -102,6 +102,10 @@ void free_saved_transaction_data(saved_transaction_t *data)
+ 		shm_free(data->public_identity.s);
+ 		data->public_identity.len = 0;
+ 	}
++	if(data->private_identity.s) {
++		shm_free(data->private_identity.s);
++		data->private_identity.len = 0;
++	}
+ 	free_contact_buf(data->contact_header);
+ 	shm_free(data);
+ }
+@@ -117,7 +121,7 @@ void async_cdp_callback(
+ 
+ 	str xml_data = {0, 0}, ccf1 = {0, 0}, ccf2 = {0, 0}, ecf1 = {0, 0},
+ 		ecf2 = {0, 0};
+-	restoration_info_t ri = {{0, 0}, {0, 0}, {0, 0}};
++	restoration_info_t ri = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+ 	ims_subscription *s = 0;
+ 	rerrno = R_FINE;
+ 
+@@ -215,7 +219,7 @@ void async_cdp_callback(
+ 		 * looking in a REGISTER's SAA. */
+ 		if(data->script_assignment)
+ 			cxdx_get_scscf_restoration_info(
+-					saa, &ri.path, &ri.contact, &ri.callid);
++					saa, &ri.impi, &ri.path, &ri.contact, &ri.callid);
+ 
+ 		if(!rc && !experimental_rc) {
+ 			LM_ERR("bad SAA result code\n");
+@@ -291,8 +295,8 @@ void async_cdp_callback(
+ 
+ 		//here we update the contacts and also build the new contact header for the 200 OK reply
+ 		if(update_contacts(req, data->domain, &data->public_identity,
+-				   data->sar_assignment_type, &s, &ccf1, &ccf2, &ecf1, &ecf2,
+-				   &data->contact_header, &ri)
++				   &data->private_identity, data->sar_assignment_type, &s,
++				   &ccf1, &ccf2, &ecf1, &ecf2, &data->contact_header, &ri)
+ 				<= 0) {
+ 			LM_ERR("Error processing REGISTER\n");
+ 			rerrno = R_SAR_FAILED;
+diff --git a/src/modules/ims_registrar_scscf/cxdx_sar.h b/src/modules/ims_registrar_scscf/cxdx_sar.h
+index 639039cdfd..1a2db0465f 100644
+--- a/src/modules/ims_registrar_scscf/cxdx_sar.h
++++ b/src/modules/ims_registrar_scscf/cxdx_sar.h
+@@ -65,6 +65,7 @@ typedef struct saved_transaction
+ 	int sar_assignment_type;
+ 	int script_assignment; //sent by assign_server() for a request other than REGISTER: nothing to reply to, no Contacts to store
+ 	str public_identity;
++	str private_identity; //IMPI of the REGISTER, stored with its contacts
+ 	udomain_t *domain;
+ 	contact_for_header_t *
+ 			contact_header; //used to send the 200 OK with contacts after async callback for dereg where we don't rebuild the contacts
 diff --git a/src/modules/ims_registrar_scscf/registrar_notify.c b/src/modules/ims_registrar_scscf/registrar_notify.c
-index 73428a8723..3bfb336d44 100644
+index e64a63e05a..d284fa98fb 100644
 --- a/src/modules/ims_registrar_scscf/registrar_notify.c
 +++ b/src/modules/ims_registrar_scscf/registrar_notify.c
-@@ -1910,8 +1910,12 @@ static void process_xml_for_explit_dereg_contact(
+@@ -1945,8 +1945,12 @@ static void process_xml_for_explit_dereg_contact(
  	LM_DBG("Processing XML for explicit dereg contact address: <%.*s>\n",
  			explit_dereg_contact.len, explit_dereg_contact.s);
  
@@ -125,25 +211,65 @@ index 73428a8723..3bfb336d44 100644
 +	 * de-REGISTER, by the network (reg_rpc_dereg_impu()), or replaced by a
 +	 * later registration - it did not run out: "unregistered" (RFC 3680),
 +	 * one of the values TS 24.229 5.4.2.1.2 allows for a removed binding */
- 	sprintf(pad->s, contact_s_q.s, 1, r_terminated.len, r_terminated.s,
--			r_expired.len, r_expired.s, 0);
-+			r_unregistered.len, r_unregistered.s, 0);
+ 	reginfo_printf(buf, contact_s_q.s, (void *)1, r_terminated.len,
+-			r_terminated.s, r_expired.len, r_expired.s, 0, 0.0);
++			r_terminated.s, r_unregistered.len, r_unregistered.s, 0, 0.0);
+ 	reginfo_append(buf, &uri_s);
  
- 	pad->len = strlen(pad->s);
- 	STR_APPEND(*buf, *pad);
+ 	reginfo_append(buf, &explit_dereg_contact);
+@@ -2038,6 +2042,27 @@ static void process_xml_for_contact(str *buf, ucontact_t *ptr)
+  * @returns the str with the XML content
+  * if it is a new subscription we do things like subscribe to updates on IMPU, etc
+  */
++/*!
++ * Whether r holds a valid binding with contact address uri. Called with the
++ * domain locked for r.
++ */
++static int impu_has_valid_contact(impurecord_t *r, str *uri)
++{
++	impu_contact_t *impucontact;
++	ucontact_t *c;
++	int found = 0;
++
++	for(impucontact = r->linked_contacts.head; impucontact && !found;
++			impucontact = impucontact->next) {
++		c = impucontact->contact;
++		ul.lock_contact_slot_i(c->sl);
++		found = VALID_CONTACT(c, act_time) && c->c.len == uri->len
++				&& memcmp(c->c.s, uri->s, uri->len) == 0;
++		ul.unlock_contact_slot_i(c->sl);
++	}
++	return found;
++}
++
+ str generate_reginfo_full(udomain_t *_t, str *impu_list, int num_impus,
+ 		str *explit_dereg_contact, str *watcher_contact,
+ 		int num_explit_dereg_contact, unsigned int reginfo_version)
+@@ -2154,6 +2179,11 @@ str generate_reginfo_full(udomain_t *_t, str *impu_list, int num_impus,
+ 			LM_DBG("Scrolling through list of provided "
+ 				   "num_explit_dereg_contact: [%.*s]\n",
+ 					explit_dereg_contact[k].len, explit_dereg_contact[k].s);
++			/* a binding replaced by a registration is only unlinked from the
++			 * IMPUs that registration covers: one still bound to this IMPU is
++			 * listed below with its own state */
++			if(impu_has_valid_contact(r, &explit_dereg_contact[k]))
++				continue;
+ 			process_xml_for_explit_dereg_contact(&buf, explit_dereg_contact[k]);
+ 		}
+ 
 diff --git a/src/modules/ims_registrar_scscf/save.c b/src/modules/ims_registrar_scscf/save.c
-index 24cca9272f..69e52839cc 100644
+index 24cca9272f..9f108f2993 100644
 --- a/src/modules/ims_registrar_scscf/save.c
 +++ b/src/modules/ims_registrar_scscf/save.c
-@@ -87,6 +87,7 @@ extern int
- extern int ue_unsubscribe_on_dereg;
- extern int user_data_always;
- extern int skip_multiple_bindings_on_reg_resp;
-+extern int replace_contacts;
- 
- #define DO_NOT_USE_REALM_FOR_PRIVATE_IDENTITY 0x01
- 
-@@ -535,6 +536,229 @@ static int get_restored_ucontact(str *uri, str *path, struct ucontact **c)
+@@ -47,6 +47,7 @@
+ #include "../../core/socket_info.h"
+ #include "../../core/parser/parse_allow.h"
+ #include "../../core/parser/parse_methods.h"
++#include "../../core/parser/digest/digest.h"
+ #include "../../core/parser/msg_parser.h"
+ #include "../../core/parser/parse_to.h"
+ #include "../../core/parser/parse_uri.h"
+@@ -535,12 +536,181 @@ static int get_restored_ucontact(str *uri, str *path, struct ucontact **c)
  	return 1;
  }
  
@@ -167,7 +293,8 @@ index 24cca9272f..69e52839cc 100644
 + * The +sip.instance and reg-id of a stored binding. reg-id is at least 1
 + * (RFC 5626 4.2), so 0 stands for "no reg-id".
 + */
-+static void ucontact_instance(ucontact_t *c, str *instance, unsigned int *reg_id)
++static void ucontact_instance(
++		ucontact_t *c, str *instance, unsigned int *reg_id)
 +{
 +	param_t *p;
 +
@@ -187,27 +314,31 @@ index 24cca9272f..69e52839cc 100644
 +}
 +
 +/*!
-+ * Whether a Contact of the REGISTER, being registered (not removed), replaces
-+ * the stored binding c (TS 24.229 5.4.1.2.1):
++ * Whether a Contact of the REGISTER of private user identity impi, being
++ * registered (not removed), replaces the stored binding c (TS 24.229
++ * 5.4.1.2.1). Only a binding registered by the same IMPI is replaced: another
++ * IMPI sharing the public user identity (TS 23.228 4.3.3.4) is another UE,
++ * and a binding whose IMPI is not known is left alone.
 + *  - with a reg-id, the multiple registrations mechanism is used and it
 + *    replaces the registration flow of the same +sip.instance and reg-id
 + *    (step 3, RFC 5626 6);
-+ *  - without one, it replaces every earlier registration of the private user
-+ *    identity that has another contact address, whatever its +sip.instance -
-+ *    or none (step 2). usrloc keeps no private user identity per binding, but
-+ *    an IMPU record belongs to the one IMPI whose subscription it holds, so
-+ *    for us that is every other binding of the IMPU.
++ *  - without one, it replaces every other registration of the IMPI,
++ *    whatever its +sip.instance - or none (step 2).
 + * An emergency Contact only replaces an emergency binding and a normal one
 + * only a normal one: the emergency registration is a registration of its own
 + * (TS 24.229 5.4.1.2.1D NOTE 2: contacts related to emergency registration
 + * are not affected).
 + */
-+static int contact_replaces(contact_t *chi, int expires_hdr, ucontact_t *c)
++static int contact_replaces(
++		contact_t *chi, int expires_hdr, str *impi, ucontact_t *c)
 +{
 +	int sos;
 +	str instance, c_instance;
 +	unsigned int reg_id, c_reg_id;
 +
++	if(!impi || impi->len <= 0 || c->private_identity.len != impi->len
++			|| memcmp(c->private_identity.s, impi->s, impi->len) != 0)
++		return 0;
 +	sos = cscf_get_sos_uri_param(chi->uri);
 +	if(sos < 0)
 +		return 0;
@@ -238,148 +369,761 @@ index 24cca9272f..69e52839cc 100644
 +}
 +
 +/*!
-+ * The Contact of the REGISTER that replaces c, or NULL. A binding the
-+ * REGISTER itself names is never replaced, so neither is one of several
-+ * Contacts registered together.
++ * The Contact of the REGISTER that replaces c, or NULL.
 + */
 +static contact_t *replacing_contact(
-+		struct sip_msg *msg, int expires_hdr, ucontact_t *c)
++		struct sip_msg *msg, int expires_hdr, str *impi, ucontact_t *c)
 +{
 +	struct hdr_field *h;
-+	contact_t *chi, *by = NULL;
++	contact_t *chi;
 +
 +	for(h = msg->contact; h; h = h->next) {
 +		if(h->type != HDR_CONTACT_T || !h->parsed)
 +			continue;
 +		for(chi = ((contact_body_t *)h->parsed)->contacts; chi;
 +				chi = chi->next) {
-+			if(chi->uri.len == c->c.len
-+					&& memcmp(chi->uri.s, c->c.s, c->c.len) == 0)
-+				return NULL;
-+			if(!by && contact_replaces(chi, expires_hdr, c))
-+				by = chi;
++			if(contact_replaces(chi, expires_hdr, impi, c))
++				return chi;
 +		}
 +	}
-+	return by;
-+}
-+
-+/*
-+ * The bindings the REGISTER being saved has replaced. A binding is shared by
-+ * every IMPU of the implicit set, and update_contacts_helper() runs once per
-+ * IMPU: only the first run finds it valid and deletes it, the later ones have
-+ * to recognise it to notify the subscribers of their own IMPU too. Kept per
-+ * process and per message (id and pid); the pointers are only compared with
-+ * the bindings still linked to an IMPU, never followed.
-+ */
-+#define MAX_REPLACED_CONTACTS 16
-+static unsigned int replaced_msg_id = 0;
-+static int replaced_msg_pid = 0;
-+static int num_replaced_contacts = 0;
-+static ucontact_t *replaced_contacts[MAX_REPLACED_CONTACTS];
-+
-+static int replaced_by_this_register(struct sip_msg *msg, ucontact_t *c)
-+{
-+	int i;
-+
-+	if(msg->id != replaced_msg_id || msg->pid != replaced_msg_pid)
-+		return 0;
-+	for(i = 0; i < num_replaced_contacts; i++) {
-+		if(replaced_contacts[i] == c)
-+			return 1;
-+	}
-+	return 0;
-+}
-+
-+static void remember_replaced(struct sip_msg *msg, ucontact_t *c)
-+{
-+	if(msg->id != replaced_msg_id || msg->pid != replaced_msg_pid) {
-+		replaced_msg_id = msg->id;
-+		replaced_msg_pid = msg->pid;
-+		num_replaced_contacts = 0;
-+	}
-+	if(num_replaced_contacts < MAX_REPLACED_CONTACTS) {
-+		replaced_contacts[num_replaced_contacts++] = c;
-+	} else {
-+		LM_WARN("more than %d bindings replaced by one REGISTER - <%.*s> is "
-+				"only notified to the subscribers of the first IMPU\n",
-+				MAX_REPLACED_CONTACTS, STR_FMT(&c->c));
-+	}
++	return NULL;
 +}
 +
 +/*!
-+ * TS 24.229 5.4.1.2.1 steps 2 and 3: a successful registration replaces the
-+ * earlier bindings of the same UE (see contact_replaces()). Left alone, such a
-+ * binding stays until it expires: the S-CSCF forks terminating requests to it
-+ * and the P-CSCF keeps its contact, and IPsec tunnel, since only a terminated
-+ * reg-event contact removes those.
-+ *
-+ * The replaced binding is de-registered on the spot, as reg_rpc_dereg_impu()
-+ * does: it goes to CONTACT_DELETED, so VALID_CONTACT() is false for it and
-+ * lookup() and the 200 OK skip it, and the usrloc timer unlinks it from every
-+ * IMPU on its next run without notifying anything; deleting it then releases
-+ * its dialogs. The NOTIFY goes out now, to the subscribers of every IMPU of
-+ * the implicit set, carrying the binding as an explicit de-registration
-+ * contact - state "terminated", event "unregistered" - as 5.4.2.1.2 requires
-+ * for "each replaced or removed binding" ("expired" is not one of the values
-+ * it allows, nor one the P-CSCF acts on under an active registration,
-+ * 5.2.5.2). The event is IMS_REGISTRAR_CONTACT_UNREGISTERED_IMPLICIT, not
-+ * _UNREGISTERED or _EXPIRED: those make the NOTIFY end the subscription,
-+ * and the IMPU is still registered over the new contact.
-+ *
-+ * Called with the domain locked for impu_rec, after all the Contacts of the
-+ * REGISTER were inserted or updated - so the IMPU is never left without a
-+ * valid binding.
++ * TS 24.229 5.4.1.2.1 steps 2 and 3: a successful registration of private user
++ * identity impi replaces the earlier bindings of the same UE (see
++ * contact_replaces()).
 + */
-+static void replace_superseded_contacts(
-+		struct sip_msg *msg, impurecord_t *impu_rec, int expires_hdr)
++static void replace_superseded_contacts(struct sip_msg *msg,
++		impurecord_t *impu_rec, int expires_hdr, str *impi, ucontact_t **saved,
++		int num_saved)
 +{
-+	impu_contact_t *impucontact;
++	impu_contact_t *impucontact, *next;
 +	ucontact_t *c;
 +	contact_t *by;
 +	str dereg_contact;
-+	int notify;
++	int i, sl;
++
++	if(!impi || impi->len <= 0 || !saved)
++		return;
 +
 +	get_act_time();
 +	for(impucontact = impu_rec->linked_contacts.head; impucontact;
-+			impucontact = impucontact->next) {
++			impucontact = next) {
++		/* unlink_contact_from_impu() frees impucontact */
++		next = impucontact->next;
 +		c = impucontact->contact;
 +		if(!c)
 +			break;
-+		notify = 0;
-+		ul.lock_contact_slot_i(c->sl);
-+		if(replaced_by_this_register(msg, c)) {
-+			notify = 1;
-+		} else if(VALID_CONTACT(c, act_time)
-+				  && (by = replacing_contact(msg, expires_hdr, c)) != NULL) {
-+			LM_INFO("<%.*s> replaces <%.*s> for <%.*s>%s\n",
-+					STR_FMT(&by->uri), STR_FMT(&c->c),
-+					STR_FMT(&impu_rec->public_identity),
++		for(i = 0; i < num_saved && saved[i] != c; i++)
++			;
++		if(i < num_saved)
++			continue;
++		sl = c->sl;
++		ul.lock_contact_slot_i(sl);
++		if(VALID_CONTACT(c, act_time)
++				&& (by = replacing_contact(msg, expires_hdr, impi, c))
++						   != NULL) {
++			LM_INFO("<%.*s> replaces <%.*s> for <%.*s>%s\n", STR_FMT(&by->uri),
++					STR_FMT(&c->c), STR_FMT(&impu_rec->public_identity),
 +					by->reg_id ? " (same +sip.instance and reg-id)" : "");
-+			c->state = CONTACT_DELETED;
-+			remember_replaced(msg, c);
-+			notify = 1;
++			if(impu_rec->shead) {
++				/* new_notification() copies the URI: the body is rendered
++				 * later, in the notification worker, when the binding may be
++				 * gone */
++				dereg_contact = c->c;
++				notify_subscribers(impu_rec, c, &dereg_contact, 1,
++						IMS_REGISTRAR_CONTACT_UNREGISTERED_IMPLICIT);
++			}
++			ul.unlink_contact_from_impu(impu_rec, c, 1, 1);
 +		}
-+		if(notify && impu_rec->shead) {
-+			/* new_notification() copies the URI: the body is rendered later,
-+			 * in the notification worker, when the binding may be gone */
-+			dereg_contact = c->c;
-+			notify_subscribers(impu_rec, c, &dereg_contact, 1,
-+					IMS_REGISTRAR_CONTACT_UNREGISTERED_IMPLICIT);
-+		}
-+		ul.unlock_contact_slot_i(c->sl);
++		ul.unlock_contact_slot_i(sl);
 +	}
 +}
 +
  /**
   * update the contacts for a public identity. Make sure you have the lock on the domain before calling this
   * returns 0 on success, -1 on failure
-@@ -642,6 +866,9 @@ static inline int update_contacts_helper(struct sip_msg *msg,
+  */
+ static inline int update_contacts_helper(struct sip_msg *msg,
+-		impurecord_t *impu_rec, int assignment_type, int expires_hdr)
++		impurecord_t *impu_rec, int assignment_type, int expires_hdr,
++		str *private_identity)
+ {
+ 	struct hdr_field *h;
+ 	contact_t *chi;		 //contact header information
+@@ -549,6 +719,8 @@ static inline int update_contacts_helper(struct sip_msg *msg,
+ 	int sos = 0, expires;
+ 	struct ucontact *ucontact;
+ 	int result, sl;
++	ucontact_t **saved = NULL; /* bindings inserted or refreshed here */
++	int num_saved = 0, max_saved = 0;
+ 
+ 	LM_DBG("updating the contacts for IMPU <%.*s>\n",
+ 			impu_rec->public_identity.len, impu_rec->public_identity.s);
+@@ -561,6 +733,21 @@ static inline int update_contacts_helper(struct sip_msg *msg,
+ 
+ 		case AVP_IMS_SAR_REGISTRATION:
+ 		case AVP_IMS_SAR_RE_REGISTRATION:
++			for(h = msg->contact; h; h = h->next) {
++				if(h->type == HDR_CONTACT_T && h->parsed) {
++					for(chi = ((contact_body_t *)h->parsed)->contacts; chi;
++							chi = chi->next)
++						max_saved++;
++				}
++			}
++			if(max_saved > 0) {
++				saved = (ucontact_t **)pkg_malloc(
++						max_saved * sizeof(ucontact_t *));
++				if(!saved)
++					LM_WARN("no more pkg memory - not replacing earlier "
++							"bindings of <%.*s>\n",
++							STR_FMT(&impu_rec->public_identity));
++			}
+ 			for(h = msg->contact; h; h = h->next) {
+ 				if(h->type == HDR_CONTACT_T && h->parsed) {
+ 
+@@ -592,6 +779,7 @@ static inline int update_contacts_helper(struct sip_msg *msg,
+ 							LM_ERR("Failed to extract contact info\n");
+ 							goto error;
+ 						}
++						ci->private_identity = private_identity;
+ 
+ 						LM_DBG("adding/updating contact based on prior "
+ 							   "existence\n");
+@@ -612,6 +800,8 @@ static inline int update_contacts_helper(struct sip_msg *msg,
+ 								//				ul.unlock_contact_slot(&chi->uri);
+ 								goto error;
+ 							}
++							if(saved && num_saved < max_saved)
++								saved[num_saved++] = ucontact;
+ 						} else {
+ 							LM_DBG("Contact already exists - updating - it's "
+ 								   "currently in state [%s]\n",
+@@ -636,18 +826,26 @@ static inline int update_contacts_helper(struct sip_msg *msg,
+ 								goto error;
+ 							}
+ 							ul.unlock_contact_slot_i(sl);
++							if(saved && num_saved < max_saved)
++								saved[num_saved++] = ucontact;
+ 							ul.release_ucontact(ucontact);
+ 						}
+ 						//			ul.unlock_contact_slot(&chi->uri);
  					}
  				}
  			}
-+			if(replace_contacts) {
-+				replace_superseded_contacts(msg, impu_rec, expires_hdr);
-+			}
++			replace_superseded_contacts(msg, impu_rec, expires_hdr,
++					private_identity, saved, num_saved);
  			break;
  	}
  
++	if(saved)
++		pkg_free(saved);
+ 	return 0;
+ 
+ error:
++	if(saved)
++		pkg_free(saved);
+ 	return -1;
+ }
+ 
+@@ -826,8 +1024,8 @@ void clean_watchers(udomain_t *_d, str *public_identity, contact_t *chi,
+ }
+ 
+ static int update_contacts_sar_registration(struct sip_msg *msg, udomain_t *_d,
+-		str *public_identity, int assignment_type, ims_subscription **s,
+-		str *ccf1, str *ccf2, str *ecf1, str *ecf2,
++		str *public_identity, str *private_identity, int assignment_type,
++		ims_subscription **s, str *ccf1, str *ccf2, str *ecf1, str *ecf2,
+ 		contact_for_header_t **contact_header, int expires_hdr)
+ {
+ 	ims_service_profile *profile = NULL;
+@@ -870,8 +1068,8 @@ static int update_contacts_sar_registration(struct sip_msg *msg, udomain_t *_d,
+ 			}
+ 			//here we can do something with impu_rec if we want but we must unlock when done
+ 			//lets update the contacts
+-			if(update_contacts_helper(
+-					   msg, impu_rec, assignment_type, expires_hdr)
++			if(update_contacts_helper(msg, impu_rec, assignment_type,
++					   expires_hdr, private_identity)
+ 					!= 0) {
+ 				LM_ERR("Failed trying to update contacts\n");
+ 				ul.unlock_udomain(_d, &pi->public_identity);
+@@ -1129,9 +1327,10 @@ static int update_contacts_sar_user_deregistration(struct sip_msg *msg,
+ }
+ 
+ static int update_contacts_sar_re_registration(struct sip_msg *msg,
+-		udomain_t *_d, str *public_identity, int assignment_type,
+-		ims_subscription **s, str *ccf1, str *ccf2, str *ecf1, str *ecf2,
+-		contact_for_header_t **contact_header, int expires_hdr)
++		udomain_t *_d, str *public_identity, str *private_identity,
++		int assignment_type, ims_subscription **s, str *ccf1, str *ccf2,
++		str *ecf1, str *ecf2, contact_for_header_t **contact_header,
++		int expires_hdr)
+ {
+ 	int reg_state = IMS_USER_REGISTERED, i, j;
+ 	impurecord_t *impu_rec = NULL;
+@@ -1153,7 +1352,8 @@ static int update_contacts_sar_re_registration(struct sip_msg *msg,
+ 		return -1;
+ 	}
+ 
+-	if(update_contacts_helper(msg, impu_rec, assignment_type, expires_hdr)
++	if(update_contacts_helper(
++			   msg, impu_rec, assignment_type, expires_hdr, private_identity)
+ 			!= 0) { //update the contacts for the explicit IMPU
+ 		LM_ERR("Failed trying to update contacts for re-registration\n");
+ 		ul.unlock_udomain(_d, public_identity);
+@@ -1217,8 +1417,8 @@ static int update_contacts_sar_re_registration(struct sip_msg *msg,
+ 			}
+ 
+ 			//update the contacts for the explicit IMPU
+-			if(update_contacts_helper(
+-					   msg, impu_rec, assignment_type, expires_hdr)
++			if(update_contacts_helper(msg, impu_rec, assignment_type,
++					   expires_hdr, private_identity)
+ 					!= 0) {
+ 				LM_ERR("Failed trying to update contacts for re-registration "
+ 					   "of implicit IMPU <%.*s>, continuing\n",
+@@ -1326,6 +1526,7 @@ static int restore_ucontact(
+ 		ci.received = c->received->body;
+ 	ci.params = c->params;
+ 	ci.user_agent = &no_ua;
++	ci.private_identity = &ri->impi;
+ 	ci.sock = _m ? _m->rcv.bind_address : 0;
+ 	ci.path = &ri->path;
+ 
+@@ -1443,9 +1644,9 @@ static int update_contacts_sar_script(struct sip_msg *msg, udomain_t *_d,
+  */
+ 
+ int update_contacts(struct sip_msg *msg, udomain_t *_d, str *public_identity,
+-		int assignment_type, ims_subscription **s, str *ccf1, str *ccf2,
+-		str *ecf1, str *ecf2, contact_for_header_t **contact_header,
+-		restoration_info_t *ri)
++		str *private_identity, int assignment_type, ims_subscription **s,
++		str *ccf1, str *ccf2, str *ecf1, str *ecf2,
++		contact_for_header_t **contact_header, restoration_info_t *ri)
+ {
+ 	int expires_hdr = -1; //by default registration doesn't expire
+ 	int ret = -1;
+@@ -1458,13 +1659,13 @@ int update_contacts(struct sip_msg *msg, udomain_t *_d, str *public_identity,
+ 	switch(assignment_type) {
+ 		case AVP_IMS_SAR_REGISTRATION:
+ 			ret = update_contacts_sar_registration(msg, _d, public_identity,
+-					assignment_type, s, ccf1, ccf2, ecf1, ecf2, contact_header,
+-					expires_hdr);
++					private_identity, assignment_type, s, ccf1, ccf2, ecf1,
++					ecf2, contact_header, expires_hdr);
+ 			break;
+ 		case AVP_IMS_SAR_RE_REGISTRATION:
+ 			ret = update_contacts_sar_re_registration(msg, _d, public_identity,
+-					assignment_type, s, ccf1, ccf2, ecf1, ecf2, contact_header,
+-					expires_hdr);
++					private_identity, assignment_type, s, ccf1, ccf2, ecf1,
++					ecf2, contact_header, expires_hdr);
+ 			break;
+ 		case AVP_IMS_SAR_USER_DEREGISTRATION:
+ 			ret = update_contacts_sar_user_deregistration(msg, _d,
+@@ -1659,6 +1860,27 @@ done:
+  */
+ //int save(struct sip_msg* msg, udomain_t* _d) {
+ 
++/*!
++ * Whether impi, as cscf_get_private_identity() returned it, is the username
++ * of the REGISTER's credentials. Without usable credentials that function
++ * falls back to the IMPU without its scheme, the same string for every UE
++ * sharing the IMPU, which then cannot tell their bindings apart: a contact is
++ * only stored with an IMPI the UE presented itself.
++ */
++static int impi_from_credentials(struct sip_msg *msg, str *impi)
++{
++	struct hdr_field *h;
++
++	for(h = msg->headers; h; h = h->next) {
++		if((h->type == HDR_AUTHORIZATION_T || h->type == HDR_PROXYAUTH_T)
++				&& h->parsed
++				&& ((auth_body_t *)h->parsed)->digest.username.whole.s
++						   == impi->s)
++			return 1;
++	}
++	return 0;
++}
++
+ int save(struct sip_msg *msg, char *str1, char *route, int _cflags)
+ {
+ 	int expires;
+@@ -1667,6 +1889,7 @@ int save(struct sip_msg *msg, char *str1, char *route, int _cflags)
+ 	contact_t *c;
+ 	int st;
+ 	str public_identity, private_identity, realm = {0, 0};
++	str contact_impi = {0, 0};
+ 	int sar_assignment_type = AVP_IMS_SAR_NO_ASSIGNMENT;
+ 	str route_name;
+ 
+@@ -1742,6 +1965,8 @@ int save(struct sip_msg *msg, char *str1, char *route, int _cflags)
+ 	private_identity = cscf_get_private_identity(msg, realm);
+ 	if(private_identity.len <= 0 || !private_identity.s) {
+ 		LM_ERR("cant get private identity\n");
++	} else if(impi_from_credentials(msg, &private_identity)) {
++		contact_impi = private_identity;
+ 	}
+ 
+ 	expires = cscf_get_max_expires(msg, 0); //check all contacts for max expires
+@@ -1782,7 +2007,7 @@ int save(struct sip_msg *msg, char *str1, char *route, int _cflags)
+ 			//unregister the requested contacts, if none left at the end then send a SAR, otherwise return successfully
+ 			LM_DBG("need to unregister contacts\n");
+ 			//lets update the contacts - we need to know if all were deleted or not for the public identity
+-			int res = update_contacts(msg, _d, &public_identity,
++			int res = update_contacts(msg, _d, &public_identity, &contact_impi,
+ 					sar_assignment_type, 0, 0, 0, 0, 0, &contact_header, 0);
+ 			if(res <= 0) {
+ 				LM_DBG("Error processing REGISTER for de-registration\n");
+@@ -1859,6 +2084,16 @@ int save(struct sip_msg *msg, char *str1, char *route, int _cflags)
+ 	memcpy(saved_t->public_identity.s, public_identity.s, public_identity.len);
+ 	saved_t->public_identity.len = public_identity.len;
+ 
++	if(contact_impi.len > 0
++			&& shm_str_dup(&saved_t->private_identity, &contact_impi) < 0) {
++		LM_ERR("no more memory trying to save transaction state : "
++			   "private identity\n");
++		free_saved_transaction_data(saved_t);
++		free_contact_buf(contact_header);
++		rerrno = R_SAR_FAILED;
++		goto error;
++	}
++
+ 	saved_t->contact_header = contact_header;
+ 
+ 	create_return_code(CSCF_RETURN_ERROR);
+diff --git a/src/modules/ims_registrar_scscf/save.h b/src/modules/ims_registrar_scscf/save.h
+index 2a579d2ba6..c6185c9f79 100644
+--- a/src/modules/ims_registrar_scscf/save.h
++++ b/src/modules/ims_registrar_scscf/save.h
+@@ -57,9 +57,12 @@
+ 
+ /*! TS 23.380 4.6.2 restoration information the HSS handed back in an SAA:
+  * the backed-up Contact (header field value, parameters included), its Path
+- * and, if the HSS kept it, the REGISTER's Call-ID */
++ * and, if the HSS kept it, the REGISTER's Call-ID; impi is the private
++ * identity that registered the Contact (the User-Name of
++ * SCSCF-Restoration-Info), which need not be the one of the user profile */
+ typedef struct restoration_info
+ {
++	str impi;
+ 	str path;
+ 	str contact;
+ 	str callid;
+@@ -78,8 +81,8 @@ int save(struct sip_msg *msg, char *str1, char *route, int _cflags);
+ int unregister(struct sip_msg *_m, char *_d, char *_uri);
+ 
+ int update_contacts(struct sip_msg *msg, udomain_t *_d, str *public_identity,
+-		int assignment_type, ims_subscription **s, str *ccf1, str *ccf2,
+-		str *ecf1, str *ecf2, contact_for_header_t **contact_header,
+-		restoration_info_t *ri);
++		str *private_identity, int assignment_type, ims_subscription **s,
++		str *ccf1, str *ccf2, str *ecf1, str *ecf2,
++		contact_for_header_t **contact_header, restoration_info_t *ri);
+ 
+ #endif /* SAVE_H */
+diff --git a/src/modules/ims_usrloc_scscf/ucontact.c b/src/modules/ims_usrloc_scscf/ucontact.c
+index 4e83f8b7d3..a31a169074 100644
+--- a/src/modules/ims_usrloc_scscf/ucontact.c
++++ b/src/modules/ims_usrloc_scscf/ucontact.c
+@@ -163,6 +163,10 @@ ucontact_t *new_ucontact(
+ 		if(shm_str_dup(&c->user_agent, _ci->user_agent) < 0)
+ 			goto error;
+ 	}
++	if(_ci->private_identity && _ci->private_identity->len > 0) {
++		if(shm_str_dup(&c->private_identity, _ci->private_identity) < 0)
++			goto error;
++	}
+ 	if(_aor && _aor->len > 0) {
+ 		if(shm_str_dup(&c->aor, _aor) < 0)
+ 			goto error;
+@@ -202,6 +206,8 @@ error:
+ 		shm_free(c->received.s);
+ 	if(c->user_agent.s)
+ 		shm_free(c->user_agent.s);
++	if(c->private_identity.s)
++		shm_free(c->private_identity.s);
+ 	if(c->callid.s)
+ 		shm_free(c->callid.s);
+ 	if(c->c.s)
+@@ -233,6 +239,8 @@ void free_ucontact(ucontact_t *_c)
+ 		shm_free(_c->received.s);
+ 	if(_c->user_agent.s)
+ 		shm_free(_c->user_agent.s);
++	if(_c->private_identity.s)
++		shm_free(_c->private_identity.s);
+ 	if(_c->callid.s)
+ 		shm_free(_c->callid.s);
+ 	if(_c->c.s)
+@@ -316,6 +324,8 @@ void print_ucontact(FILE *_f, ucontact_t *_c)
+ 	fprintf(_f, "\t\tCSeq      : %d\n", _c->cseq);
+ 	fprintf(_f, "\t\tUser-Agent: '%.*s'\n", _c->user_agent.len,
+ 			ZSW(_c->user_agent.s));
++	fprintf(_f, "\t\tIMPI      : '%.*s'\n", _c->private_identity.len,
++			ZSW(_c->private_identity.s));
+ 	fprintf(_f, "\t\treceived  : '%.*s'\n", _c->received.len,
+ 			ZSW(_c->received.s));
+ 	fprintf(_f, "\t\tPath      : '%.*s'\n", _c->path.len, ZSW(_c->path.s));
+@@ -366,6 +376,11 @@ int mem_update_ucontact(ucontact_t *_c, ucontact_info_t *_ci)
+ 
+ 	update_str(&_c->user_agent, _ci->user_agent);
+ 
++	/* a caller that does not know the IMPI leaves the stored one */
++	if(_ci->private_identity && _ci->private_identity->len > 0) {
++		update_str(&_c->private_identity, _ci->private_identity);
++	}
++
+ 	if(_ci->received.s && _ci->received.len) {
+ 		update_str(&_c->received, &_ci->received);
+ 	} else {
+diff --git a/src/modules/ims_usrloc_scscf/ul_rpc.c b/src/modules/ims_usrloc_scscf/ul_rpc.c
+index e88381e485..39bde6b7f4 100644
+--- a/src/modules/ims_usrloc_scscf/ul_rpc.c
++++ b/src/modules/ims_usrloc_scscf/ul_rpc.c
+@@ -206,8 +206,9 @@ static void ul_rpc_show_impu(rpc_t *rpc, void *ctx)
+ 			unlock_udomain(domain, &impu);
+ 			return;
+ 		}
+-		if(rpc->struct_add(cdh, "dS", "expires", contact->expires - time(NULL),
+-				   "client", &contact->user_agent)
++		if(rpc->struct_add(cdh, "dSS", "expires", contact->expires - time(NULL),
++				   "client", &contact->user_agent, "impi",
++				   &contact->private_identity)
+ 				< 0) {
+ 			rpc->fault(ctx, 500, "Internal error adding impu contact data");
+ 			unlock_udomain(domain, &impu);
+diff --git a/src/modules/ims_usrloc_scscf/usrloc.h b/src/modules/ims_usrloc_scscf/usrloc.h
+index 7f04b9ff8e..df4f1798b7 100644
+--- a/src/modules/ims_usrloc_scscf/usrloc.h
++++ b/src/modules/ims_usrloc_scscf/usrloc.h
+@@ -375,6 +375,7 @@ typedef struct ucontact
+ 	unsigned int flags;		  /*!< Various flags (NAT, ping type, etc) */
+ 	unsigned int cflags;	  /*!< Custom contact flags (from script) */
+ 	str user_agent;			  /*!< User-Agent header field */
++	str private_identity;	  /*!< IMPI that registered the contact, if known */
+ 	struct socket_info *sock; /*!< received socket */
+ 	time_t last_modified;	  /*!< When the record was last modified */
+ 	unsigned int methods;	  /*!< Supported methods */
+@@ -406,6 +407,7 @@ typedef struct ucontact_info
+ 	unsigned int flags;		  /*!< message flags */
+ 	unsigned int cflags;	  /*!< contact flags */
+ 	str *user_agent;		  /*!< user agent header */
++	str *private_identity;	  /*!< IMPI that registered the contact */
+ 	struct socket_info *sock; /*!< socket informations */
+ 
+ 	unsigned int methods; /*!< supported methods */
+diff --git a/src/modules/ims_usrloc_scscf/usrloc_db.c b/src/modules/ims_usrloc_scscf/usrloc_db.c
+index f13c0c4a88..5780df24c3 100644
+--- a/src/modules/ims_usrloc_scscf/usrloc_db.c
++++ b/src/modules/ims_usrloc_scscf/usrloc_db.c
+@@ -42,6 +42,8 @@ str cflags_col =
+ 		str_init(CFLAGS_COL); /*!< Name of column containing contact flags */
+ str user_agent_col = str_init(
+ 		USER_AGENT_COL); /*!< Name of column containing user agent string */
++str private_identity_col = str_init(
++		PRIVATE_IDENTITY_COL); /*!< Name of column containing the IMPI */
+ str received_col = str_init(
+ 		RECEIVED_COL); /*!< Name of column containing transport info of REGISTER */
+ str path_col =
+@@ -331,8 +333,8 @@ int db_insert_ucontact(impurecord_t *_r, ucontact_t *_c)
+ 	param_buf.len = 0;
+ 	char *format_name_and_body, *format_name_no_body;
+ 
+-	db_key_t key[7];
+-	db_val_t val[7];
++	db_key_t key[8];
++	db_val_t val[8];
+ 
+ 	LM_DBG("DB: inserting ucontact [%.*s]\n", _c->c.len, _c->c.s);
+ 
+@@ -375,6 +377,7 @@ int db_insert_ucontact(impurecord_t *_r, ucontact_t *_c)
+ 	key[4] = &received_col;
+ 	key[5] = &expires_col;
+ 	key[6] = &callid_col;
++	key[7] = &private_identity_col;
+ 
+ 	val[0].type = DB1_STR;
+ 	val[0].nul = 0;
+@@ -408,12 +411,20 @@ int db_insert_ucontact(impurecord_t *_r, ucontact_t *_c)
+ 	val[6].nul = 0;
+ 	val[6].val.str_val = _c->callid;
+ 
++	val[7].type = DB1_STR;
++	if(_c->private_identity.len > 0) {
++		val[7].nul = 0;
++		val[7].val.str_val = _c->private_identity;
++	} else {
++		val[7].nul = 1;
++	}
++
+ 	if(ul_dbf.use_table(ul_dbh, &contact_table) != 0) {
+ 		LM_ERR("Unable to use table [%.*s]\n", contact_table.len,
+ 				contact_table.s);
+ 		return -1;
+ 	}
+-	if(ul_dbf.insert_update(ul_dbh, key, val, 7) != 0) {
++	if(ul_dbf.insert_update(ul_dbh, key, val, 8) != 0) {
+ 		LM_ERR("Failed to insert/update contact record for [%.*s]\n", _c->c.len,
+ 				_c->c.s);
+ 		return -1;
+@@ -603,7 +614,7 @@ int int_to_str_len(int i)
+ 
+ static inline int dbrow2contact(db_val_t *val, ucontact_info_t *ci)
+ {
+-	static str path, user_agent, callid, params;
++	static str path, user_agent, callid, params, private_identity;
+ 	param_hooks_t hooks;
+ 
+ 	// Set ci to 0:
+@@ -650,6 +661,13 @@ static inline int dbrow2contact(db_val_t *val, ucontact_info_t *ci)
+ 	}
+ 	ci->callid = &callid;
+ 
++	/* IMPI - NULL in a row written before the column existed */
++	if(!VAL_NULL(val + 7)) {
++		private_identity.s = (char *)VAL_STRING(val + 7);
++		private_identity.len = strlen(private_identity.s);
++		ci->private_identity = &private_identity;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -821,7 +839,8 @@ int preload_udomain(db1_con_t *_c, udomain_t *_d)
+ 
+ 	char *p_contact = "SELECT "
+ 					  "c.contact,c.params,c.path,c.user_agent,c.received,c."
+-					  "expires,c.callid FROM impu_contact m LEFT JOIN contact "
++					  "expires,c.callid,c.private_identity FROM impu_contact m "
++					  "LEFT JOIN contact "
+ 					  "c ON c.id=m.contact_id WHERE m.impu_id=";
+ 
+ 	char *p_subscriber =
+diff --git a/src/modules/ims_usrloc_scscf/usrloc_db.h b/src/modules/ims_usrloc_scscf/usrloc_db.h
+index 215a9d68ef..e8d05f3bb4 100644
+--- a/src/modules/ims_usrloc_scscf/usrloc_db.h
++++ b/src/modules/ims_usrloc_scscf/usrloc_db.h
+@@ -19,6 +19,7 @@ extern db_func_t ul_dbf;
+ #define FLAGS_COL "flags"
+ #define CFLAGS_COL "cflags"
+ #define USER_AGENT_COL "user_agent"
++#define PRIVATE_IDENTITY_COL "private_identity"
+ #define RECEIVED_COL "received"
+ #define PATH_COL "path"
+ #define SOCK_COL "socket"
+diff --git a/utils/kamctl/db_redis/kamailio/contact b/utils/kamctl/db_redis/kamailio/contact
+index 70d2b1b9db..fc5b0d29fe 100644
+--- a/utils/kamctl/db_redis/kamailio/contact
++++ b/utils/kamctl/db_redis/kamailio/contact
+@@ -1,2 +1,2 @@
+-id/int,contact/string,params/string,path/string,received/string,user_agent/string,expires/time,callid/string,
+-6
++id/int,contact/string,params/string,path/string,received/string,user_agent/string,expires/time,callid/string,private_identity/string,
++7
+diff --git a/utils/kamctl/db_sqlite/ims_usrloc_scscf-create.sql b/utils/kamctl/db_sqlite/ims_usrloc_scscf-create.sql
+index 1f624a41fc..a999fc8622 100644
+--- a/utils/kamctl/db_sqlite/ims_usrloc_scscf-create.sql
++++ b/utils/kamctl/db_sqlite/ims_usrloc_scscf-create.sql
+@@ -7,10 +7,11 @@ CREATE TABLE contact (
+     user_agent VARCHAR(255) DEFAULT NULL,
+     expires TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL,
+     callid VARCHAR(255) DEFAULT NULL,
++    private_identity VARCHAR(255) DEFAULT NULL,
+     CONSTRAINT contact_contact UNIQUE (contact)
+ );
+ 
+-INSERT INTO version (table_name, table_version) values ('contact','6');
++INSERT INTO version (table_name, table_version) values ('contact','7');
+ 
+ CREATE TABLE impu (
+     id INTEGER PRIMARY KEY NOT NULL,
+diff --git a/utils/kamctl/dbtext/kamailio/contact b/utils/kamctl/dbtext/kamailio/contact
+index 2e0facdbc8..eaf8b19352 100644
+--- a/utils/kamctl/dbtext/kamailio/contact
++++ b/utils/kamctl/dbtext/kamailio/contact
+@@ -1 +1 @@
+-id(int,auto) contact(string) params(string,null) path(string,null) received(string,null) user_agent(string,null) expires(int,null) callid(string,null)
++id(int,auto) contact(string) params(string,null) path(string,null) received(string,null) user_agent(string,null) expires(int,null) callid(string,null) private_identity(string,null)
+diff --git a/utils/kamctl/dbtext/kamailio/version b/utils/kamctl/dbtext/kamailio/version
+index 6e38a10cd2..27059ec38d 100644
+--- a/utils/kamctl/dbtext/kamailio/version
++++ b/utils/kamctl/dbtext/kamailio/version
+@@ -8,7 +8,7 @@ id(int,auto) table_name(string) table_version(int)
+ 0:carrier_name:1
+ 0:carrierfailureroute:2
+ 0:carrierroute:3
+-0:contact:6
++0:contact:7
+ 0:cpl:1
+ 0:dbaliases:1
+ 0:dialog:7
+diff --git a/utils/kamctl/mongodb/kamailio/contact.json b/utils/kamctl/mongodb/kamailio/contact.json
+index fa8d02ce67..1dcb2a6b51 100644
+--- a/utils/kamctl/mongodb/kamailio/contact.json
++++ b/utils/kamctl/mongodb/kamailio/contact.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "contact",
+-  "version": 6,
++  "version": 7,
+   "columns": [
+     "id": {
+       "type": "int",
+@@ -41,6 +41,11 @@
+       "type": "string",
+       "default": null,
+       "null": true
++    },
++    "private_identity": {
++      "type": "string",
++      "default": null,
++      "null": true
+     }
+   ]
+ }
+diff --git a/utils/kamctl/mongodb/kamailio/version-create.mongo b/utils/kamctl/mongodb/kamailio/version-create.mongo
+index 55a738d2c3..5165deeac3 100644
+--- a/utils/kamctl/mongodb/kamailio/version-create.mongo
++++ b/utils/kamctl/mongodb/kamailio/version-create.mongo
+@@ -8,7 +8,7 @@ db.getCollection("version").insert({ table_name: "aliases", table_version: Numbe
+ db.getCollection("version").insert({ table_name: "carrier_name", table_version: NumberInt(1) });
+ db.getCollection("version").insert({ table_name: "carrierfailureroute", table_version: NumberInt(2) });
+ db.getCollection("version").insert({ table_name: "carrierroute", table_version: NumberInt(3) });
+-db.getCollection("version").insert({ table_name: "contact", table_version: NumberInt(6) });
++db.getCollection("version").insert({ table_name: "contact", table_version: NumberInt(7) });
+ db.getCollection("version").insert({ table_name: "cpl", table_version: NumberInt(1) });
+ db.getCollection("version").insert({ table_name: "dbaliases", table_version: NumberInt(1) });
+ db.getCollection("version").insert({ table_name: "dialog", table_version: NumberInt(7) });
+diff --git a/utils/kamctl/mysql/ims_usrloc_scscf-create.sql b/utils/kamctl/mysql/ims_usrloc_scscf-create.sql
+index 476023fd09..8919736df9 100644
+--- a/utils/kamctl/mysql/ims_usrloc_scscf-create.sql
++++ b/utils/kamctl/mysql/ims_usrloc_scscf-create.sql
+@@ -7,10 +7,11 @@ CREATE TABLE `contact` (
+     `user_agent` VARCHAR(255) DEFAULT NULL,
+     `expires` DATETIME DEFAULT NULL,
+     `callid` VARCHAR(255) DEFAULT NULL,
++    `private_identity` VARCHAR(255) DEFAULT NULL,
+     CONSTRAINT contact UNIQUE (`contact`)
+ );
+ 
+-INSERT INTO version (table_name, table_version) values ('contact','6');
++INSERT INTO version (table_name, table_version) values ('contact','7');
+ 
+ CREATE TABLE `impu` (
+     `id` INT(10) AUTO_INCREMENT PRIMARY KEY NOT NULL,
+diff --git a/utils/kamctl/oracle/ims_usrloc_scscf-create.sql b/utils/kamctl/oracle/ims_usrloc_scscf-create.sql
+index 8839567409..8ee9f141a2 100644
+--- a/utils/kamctl/oracle/ims_usrloc_scscf-create.sql
++++ b/utils/kamctl/oracle/ims_usrloc_scscf-create.sql
+@@ -7,6 +7,7 @@ CREATE TABLE contact (
+     user_agent VARCHAR2(255) DEFAULT NULL,
+     expires DATE DEFAULT NULL,
+     callid VARCHAR2(255) DEFAULT NULL,
++    private_identity VARCHAR2(255) DEFAULT NULL,
+     CONSTRAINT contact_contact  UNIQUE (contact)
+ );
+ 
+@@ -18,7 +19,7 @@ END contact_tr;
+ /
+ BEGIN map2users('contact'); END;
+ /
+-INSERT INTO version (table_name, table_version) values ('contact','6');
++INSERT INTO version (table_name, table_version) values ('contact','7');
+ 
+ CREATE TABLE impu (
+     id NUMBER(10) PRIMARY KEY,
+diff --git a/utils/kamctl/postgres/ims_usrloc_scscf-create.sql b/utils/kamctl/postgres/ims_usrloc_scscf-create.sql
+index 6b532f0ca7..55036f8322 100644
+--- a/utils/kamctl/postgres/ims_usrloc_scscf-create.sql
++++ b/utils/kamctl/postgres/ims_usrloc_scscf-create.sql
+@@ -7,10 +7,11 @@ CREATE TABLE contact (
+     user_agent VARCHAR(255) DEFAULT NULL,
+     expires TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL,
+     callid VARCHAR(255) DEFAULT NULL,
++    private_identity VARCHAR(255) DEFAULT NULL,
+     CONSTRAINT contact_contact UNIQUE (contact)
+ );
+ 
+-INSERT INTO version (table_name, table_version) values ('contact','6');
++INSERT INTO version (table_name, table_version) values ('contact','7');
+ 
+ CREATE TABLE impu (
+     id SERIAL PRIMARY KEY NOT NULL,
+diff --git a/utils/kamctl/xhttp_pi/ims_usrloc_scscf-mod b/utils/kamctl/xhttp_pi/ims_usrloc_scscf-mod
+index f82c3d1f60..6f0c677792 100644
+--- a/utils/kamctl/xhttp_pi/ims_usrloc_scscf-mod
++++ b/utils/kamctl/xhttp_pi/ims_usrloc_scscf-mod
+@@ -12,6 +12,7 @@
+ 				<col><field>user_agent</field></col>
+ 				<col><field>expires</field></col>
+ 				<col><field>callid</field></col>
++				<col><field>private_identity</field></col>
+ 			</query_cols>
+ 		</cmd>
+ 		<cmd><cmd_name>add</cmd_name>
+@@ -25,6 +26,7 @@
+ 				<col><field>user_agent</field></col>
+ 				<col><field>expires</field></col>
+ 				<col><field>callid</field></col>
++				<col><field>private_identity</field></col>
+ 			</query_cols>
+ 		</cmd>
+ 		<cmd><cmd_name>update</cmd_name>
+@@ -41,6 +43,7 @@
+ 				<col><field>user_agent</field></col>
+ 				<col><field>expires</field></col>
+ 				<col><field>callid</field></col>
++				<col><field>private_identity</field></col>
+ 			</query_cols>
+ 		</cmd>
+ 		<cmd><cmd_name>delete</cmd_name>
+diff --git a/utils/kamctl/xhttp_pi/ims_usrloc_scscf-table b/utils/kamctl/xhttp_pi/ims_usrloc_scscf-table
+index 99e24e1d6b..29bb0569aa 100644
+--- a/utils/kamctl/xhttp_pi/ims_usrloc_scscf-table
++++ b/utils/kamctl/xhttp_pi/ims_usrloc_scscf-table
+@@ -10,6 +10,7 @@
+ 		<column><field>user_agent</field><type>DB1_STR</type></column>
+ 		<column><field>expires</field><type>DB1_DATETIME</type></column>
+ 		<column><field>callid</field><type>DB1_STR</type></column>
++		<column><field>private_identity</field><type>DB1_STR</type></column>
+ 	</db_table>
+ 	<!-- Declaration of impu table-->
+ 	<db_table id="impu">
+diff --git a/utils/kamctl/xhttp_pi/pi_framework.xml b/utils/kamctl/xhttp_pi/pi_framework.xml
+index 2065fde733..b7f80e6daf 100644
+--- a/utils/kamctl/xhttp_pi/pi_framework.xml
++++ b/utils/kamctl/xhttp_pi/pi_framework.xml
+@@ -505,6 +505,7 @@
+ 		<column><field>user_agent</field><type>DB1_STR</type></column>
+ 		<column><field>expires</field><type>DB1_DATETIME</type></column>
+ 		<column><field>callid</field><type>DB1_STR</type></column>
++		<column><field>private_identity</field><type>DB1_STR</type></column>
+ 	</db_table>
+ 	<!-- Declaration of impu table-->
+ 	<db_table id="impu">
+@@ -3143,6 +3144,7 @@
+ 				<col><field>user_agent</field></col>
+ 				<col><field>expires</field></col>
+ 				<col><field>callid</field></col>
++				<col><field>private_identity</field></col>
+ 			</query_cols>
+ 		</cmd>
+ 		<cmd><cmd_name>add</cmd_name>
+@@ -3156,6 +3158,7 @@
+ 				<col><field>user_agent</field></col>
+ 				<col><field>expires</field></col>
+ 				<col><field>callid</field></col>
++				<col><field>private_identity</field></col>
+ 			</query_cols>
+ 		</cmd>
+ 		<cmd><cmd_name>update</cmd_name>
+@@ -3172,6 +3175,7 @@
+ 				<col><field>user_agent</field></col>
+ 				<col><field>expires</field></col>
+ 				<col><field>callid</field></col>
++				<col><field>private_identity</field></col>
+ 			</query_cols>
+ 		</cmd>
+ 		<cmd><cmd_name>delete</cmd_name>

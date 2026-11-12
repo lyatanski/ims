@@ -1,0 +1,502 @@
+Answer the PCRF's RAR in ims_qos and act on lost media bearers.
+
+TS 29.214 4.4.6.2: when the AF receives a RAR "it shall acknowledge the
+command by sending an RAA". ims_qos returned nothing for a RAR, so the PCRF
+retransmitted and timed out, and a lost or released bearer was ignored: the
+call went on without its media.
+
+Answer every RAR at once: 2001, or 5002 DIAMETER_UNKNOWN_SESSION_ID for an
+Rx session we do not have.
+
+Specific-Action INDICATION_OF_LOSS_OF_BEARER or _RELEASE_OF_BEARER on a
+media session names the affected media components in its Flows AVPs. TS
+24.229 5.2.8.1.1 (session being established) and 5.2.8.1.2 (established):
+if no SIP message removes that media within an operator defined time, the
+P-CSCF releases the session. Remember those components; an SDP offer/answer
+that drops them (port 0 or no m= line) clears them, as does a RAR with
+INDICATION_OF_RECOVERY_OF_BEARER or _ESTABLISHMENT_OF_BEARER for them. A
+1 s timer terminates the Rx sessions that still have such components at
+their deadline, the new bearer_release_wait modparam (default 5 s). The
+dialog is then released as after an ASR: when the STA arrives, if
+terminate_dialog_on_rx_failure is set, with early_qosrelease_reason or
+confirmed_qosrelease_headers.
+
+On the signalling path session (4.4.6.3) the AF may terminate it: do so
+without waiting, which goes on as before for a terminated signalling
+session (the contact is deregistered when delete_contact_on_rx_failure is
+set).
+
+diff --git a/src/modules/ims_qos/doc/ims_qos_admin.xml b/src/modules/ims_qos/doc/ims_qos_admin.xml
+index 586f34c08d..5729e7dd72 100644
+--- a/src/modules/ims_qos/doc/ims_qos_admin.xml
++++ b/src/modules/ims_qos/doc/ims_qos_admin.xml
+@@ -365,6 +365,31 @@ modparam("ims_qos", "delete_contact_on_rx_failure", 0)
+       </example>
+     </section>
+ 
++    <section>
++      <title><varname>bearer_release_wait</varname> integer</title>
++
++      <para>Seconds to wait, after a RAR from the PCRF reports the loss or
++release of the bearer of some media of a session, for a SIP request that
++removes that media. When none arrives, or does not remove all of it, the Rx
++session is terminated and, if terminate_dialog_on_rx_failure is set, the
++dialog is released (TS 24.229 5.2.8.1). A RAR reporting the recovery of the
++bearer cancels the release. A loss of the signalling bearer terminates the
++signalling Rx session without waiting.</para>
++
++      <para><emphasis> Default value is 5</emphasis></para>
++
++      <example>
++        <title><varname>bearer_release_wait</varname> parameter
++        usage</title>
++
++        <programlisting format="linespecific">
++...
++modparam("ims_qos", "bearer_release_wait", 10)
++...
++        </programlisting>
++      </example>
++    </section>
++
+     <section>
+       <title><varname>include_rtcp_fd</varname> integer</title>
+ 
+diff --git a/src/modules/ims_qos/ims_qos_mod.c b/src/modules/ims_qos/ims_qos_mod.c
+index 13162faaa4..66159fcc02 100644
+--- a/src/modules/ims_qos/ims_qos_mod.c
++++ b/src/modules/ims_qos/ims_qos_mod.c
+@@ -69,6 +69,7 @@
+ #include "rx_asr.h"
+ #include "rx_str.h"
+ #include "rx_aar.h"
++#include "rx_rar.h"
+ #include "ims_qos_mod.h"
+ #include "../../core/parser/sdp/sdp.h"
+ #include "../../core/kemi.h"
+@@ -149,6 +150,8 @@ int terminate_dialog_on_rx_failure =
+ 		1; //this specifies whether a dialog is torn down when a media rx session fails - in some cases you might not want the dialog torn down
+ int delete_contact_on_rx_failure =
+ 		1; //If this is set we delete the contact if the associated signalling bearer is removed
++int bearer_release_wait =
++		5; //seconds to wait, after a RAR reporting lost media bearers, for SIP to remove that media before releasing the session
+ int _ims_qos_suspend_transaction =
+ 		1; //If this is set we suspend the transaction and continue later
+ 
+@@ -251,6 +254,7 @@ static param_export_t params[] = {
+ 	{"confirmed_qosrelease_headers", PARAM_STR, &confirmed_qosrelease_headers},
+ 	{"terminate_dialog_on_rx_failure", PARAM_INT, &terminate_dialog_on_rx_failure},
+ 	{"delete_contact_on_rx_failure", PARAM_INT, &delete_contact_on_rx_failure},
++	{"bearer_release_wait", PARAM_INT, &bearer_release_wait},
+ 	{"regex_sdp_ip_prefix_to_maintain_in_fd", PARAM_STR, &regex_sdp_ip_prefix_to_maintain_in_fd},
+ 	{"include_rtcp_fd", PARAM_INT, &include_rtcp_fd},
+ 	{"suspend_transaction", PARAM_INT, &_ims_qos_suspend_transaction},
+@@ -336,6 +340,11 @@ static int mod_init(void)
+ 		return -1;
+ 	}
+ 
++	if(rx_rar_init() != 0) {
++		LM_ERR("unable to initialise RAR processing\n");
++		return -1;
++	}
++
+ 	if(ims_qos_init_counters() != 0) {
+ 		LM_ERR("Failed to register counters for ims_qos module\n");
+ 		return -1;
+@@ -449,8 +458,7 @@ AAAMessage *callback_cdp_request(AAAMessage *request, void *param)
+ 					case IMS_RAR:
+ 						LM_INFO("Rx request handler():- Received an IMS_RAR "
+ 								"\n");
+-						/* TODO: Add support for Re-Auth Requests */
+-						return 0;
++						return rx_process_rar(request);
+ 						break;
+ 					case IMS_ASR:
+ 						LM_INFO("Rx request handler(): - Received an IMS_ASR "
+diff --git a/src/modules/ims_qos/rx_aar.c b/src/modules/ims_qos/rx_aar.c
+index c987e21e9a..e01df565d7 100644
+--- a/src/modules/ims_qos/rx_aar.c
++++ b/src/modules/ims_qos/rx_aar.c
+@@ -60,6 +60,7 @@
+ #include "rx_authdata.h"
+ 
+ #include "rx_aar.h"
++#include "rx_rar.h"
+ #include "rx_avp.h"
+ 
+ #include "../../lib/ims/ims_getters.h"
+@@ -528,6 +529,7 @@ int add_media_components(AAAMessage *aar, struct sip_msg *req,
+ 	str ttag = {0, 0};
+ 	str ftag = {0, 0};
+ 	int request_originated_from_callee = 0;
++	unsigned int kept = 0;
+ 	str ipA, ipB, portA, portB;
+ 	// New flow descriptions are added hence it wont be added directly to the currently active flow description list until dialog is confirmed.
+ 	int in_current_flow_description_list = 0;
+@@ -582,6 +584,9 @@ int add_media_components(AAAMessage *aar, struct sip_msg *req,
+ 			if(!req_sdp_stream || !rpl_sdp_stream) {
+ 				break;
+ 			}
++			if(sdp_stream_num < 32 && atoi(req_sdp_stream->port.s) != 0
++					&& atoi(rpl_sdp_stream->port.s) != 0)
++				kept |= 1u << sdp_stream_num;
+ 			// Check if this is a stream to add to AAR.
+ 			if(req_sdp_stream->is_rtp) {
+ 				// Check if the src or dst port is 0. If so, then don't add to Rx AAR.
+@@ -708,6 +713,7 @@ int add_media_components(AAAMessage *aar, struct sip_msg *req,
+ 		}
+ 		sdp_session_num++;
+ 	}
++	rx_media_kept(p_session_data, kept);
+ 
+ 	free_sdp((sdp_info_t **)(void *)&req->body);
+ 	free_sdp((sdp_info_t **)(void *)&rpl->body);
+diff --git a/src/modules/ims_qos/rx_authdata.h b/src/modules/ims_qos/rx_authdata.h
+index 6d6f864df2..823a5b1586 100644
+--- a/src/modules/ims_qos/rx_authdata.h
++++ b/src/modules/ims_qos/rx_authdata.h
+@@ -52,6 +52,8 @@
+ #ifndef RX_AUTH_DATA_H
+ #define RX_AUTH_DATA_H
+ 
++#include <time.h>
++
+ #include "../../modules/ims_dialog/dlg_load.h"
+ 
+ extern struct tm_binds tmb;
+@@ -103,6 +105,8 @@ typedef struct rx_authsessiondata
+ 	str domain; //the domain the registration aor belongs to (for registration)
+ 	str registration_aor; //the aor if this rx session is a subscription to signalling status
+ 	int must_terminate_dialog; //0 means when this session terminates it must not terminate the relevant dialog, 1 means it must terminate the dialog
++	unsigned int released_media; /* media components (bit Media-Component-Number - 1) the PCRF reported without bearer */
++	time_t release_deadline; /* when released_media still there end the session */
+ 	flow_description_t *first_current_flow_description;
+ 	flow_description_t *first_new_flow_description;
+ } rx_authsessiondata_t;
+diff --git a/src/modules/ims_qos/rx_rar.c b/src/modules/ims_qos/rx_rar.c
+new file mode 100644
+index 0000000000..a2d3702795
+--- /dev/null
++++ b/src/modules/ims_qos/rx_rar.c
+@@ -0,0 +1,283 @@
++/*
++ * Copyright (C) 2026 kamailio.org
++ *
++ * This file is part of Kamailio, a free SIP server.
++ *
++ * Kamailio is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version
++ *
++ * Kamailio is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ */
++
++/*
++ * Re-Auth-Request from the PCRF (TS 29.214 4.4.6.2, 4.4.6.3).
++ *
++ * The RAR is answered at once. When it reports the loss or release of the
++ * bearer of some media components of a session, those components are
++ * remembered; if no SIP message removes them within bearer_release_wait
++ * seconds, the Rx session is terminated and, through the same path as an
++ * ASR, the dialog is released (TS 24.229 5.2.8.1.1, 5.2.8.1.2). For the
++ * signalling path session the Rx session is terminated without waiting.
++ */
++
++#include <time.h>
++
++#include "../../core/mem/shm_mem.h"
++#include "../../core/locking.h"
++#include "../../core/timer.h"
++#include "../cdp/cdp_load.h"
++#include "../cdp_avp/cdp_avp_mod.h"
++#include "rx_rar.h"
++#include "rx_str.h"
++#include "rx_avp.h"
++
++extern struct cdp_binds cdpb;
++extern int terminate_dialog_on_rx_failure;
++extern int bearer_release_wait;
++
++/* every media component, for a release that names none */
++#define ALL_MEDIA ((unsigned int)-1)
++
++/** Rx session with media whose bearer is gone, waiting for its deadline */
++typedef struct bearer_release
++{
++	str id; /**< Rx session id */
++	struct bearer_release *next;
++} bearer_release_t;
++
++static bearer_release_t **releases = 0;
++static gen_lock_t *releases_lock = 0;
++
++static void release_timer(unsigned int ticks, void *param);
++
++int rx_rar_init(void)
++{
++	releases = shm_malloc(sizeof(bearer_release_t *));
++	releases_lock = lock_alloc();
++	if(!releases || !releases_lock) {
++		LM_ERR("no more shm memory\n");
++		return -1;
++	}
++	*releases = 0;
++	lock_init(releases_lock);
++	if(register_timer(release_timer, 0, 1) < 0) {
++		LM_ERR("failed to register the bearer release timer\n");
++		return -1;
++	}
++	return 0;
++}
++
++/**
++ * Queues an Rx session for the timer, once.
++ */
++static void queue_release(str *id)
++{
++	bearer_release_t *r;
++
++	lock_get(releases_lock);
++	for(r = *releases; r; r = r->next)
++		if(r->id.len == id->len && memcmp(r->id.s, id->s, id->len) == 0)
++			break;
++	if(!r) {
++		r = shm_malloc(sizeof(bearer_release_t) + id->len);
++		if(!r) {
++			LM_ERR("no more shm memory\n");
++		} else {
++			r->id.s = (char *)(r + 1);
++			r->id.len = id->len;
++			memcpy(r->id.s, id->s, id->len);
++			r->next = *releases;
++			*releases = r;
++		}
++	}
++	lock_release(releases_lock);
++}
++
++/**
++ * Terminates the Rx sessions whose released media are still there at their
++ * deadline. Runs without the list lock while it takes session locks: the
++ * RAR handler takes them the other way round.
++ */
++static void release_timer(unsigned int ticks, void *param)
++{
++	bearer_release_t *list, *r, *keep = 0;
++	AAASession *auth;
++	rx_authsessiondata_t *data;
++	int due;
++
++	lock_get(releases_lock);
++	list = *releases;
++	*releases = 0;
++	lock_release(releases_lock);
++
++	while(list) {
++		r = list;
++		list = list->next;
++		due = 0;
++		auth = cdpb.AAAGetAuthSession(r->id);
++		if(auth) {
++			data = (rx_authsessiondata_t *)auth->u.auth.generic_data;
++			if(data && data->released_media) {
++				if(data->release_deadline > time(NULL)) {
++					r->next = keep;
++					keep = r;
++					r = 0;
++				} else {
++					due = 1;
++					data->released_media = 0;
++					if(!data->subscribed_to_signaling_path_status
++							&& terminate_dialog_on_rx_failure)
++						data->must_terminate_dialog = 1;
++				}
++			}
++			cdpb.AAASessionsUnlock(auth->hash);
++		}
++		if(due) {
++			LM_INFO("bearer of Rx session [%.*s] released, terminating it\n",
++					r->id.len, r->id.s);
++			rx_send_str(&r->id);
++		}
++		if(r)
++			shm_free(r);
++	}
++
++	if(keep) {
++		lock_get(releases_lock);
++		for(r = keep; r->next; r = r->next)
++			;
++		r->next = *releases;
++		*releases = keep;
++		lock_release(releases_lock);
++	}
++}
++
++/**
++ * The media components named in the Flows AVPs of a RAR, as a mask of bit
++ * (Media-Component-Number - 1); all of them when it names none.
++ */
++static unsigned int rar_media(AAAMessage *request)
++{
++	AAA_AVP *avp, *mcn;
++	AAA_AVP_LIST flows;
++	unsigned int mask = 0, n;
++
++	for(avp = request->avpList.head; avp; avp = avp->next) {
++		if(avp->code != AVP_IMS_Flows || avp->vendorId != IMS_vendor_id_3GPP)
++			continue;
++		flows = cdpb.AAAUngroupAVPS(avp->data);
++		mcn = cdpb.AAAFindMatchingAVPList(flows, flows.head,
++				AVP_IMS_Media_Component_Number, IMS_vendor_id_3GPP,
++				AAA_FORWARD_SEARCH);
++		if(mcn && mcn->data.len == 4) {
++			n = get_4bytes(mcn->data.s);
++			if(n >= 1 && n <= 32)
++				mask |= 1u << (n - 1);
++			else
++				LM_WARN("Media-Component-Number %u out of range\n", n);
++		}
++		cdpb.AAAFreeAVPList(&flows);
++	}
++	return mask ? mask : ALL_MEDIA;
++}
++
++/**
++ * Handles a RAR from the PCRF and returns the RAA (TS 29.214 4.4.6.2:
++ * the AF "shall acknowledge the command by sending an RAA").
++ * @param request - the RAR
++ * @returns the RAA, NULL on error
++ */
++AAAMessage *rx_process_rar(AAAMessage *request)
++{
++	AAAMessage *raa;
++	AAASession *auth = 0;
++	rx_authsessiondata_t *data = 0;
++	AAA_AVP *avp;
++	unsigned int rc = DIAMETER_SUCCESS, action, media;
++	char x[4];
++
++	raa = cdpb.AAACreateResponse(request);
++	if(!raa)
++		return 0;
++
++	if(request->sessionId)
++		auth = cdpb.AAAGetAuthSession(request->sessionId->data);
++	if(auth)
++		data = (rx_authsessiondata_t *)auth->u.auth.generic_data;
++	if(!data) {
++		LM_INFO("RAR for an unknown Rx session\n");
++		rc = DIAMETER_UNKNOWN_SESSION_ID;
++		goto send;
++	}
++
++	for(avp = request->avpList.head; avp; avp = avp->next) {
++		if(avp->code != AVP_IMS_Specific_Action
++				|| avp->vendorId != IMS_vendor_id_3GPP || avp->data.len != 4)
++			continue;
++		action = get_4bytes(avp->data.s);
++		switch(action) {
++			case AVP_IMS_Specific_Action_Indication_Of_Loss_Of_Bearer:
++			case AVP_IMS_Specific_Action_Indication_Of_Release_Of_Bearer:
++				if(data->subscribed_to_signaling_path_status) {
++					/* TS 29.214 4.4.6.3: the AF may terminate the session */
++					LM_INFO("signalling bearer of Rx session [%.*s] lost\n",
++							auth->id.len, auth->id.s);
++					data->released_media = ALL_MEDIA;
++					data->release_deadline = time(NULL);
++				} else {
++					media = rar_media(request);
++					LM_INFO("bearer of media 0x%x of Rx session [%.*s] lost, "
++							"waiting %d s for SIP to remove them\n",
++							media, auth->id.len, auth->id.s,
++							bearer_release_wait);
++					data->released_media |= media;
++					data->release_deadline = time(NULL) + bearer_release_wait;
++				}
++				queue_release(&auth->id);
++				break;
++			case AVP_IMS_Specific_Action_Indication_Of_Recovery_Of_Bearer:
++			case AVP_IMS_Specific_Action_Indication_Of_Establishment_Of_Bearer:
++				if(!data->subscribed_to_signaling_path_status)
++					data->released_media &= ~rar_media(request);
++				break;
++			default:
++				LM_DBG("ignoring Specific-Action %u\n", action);
++		}
++	}
++
++send:
++	if(auth)
++		cdpb.AAASessionsUnlock(auth->hash);
++	set_4bytes(x, rc);
++	if(!rx_add_avp(raa, x, 4, AVP_Result_Code, AAA_AVP_FLAG_MANDATORY, 0,
++			   AVP_DUPLICATE_DATA, __FUNCTION__)) {
++		cdpb.AAAFreeMessage(&raa);
++		return 0;
++	}
++	return raa;
++}
++
++/**
++ * Called with the media components that an SDP offer/answer keeps: released
++ * ones it does not keep were removed by SIP, so their release is done.
++ * @param session_data - the Rx session data, with the session locked
++ * @param kept - mask of bit (Media-Component-Number - 1) of the kept media
++ */
++void rx_media_kept(rx_authsessiondata_t *session_data, unsigned int kept)
++{
++	if(session_data->subscribed_to_signaling_path_status
++			|| !session_data->released_media)
++		return;
++	session_data->released_media &= kept;
++	if(!session_data->released_media)
++		LM_INFO("media with a released bearer removed by SIP\n");
++}
+diff --git a/src/modules/ims_qos/rx_rar.h b/src/modules/ims_qos/rx_rar.h
+new file mode 100644
+index 0000000000..d33984aebc
+--- /dev/null
++++ b/src/modules/ims_qos/rx_rar.h
+@@ -0,0 +1,32 @@
++/*
++ * Copyright (C) 2026 kamailio.org
++ *
++ * This file is part of Kamailio, a free SIP server.
++ *
++ * Kamailio is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version
++ *
++ * Kamailio is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ */
++
++#ifndef RX_RAR_H
++#define RX_RAR_H
++
++#include "../cdp/diameter_api.h"
++#include "rx_authdata.h"
++
++int rx_rar_init(void);
++AAAMessage *rx_process_rar(AAAMessage *request);
++void rx_media_kept(rx_authsessiondata_t *session_data, unsigned int kept);
++
++#endif

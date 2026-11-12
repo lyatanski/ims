@@ -1,0 +1,309 @@
+Match peer applications in cdp on the Application-Id alone.
+
+RFC 6733 5.3: "The value of the Vendor-Id AVP in the
+Vendor-Specific-Application-Id MUST NOT be used during computation." cdp
+stored a peer's applications with the Vendor-Id they came in (0 for a plain
+Auth-Application-Id, the group's Vendor-Id for one inside
+Vendor-Specific-Application-Id) and routed only to a peer with the same
+pair. TS 29.214 5.2 requires the PCRF to advertise Rx inside
+Vendor-Specific-Application-Id, so the P-CSCF's STR, which carries a plain
+Auth-Application-Id, found no peer: every STR (call end, de-registration,
+after an ASR) was never sent, and ims_qos waits for the STA to tear down.
+
+- Routing matches the application id only. That also drops the Vendor-Id
+  that leaked from the Vendor-Specific-Application-Id step into the
+  top-level one.
+- The Destination-Host shortcut checked application 0 with vendor 0, so it
+  never matched; it now checks the header's Application-Id, or relay.
+- Process_CER() had the same pair compare, so a peer advertising Rx plainly
+  to us configured with vendor 10415, or the reverse, got 5010
+  DIAMETER_NO_COMMON_APPLICATION.
+
+diff --git a/src/modules/cdp/peerstatemachine.c b/src/modules/cdp/peerstatemachine.c
+index 37302d6f87..98c16ee810 100644
+--- a/src/modules/cdp/peerstatemachine.c
++++ b/src/modules/cdp/peerstatemachine.c
+@@ -1050,6 +1050,21 @@ void R_Reject(peer *p, int sock)
+ 	close(sock);
+ }
+ 
++/**
++ * Counts the applications of our configuration with this id and type. The
++ * Vendor-Id an application is advertised with does not count (RFC 6733 5.3).
++ */
++static int count_config_applications(int id, int type)
++{
++	int i, cnt = 0;
++
++	for(i = 0; i < config->applications_cnt; i++)
++		if(id == config->applications[i].id
++				&& config->applications[i].type == type)
++			cnt++;
++	return cnt;
++}
++
+ /**
+  * Process a Capabilities Exchange Request.
+  * Checks whether there are common applications.
+@@ -1061,55 +1076,30 @@ void R_Reject(peer *p, int sock)
+ int Process_CER(peer *p, AAAMessage *cer)
+ {
+ 	int common_app = 0;
+-	AAA_AVP *avp, *avp_vendor, *avp2;
++	AAA_AVP *avp, *avp2;
+ 	AAA_AVP_LIST group;
+-	int i, id, vendor;
+ 	for(avp = cer->avpList.head; avp; avp = avp->next) {
+ 		switch(avp->code) {
+ 			case AVP_Auth_Application_Id:
+-				id = get_4bytes(avp->data.s);
+-				for(i = 0; i < config->applications_cnt; i++)
+-					if(id == config->applications[i].id
+-							&& config->applications[i].vendor == 0
+-							&& config->applications[i].type == DP_AUTHORIZATION)
+-						common_app++;
++				common_app += count_config_applications(
++						get_4bytes(avp->data.s), DP_AUTHORIZATION);
+ 				break;
+ 			case AVP_Acct_Application_Id:
+-				id = get_4bytes(avp->data.s);
+-				for(i = 0; i < config->applications_cnt; i++)
+-					if(id == config->applications[i].id
+-							&& config->applications[i].vendor == 0
+-							&& config->applications[i].type == DP_ACCOUNTING)
+-						common_app++;
++				common_app += count_config_applications(
++						get_4bytes(avp->data.s), DP_ACCOUNTING);
+ 				break;
+ 			case AVP_Vendor_Specific_Application_Id:
+ 				group = AAAUngroupAVPS(avp->data);
+-				avp_vendor = AAAFindMatchingAVPList(
+-						group, group.head, AVP_Vendor_Id, 0, 0);
+ 				avp2 = AAAFindMatchingAVPList(
+ 						group, group.head, AVP_Auth_Application_Id, 0, 0);
+-				if(avp_vendor && avp2) {
+-					vendor = get_4bytes(avp_vendor->data.s);
+-					id = get_4bytes(avp2->data.s);
+-					for(i = 0; i < config->applications_cnt; i++)
+-						if(id == config->applications[i].id
+-								&& config->applications[i].vendor == vendor
+-								&& config->applications[i].type
+-										   == DP_AUTHORIZATION)
+-							common_app++;
+-				}
++				if(avp2)
++					common_app += count_config_applications(
++							get_4bytes(avp2->data.s), DP_AUTHORIZATION);
+ 				avp2 = AAAFindMatchingAVPList(
+ 						group, group.head, AVP_Acct_Application_Id, 0, 0);
+-				if(avp_vendor && avp2) {
+-					vendor = get_4bytes(avp_vendor->data.s);
+-					id = get_4bytes(avp2->data.s);
+-					for(i = 0; i < config->applications_cnt; i++)
+-						if(id == config->applications[i].id
+-								&& config->applications[i].vendor == vendor
+-								&& config->applications[i].type
+-										   == DP_ACCOUNTING)
+-							common_app++;
+-				}
++				if(avp2)
++					common_app += count_config_applications(
++							get_4bytes(avp2->data.s), DP_ACCOUNTING);
+ 				AAAFreeAVPList(&group);
+ 				break;
+ 		}
+diff --git a/src/modules/cdp/routing.c b/src/modules/cdp/routing.c
+index 09d8217db2..24ffd98dff 100644
+--- a/src/modules/cdp/routing.c
++++ b/src/modules/cdp/routing.c
+@@ -50,22 +50,21 @@ int gcount = 0;
+ 
+ 
+ /**
+- * Returns if the peer advertised support for an Application ID
++ * Returns if the peer advertised support for an Application ID. The Vendor-Id
++ * the peer advertised it with does not count (RFC 6733 5.3).
+  * @param p - the peer to check
+  * @param app_id - the application id to look for
+- * @param vendor_id - the vendor id to look for, 0 if not vendor specific
+  * @returns 0 if not found, 1 if found
+  */
+-int peer_handles_application(peer *p, int app_id, int vendor_id)
++int peer_handles_application(peer *p, int app_id)
+ {
+ 	int i;
+-	LM_DBG("Checking if peer %.*s handles application %d for vendord %d\n",
+-			p->fqdn.len, p->fqdn.s, app_id, vendor_id);
++	LM_DBG("Checking if peer %.*s handles application %d\n", p->fqdn.len,
++			p->fqdn.s, app_id);
+ 	if(!p || !p->applications || !p->applications_cnt)
+ 		return 0;
+ 	for(i = 0; i < p->applications_cnt; i++)
+-		if(p->applications[i].id == app_id
+-				&& p->applications[i].vendor == vendor_id)
++		if(p->applications[i].id == app_id)
+ 			return 1;
+ 	return 0;
+ }
+@@ -76,7 +75,7 @@ int peer_handles_application(peer *p, int app_id, int vendor_id)
+  * @returns - the peer or null if none connected
+  */
+ peer *get_first_connected_route(
+-		cdp_session_t *cdp_session, routing_entry *r, int app_id, int vendor_id)
++		cdp_session_t *cdp_session, routing_entry *r, int app_id)
+ {
+ 	peer *peers[LB_MAX_PEERS];
+ 	int peer_count = 0;
+@@ -100,8 +99,8 @@ peer *get_first_connected_route(
+ 					cdp_session
+ 							->hash); /*V1.1 - As we were...no call seems to pass cdp_session unlocked */
+ 			if(p && !p->disabled && (p->state == I_Open || p->state == R_Open)
+-					&& (peer_handles_application(p, app_id, vendor_id)
+-							|| peer_handles_application(p, RELAY_APP_ID, 0))) {
++					&& (peer_handles_application(p, app_id)
++							|| peer_handles_application(p, RELAY_APP_ID))) {
+ 				p->last_selected = time(NULL);
+ 				LM_DBG("Found a sticky peer [%.*s] for this session - "
+ 					   "re-using\n",
+@@ -124,8 +123,8 @@ peer *get_first_connected_route(
+ 					(p->state == I_Open || p->state == R_Open) ? "opened"
+ 															   : "closed");
+ 		if(p && !p->disabled && (p->state == I_Open || p->state == R_Open)
+-				&& (peer_handles_application(p, app_id, vendor_id)
+-						|| peer_handles_application(p, RELAY_APP_ID, 0))) {
++				&& (peer_handles_application(p, app_id)
++						|| peer_handles_application(p, RELAY_APP_ID))) {
+ 			LM_DBG("The peer %.*s matches - will forward there\n", i->fqdn.len,
+ 					i->fqdn.s);
+ 			if(peer_count != 0) { //check the metric
+@@ -189,12 +188,12 @@ peer *get_first_connected_route(
+ 
+ 
+ /**
+- * Sub-function to route a message based on the application id and vendor id.
++ * Sub-function to route a message based on the application id.
+  * This allows the main routing to try multiple times, e.g. in case it finds
+- * multiple app_id/vendor_id combinations in the message.
++ * multiple application ids in the message.
+  */
+-peer *get_routing_peer_by_app_id(cdp_session_t *cdp_session,
+-		str destination_realm, int app_id, int vendor_id)
++peer *get_routing_peer_by_app_id(
++		cdp_session_t *cdp_session, str destination_realm, int app_id)
+ {
+ 	peer *p = 0;
+ 	routing_realm *rr = 0;
+@@ -214,8 +213,7 @@ peer *get_routing_peer_by_app_id(cdp_session_t *cdp_session,
+ 							   == 0)
+ 				break;
+ 		if(rr) {
+-			p = get_first_connected_route(
+-					cdp_session, rr->routes, app_id, vendor_id);
++			p = get_first_connected_route(cdp_session, rr->routes, app_id);
+ 			if(p)
+ 				return p;
+ 			else
+@@ -228,12 +226,10 @@ peer *get_routing_peer_by_app_id(cdp_session_t *cdp_session,
+ 
+ 	// 2. Try the DefaultRoute table
+ 	LM_DBG("no routing peer found, trying default route\n");
+-	p = get_first_connected_route(
+-			cdp_session, config->r_table->routes, app_id, vendor_id);
++	p = get_first_connected_route(cdp_session, config->r_table->routes, app_id);
+ 	if(!p) {
+-		LM_WARN("No connected DefaultRoute peer "
+-				"found for app_id %d and vendor_id %d.\n",
+-				app_id, vendor_id);
++		LM_WARN("No connected DefaultRoute peer found for app_id %d.\n",
++				app_id);
+ 	}
+ 	return p;
+ }
+@@ -250,10 +246,10 @@ peer *get_routing_peer_by_app_id(cdp_session_t *cdp_session,
+ peer *get_routing_peer(cdp_session_t *cdp_session, AAAMessage *m)
+ {
+ 	str destination_realm = {0, 0}, destination_host = {0, 0};
+-	AAA_AVP *avp, *avp_vendor, *avp2;
++	AAA_AVP *avp, *avp2;
+ 	AAA_AVP_LIST group;
+ 	peer *p;
+-	int app_id = 0, vendor_id = 0;
++	int app_id = m->applicationId;
+ 
+ 	// 1. Destination-Host routing to adjacent peer
+ 	avp = AAAFindMatchingAVP(m, 0, AVP_Destination_Host, 0, AAA_FORWARD_SEARCH);
+@@ -264,7 +260,8 @@ peer *get_routing_peer(cdp_session_t *cdp_session, AAAMessage *m)
+ 		/* There is a destination host present in the message try and route directly there */
+ 		p = get_peer_by_fqdn(&destination_host);
+ 		if(p && (p->state == I_Open || p->state == R_Open)
+-				&& peer_handles_application(p, app_id, vendor_id)) {
++				&& (peer_handles_application(p, app_id)
++						|| peer_handles_application(p, RELAY_APP_ID))) {
+ 			p->last_selected = time(NULL);
+ 			return p;
+ 		}
+@@ -284,23 +281,17 @@ peer *get_routing_peer(cdp_session_t *cdp_session, AAAMessage *m)
+ 		destination_realm = avp->data;
+ 
+ 	// 2. Try using the Vendor-Specific-Application-Id
+-	app_id = m->applicationId;
+ 	avp = AAAFindMatchingAVP(
+ 			m, 0, AVP_Vendor_Specific_Application_Id, 0, AAA_FORWARD_SEARCH);
+ 	if(avp) {
+ 		group = AAAUngroupAVPS(avp->data);
+-		avp_vendor =
+-				AAAFindMatchingAVPList(group, group.head, AVP_Vendor_Id, 0, 0);
+-		if(avp_vendor) {
+-			vendor_id = get_4bytes(avp_vendor->data.s);
+-		}
+ 		// 2.1. Authorization Application-Id
+ 		avp2 = AAAFindMatchingAVPList(
+ 				group, group.head, AVP_Auth_Application_Id, 0, 0);
+ 		if(avp2) {
+ 			app_id = get_4bytes(avp2->data.s);
+ 			p = get_routing_peer_by_app_id(
+-					cdp_session, destination_realm, app_id, vendor_id);
++					cdp_session, destination_realm, app_id);
+ 			if(p) {
+ 				AAAFreeAVPList(&group);
+ 				return p;
+@@ -312,7 +303,7 @@ peer *get_routing_peer(cdp_session_t *cdp_session, AAAMessage *m)
+ 		if(avp2) {
+ 			app_id = get_4bytes(avp2->data.s);
+ 			p = get_routing_peer_by_app_id(
+-					cdp_session, destination_realm, app_id, vendor_id);
++					cdp_session, destination_realm, app_id);
+ 			if(p) {
+ 				AAAFreeAVPList(&group);
+ 				return p;
+@@ -321,18 +312,13 @@ peer *get_routing_peer(cdp_session_t *cdp_session, AAAMessage *m)
+ 		AAAFreeAVPList(&group);
+ 	}
+ 
+-	// 3. Try with Vendor-Id (opt) and Auth/Acct Application-Id at top level
+-	avp_vendor = AAAFindMatchingAVP(m, 0, AVP_Vendor_Id, 0, AAA_FORWARD_SEARCH);
+-	if(avp_vendor) {
+-		vendor_id = get_4bytes(avp_vendor->data.s);
+-	}
++	// 3. Try with Auth/Acct Application-Id at top level
+ 	// 3.1. Authorization Application-Id
+ 	avp = AAAFindMatchingAVP(
+ 			m, 0, AVP_Auth_Application_Id, 0, AAA_FORWARD_SEARCH);
+ 	if(avp) {
+ 		app_id = get_4bytes(avp->data.s);
+-		p = get_routing_peer_by_app_id(
+-				cdp_session, destination_realm, app_id, vendor_id);
++		p = get_routing_peer_by_app_id(cdp_session, destination_realm, app_id);
+ 		if(p)
+ 			return p;
+ 	}
+@@ -341,8 +327,7 @@ peer *get_routing_peer(cdp_session_t *cdp_session, AAAMessage *m)
+ 			m, 0, AVP_Acct_Application_Id, 0, AAA_FORWARD_SEARCH);
+ 	if(avp) {
+ 		app_id = get_4bytes(avp->data.s);
+-		p = get_routing_peer_by_app_id(
+-				cdp_session, destination_realm, app_id, vendor_id);
++		p = get_routing_peer_by_app_id(cdp_session, destination_realm, app_id);
+ 		if(p)
+ 			return p;
+ 	}
