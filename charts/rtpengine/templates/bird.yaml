@@ -1,0 +1,112 @@
+{{- if .Values.bgp.enabled }}
+{{- include "rtpengine.bgp.validate" . }}
+{{- $n := int .Values.replicaCount }}
+{{- $fams := include "rtpengine.bgp.families" . | fromJsonArray }}
+{{- $as := int .Values.bgp.localAs }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rtpengine.name" . }}-bird
+  labels: {{- include "rtpengine.labels" . | nindent 4 }}
+data:
+  {{- /*
+  Per replica, selected by its own name. Replica `i` is the primary for
+  address `i` and the secondary for the other: every address is announced by
+  both, and what tells the two routes apart is the AS path -- the secondary's
+  is longer, so the router uses it only once the primary's is withdrawn. MED
+  would not do: it is compared only between routes from one neighbour AS.
+
+  Every announcement starts disabled. The probe sidecar enables them once
+  rtpengine has answered /ping for a while, and disables them again when it
+  stops, which withdraws the routes and leaves the session up.
+  */}}
+  {{- range $i := until $n }}
+  {{ include "rtpengine.name" $ }}-{{ $i }}.conf: |
+    # The pod's own address on eth0: unique per pod, unlike the media addresses
+    # every replica binds.
+    router id from "eth*";
+    log stderr { info, warning, error, fatal, auth };
+
+    protocol device {}
+    {{- if $.Values.bgp.bfd.enabled }}
+
+    protocol bfd {
+      interface "*" {
+        min rx interval {{ $.Values.bgp.bfd.interval }} ms;
+        min tx interval {{ $.Values.bgp.bfd.interval }} ms;
+        multiplier {{ $.Values.bgp.bfd.multiplier }};
+      };
+    }
+    {{- end }}
+    {{- range $k, $a := $.Values.addresses }}
+    {{- range $fam := $fams }}
+    {{- $f := int $fam }}
+
+    protocol static addr{{ $k }}_v{{ $f }} {
+      disabled yes;
+      ipv{{ $f }};
+      route {{ index $a (printf "v%d" $f) }}/{{ ternary 128 32 (eq $f 6) }} blackhole;
+    }
+    {{- end }}
+    {{- end }}
+    {{- range $fam := $fams }}
+    {{- $f := int $fam }}
+
+    filter announce{{ $f }} {
+      {{- range $k, $a := $.Values.addresses }}
+      if net = {{ index $a (printf "v%d" $f) }}/{{ ternary 128 32 (eq $f 6) }} then {
+        {{- if ne $k $i }}
+        {{- range until (int $.Values.bgp.prepend) }}
+        bgp_path.prepend({{ $as }});
+        {{- end }}
+        {{- end }}
+        accept;
+      }
+      {{- end }}
+      reject;
+    }
+    {{- end }}
+    {{- range $j, $peer := $.Values.bgp.peers }}
+    {{- $f := ternary 6 4 (contains ":" (toString $peer)) }}
+
+    protocol bgp peer{{ $j }} {
+      local as {{ $as }};
+      neighbor {{ $peer }} as {{ $.Values.bgp.peerAs }};
+      {{- if $.Values.bgp.bfd.enabled }}
+      bfd on;
+      {{- end }}
+      ipv{{ $f }} {
+        import none;
+        export filter announce{{ $f }};
+      };
+    }
+    {{- end }}
+  {{- end }}
+  probe.sh: |
+    #!/bin/sh
+    # Announce while rtpengine answers /ping. After MISSES failures in a row,
+    # withdraw; announce again only after HOLD seconds of unbroken answers, so
+    # a daemon that keeps restarting does not flap the route. Applied on every
+    # round, so a bird that restarted (and starts with everything disabled)
+    # is brought back to the state decided here.
+    ctl() { birdcl -s /run/bird/bird.ctl "$1" "$2" > /dev/null 2>&1; }
+    state=down ok=0 miss=0
+    while :; do
+      if wget -q -T 1 -O /dev/null "$URL" 2> /dev/null; then
+        ok=$((ok + INTERVAL)) miss=0
+      else
+        ok=0 miss=$((miss + 1))
+      fi
+      if [ -e /run/bird/draining ]; then
+        state=down
+      elif [ "$state" = up ] && [ "$miss" -ge "$MISSES" ]; then
+        state=down
+      elif [ "$state" = down ] && [ "$ok" -ge "$HOLD" ]; then
+        state=up
+      fi
+      cmd=disable
+      [ "$state" = up ] && cmd=enable
+      for p in $PROTOS; do ctl "$cmd" "$p"; done
+      sleep "$INTERVAL"
+    done
+{{- end }}

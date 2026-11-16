@@ -27,9 +27,9 @@ just skipped or labelled `dir="na"`):
 
 | Metric | Type | Labels | Incremented on |
 |--------|------|--------|----------------|
-| `kamailio_ims_session_setup_attempts_total` | counter | `dir` | initial INVITE (orig in `MORIG`, term in `MTERM`) |
+| `kamailio_ims_session_setup_attempts_total` | counter | `dir` | initial INVITE (orig in `MORIG`, term in `MTERM`); a call whose both legs this S-CSCF serves is counted once, as `orig` |
 | `kamailio_ims_session_setup_success_total`  | counter | `dir` | first `2xx` final response to the INVITE |
-| `kamailio_ims_session_setup_failure_total`  | counter | `dir`,`code` | `>=300` final response to the INVITE |
+| `kamailio_ims_session_setup_failure_total`  | counter | `dir`,`code` | `>=300` final response to the INVITE, including the 402 / 500 the S-CSCF answers itself when charging refuses the call |
 | `kamailio_ims_session_setup_duration`       | histogram (ms) | `dir` | INVITE→`2xx` elapsed time |
 
 `dir` is `orig`/`term`; setup direction and start time are carried between the

@@ -18,6 +18,7 @@ jobs:
         - open5gs
         - cgr-engine
         - grafonnet
+        - bird
     steps:
     - uses: actions/checkout@v7
     - name: Build
