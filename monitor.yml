@@ -373,6 +373,29 @@ configs:
         + g.panel.stat.standardOptions.withDecimals(decimals)
         + steps(thr);
 
+      // Outcome split of a counter pair as a donut: the legend table carries the
+      // count and the share. The queries are instant, over the dashboard range.
+      local pie(title, ok, no, p, okname='accepted', noname='rejected', desc='') =
+        g.panel.pieChart.new(title)
+        + g.panel.pieChart.queryOptions.withDatasource('prometheus', ds)
+        + g.panel.pieChart.queryOptions.withTargets([
+          tgt(inc(ok), okname) + g.query.prometheus.withInstant(true),
+          tgt(inc(no), noname) + g.query.prometheus.withInstant(true),
+        ])
+        + g.panel.pieChart.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.pieChart.panelOptions.withDescription(desc)
+        + g.panel.pieChart.options.withPieType('donut')
+        + g.panel.pieChart.options.withDisplayLabels(['percent'])
+        + g.panel.pieChart.options.legend.withDisplayMode('table')
+        + g.panel.pieChart.options.legend.withPlacement('right')
+        + g.panel.pieChart.options.legend.withValues(['value', 'percent'])
+        + g.panel.pieChart.options.reduceOptions.withCalcs(['lastNotNull'])
+        + g.panel.pieChart.standardOptions.withDecimals(0)
+        + g.panel.pieChart.standardOptions.withOverrides([
+          { matcher: { id: 'byName', options: okname }, properties: [{ id: 'color', value: { mode: 'fixed', fixedColor: 'green' } }] },
+          { matcher: { id: 'byName', options: noname }, properties: [{ id: 'color', value: { mode: 'fixed', fixedColor: 'red' } }] },
+        ]);
+
       local ts(title, targets, p, unit='short') =
         g.panel.timeSeries.new(title)
         + g.panel.timeSeries.queryOptions.withDatasource('prometheus', ds)
@@ -393,87 +416,82 @@ configs:
       + g.dashboard.withPanels([
         // ===== Accessibility - Registration =====
         row('Accessibility - Registration (Initial Registration Success Rate)', 0),
-        kpi('Initial Registration Success Rate (S-CSCF)', '100 * ' + inc(m.reg_ok) + ' / (' + inc(m.reg_ok) + ' + ' + inc(m.reg_no) + ')', { h: 6, w: 6, x: 0, y: 1 }, ok_thr),
-        stat('Initial Registration Attempts', '(' + inc(m.reg_ok) + ' + ' + inc(m.reg_no) + ')', { h: 6, w: 6, x: 6, y: 1 }, 'short', 0, 'First registrations of an identity. Re-registrations and de-registrations are not counted.'),
-        stat('Successful Initial Registrations', inc(m.reg_ok), { h: 6, w: 6, x: 12, y: 1 }),
-        stat('Rejected Initial Registrations', inc(m.reg_no), { h: 6, w: 6, x: 18, y: 1 }),
-        kpi('Re-registration Success Rate (S-CSCF)', '100 * ' + inc(m.rereg_ok) + ' / (' + inc(m.rereg_ok) + ' + ' + inc(m.rereg_no) + ')', { h: 6, w: 6, x: 0, y: 7 }, ok_thr, 'percent', 2,
-            'TS 32.454 5.1.5: REGISTERs with an Expires above 0 for an identity that is registered already.'),
-        stat('Re-registration Attempts', '(' + inc(m.rereg_ok) + ' + ' + inc(m.rereg_no) + ')', { h: 6, w: 6, x: 6, y: 7 }),
-        ts('Initial Registration Rate', [tgt(rt(m.reg_ok), 'accepted'), tgt(rt(m.reg_no), 'rejected'), tgt(rt(m.sar_to), 'SAR timeouts')], { h: 7, w: 24, x: 0, y: 13 }, 'reqps'),
+        pie('Initial Registrations', m.reg_ok, m.reg_no, { h: 7, w: 12, x: 0, y: 1 }, desc='Initial Registration Success Rate (TS 32.454 5.1.1): first registrations of an identity, as accepted and rejected. Re-registrations and de-registrations are not counted.'),
+        pie('Re-registrations', m.rereg_ok, m.rereg_no, { h: 7, w: 12, x: 12, y: 1 }, desc='Re-registration Success Rate (TS 32.454 5.1.5): REGISTERs with an Expires above 0 for an identity that is registered already.'),
+        ts('Initial Registration Rate', [tgt(rt(m.reg_ok), 'accepted'), tgt(rt(m.reg_no), 'rejected'), tgt(rt(m.sar_to), 'SAR timeouts')], { h: 7, w: 24, x: 0, y: 8 }, 'reqps'),
 
         // ===== Accessibility - Session Establishment =====
-        row('Accessibility - Session Establishment (SESR)', 20),
-        kpi('SESR Originating', sesr('orig'), { h: 6, w: 4, x: 0, y: 21 }, ok_thr, 'percent', 2,
+        row('Accessibility - Session Establishment (SESR)', 15),
+        kpi('SESR Originating', sesr('orig'), { h: 6, w: 4, x: 0, y: 16 }, ok_thr, 'percent', 2,
             'First 180 or 2xx over INVITE attempts, for sessions that start at a UE of this network (TS 32.454 5.1.3).'),
-        kpi('SESR Terminating', sesr('term'), { h: 6, w: 4, x: 4, y: 21 }, ok_thr, 'percent', 2,
+        kpi('SESR Terminating', sesr('term'), { h: 6, w: 4, x: 4, y: 16 }, ok_thr, 'percent', 2,
             'As SESR Originating, for sessions that arrive from another network. A session between two users of this S-CSCF is one session, counted as originating.'),
-        kpi('SENSR Originating', sensr('orig'), { h: 6, w: 4, x: 8, y: 21 }, ok_thr, 'percent', 2,
+        kpi('SENSR Originating', sensr('orig'), { h: 6, w: 4, x: 8, y: 16 }, ok_thr, 'percent', 2,
             '(established + 486/600/404/484 + released before ringing) over attempts (TS 32.454 5.1.9): the failures of the user count as served.'),
-        kpi('SENSR Terminating', sensr('term'), { h: 6, w: 4, x: 12, y: 21 }, ok_thr, 'percent', 2,
+        kpi('SENSR Terminating', sensr('term'), { h: 6, w: 4, x: 12, y: 16 }, ok_thr, 'percent', 2,
             'As SENSR Originating, for sessions that arrive from another network.'),
-        stat('Setup Attempts Originating', inc(ses('attempts_total', 'orig')), { h: 6, w: 4, x: 16, y: 21 }),
-        stat('Setup Attempts Terminating', inc(ses('attempts_total', 'term')), { h: 6, w: 4, x: 20, y: 21 }),
-        ts('Session Setup Rate', [tgt(rt(m.ses_att), 'attempts'), tgt(rt(m.ses_ok), 'success'), tgt(rt(m.ses_no), 'failure')], { h: 7, w: 12, x: 0, y: 27 }, 'reqps'),
-        ts('Session Setup Failures by Code', [tgt('sum by (code) (rate(kamailio_ims_session_setup_failure_total{job="scscf"}[$$__rate_interval]))', '{{code}}')], { h: 7, w: 12, x: 12, y: 27 }, 'reqps'),
+        stat('Setup Attempts Originating', inc(ses('attempts_total', 'orig')), { h: 6, w: 4, x: 16, y: 16 }),
+        stat('Setup Attempts Terminating', inc(ses('attempts_total', 'term')), { h: 6, w: 4, x: 20, y: 16 }),
+        ts('Session Setup Rate', [tgt(rt(m.ses_att), 'attempts'), tgt(rt(m.ses_ok), 'success'), tgt(rt(m.ses_no), 'failure')], { h: 7, w: 12, x: 0, y: 22 }, 'reqps'),
+        ts('Session Setup Failures by Code', [tgt('sum by (code) (rate(kamailio_ims_session_setup_failure_total{job="scscf"}[$$__rate_interval]))', '{{code}}')], { h: 7, w: 12, x: 12, y: 22 }, 'reqps'),
 
         // ===== Accessibility - Session Setup Time (latency) =====
-        row('Accessibility - Session Setup Time', 34),
-        kpi('Session Setup Time (mean)', inc(m.dur_s) + ' / ' + inc(m.dur_c), { h: 6, w: 8, x: 0, y: 35 }, time_thr, 'ms', 0),
-        stat('Session Setup Time p95', 'histogram_quantile(0.95, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 8, y: 35 }, 'ms'),
-        stat('Session Setup Time p99', 'histogram_quantile(0.99, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 16, y: 35 }, 'ms'),
+        row('Accessibility - Session Setup Time', 29),
+        kpi('Session Setup Time (mean)', inc(m.dur_s) + ' / ' + inc(m.dur_c), { h: 6, w: 8, x: 0, y: 30 }, time_thr, 'ms', 0),
+        stat('Session Setup Time p95', 'histogram_quantile(0.95, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 8, y: 30 }, 'ms'),
+        stat('Session Setup Time p99', 'histogram_quantile(0.99, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 16, y: 30 }, 'ms'),
         ts('Session Setup Time Percentiles', [
           tgt('histogram_quantile(0.50, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', 'p50'),
           tgt('histogram_quantile(0.95, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', 'p95'),
           tgt('histogram_quantile(0.99, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', 'p99'),
-        ], { h: 7, w: 12, x: 0, y: 41 }, 'ms'),
+        ], { h: 7, w: 12, x: 0, y: 36 }, 'ms'),
         ts('Diameter Control-Plane Latency', [
           tgt(avgf(m.sar_rt), 'Cx SAR (registration)'),
           tgt(avgf(m.mar_rt), 'Cx MAR (authentication)'),
           tgt(avgf(m.ccr_rt), 'Ro CCR (charging)'),
           tgt('(' + rt(m.uar_rt) + ') / (' + rt(m.uar_rx) + ')', 'Cx UAR (I-CSCF)'),
-        ], { h: 7, w: 12, x: 12, y: 41 }, 'ms'),
+        ], { h: 7, w: 12, x: 12, y: 36 }, 'ms'),
 
         // ===== Retainability =====
-        row('Retainability - IMS Session Drop Rate', 48),
+        row('Retainability - IMS Session Drop Rate', 43),
         // TS 32.454 SEDR: sessions the network ended abnormally over the sessions
         // that were established. A call the S-CSCF kills for lack of credit ends
         // with a BYE, not a dialog timeout, so it is counted from the charging
         // counter; dialog_ng_processed would add the setups that never answered.
-        kpi('IMS Session Drop Rate', '100 * (' + inc(m.killed) + ' + ' + inc(m.dlg_exp) + ') / ' + inc(m.ses_ok), { h: 6, w: 8, x: 0, y: 49 }, drop_thr, 'percent', 2,
+        kpi('IMS Session Drop Rate', '100 * (' + inc(m.killed) + ' + ' + inc(m.dlg_exp) + ') / ' + inc(m.ses_ok), { h: 6, w: 8, x: 0, y: 44 }, drop_thr, 'percent', 2,
             'Sessions ended by the network (killed for lack of credit, or dialog timeout) over sessions answered in the same range.'),
-        stat('Active Sessions', cur(m.dlg_act), { h: 6, w: 8, x: 8, y: 49 }),
-        stat('Early Dialogs', cur(m.dlg_early), { h: 6, w: 8, x: 16, y: 49 }),
-        ts('Dialogs Processed vs Expired', [tgt(rt(m.dlg_proc), 'processed'), tgt(rt(m.dlg_exp), 'expired'), tgt(rt(m.killed), 'killed (charging)')], { h: 7, w: 12, x: 0, y: 55 }, 'reqps'),
-        ts('Active & Early Dialogs', [tgt(cur(m.dlg_act), 'active'), tgt(cur(m.dlg_early), 'early')], { h: 7, w: 12, x: 12, y: 55 }),
+        stat('Active Sessions', cur(m.dlg_act), { h: 6, w: 8, x: 8, y: 44 }),
+        stat('Early Dialogs', cur(m.dlg_early), { h: 6, w: 8, x: 16, y: 44 }),
+        ts('Dialogs Processed vs Expired', [tgt(rt(m.dlg_proc), 'processed'), tgt(rt(m.dlg_exp), 'expired'), tgt(rt(m.killed), 'killed (charging)')], { h: 7, w: 12, x: 0, y: 50 }, 'reqps'),
+        ts('Active & Early Dialogs', [tgt(cur(m.dlg_act), 'active'), tgt(cur(m.dlg_early), 'early')], { h: 7, w: 12, x: 12, y: 50 }),
 
         // ===== Utilization - Registered base =====
-        row('Utilization - Registered Base', 62),
-        stat('IMPU Records Held (S-CSCF)', cur(m.impus), { h: 6, w: 6, x: 0, y: 63 }, 'short', 0, 'IMPU records in the S-CSCF store, a UE registers an implicit set of them. A de-registered IMPU stays (state unregistered) for the reg-event subscription and for terminating services, so this is not the number of registered users: see Registered Contacts.'),
-        stat('Registered Contacts (S-CSCF)', cur(m.contacts), { h: 6, w: 6, x: 6, y: 63 }, 'short', 0, 'Bindings of registered UEs: the registered base.'),
-        stat('Reg-event Subscriptions Held', cur(m.subs), { h: 6, w: 6, x: 12, y: 63 }, 'short', 0, 'Subscriptions to the registration state that the S-CSCF holds. They outlive a de-registration, until they expire.'),
-        stat('Registered Contacts (P-CSCF)', cur(m.pcontacts), { h: 6, w: 6, x: 18, y: 63 }),
+        row('Utilization - Registered Base', 57),
+        stat('IMPU Records Held (S-CSCF)', cur(m.impus), { h: 6, w: 6, x: 0, y: 58 }, 'short', 0, 'IMPU records in the S-CSCF store, a UE registers an implicit set of them. A de-registered IMPU stays (state unregistered) for the reg-event subscription and for terminating services, so this is not the number of registered users: see Registered Contacts.'),
+        stat('Registered Contacts (S-CSCF)', cur(m.contacts), { h: 6, w: 6, x: 6, y: 58 }, 'short', 0, 'Bindings of registered UEs: the registered base.'),
+        stat('Reg-event Subscriptions Held', cur(m.subs), { h: 6, w: 6, x: 12, y: 58 }, 'short', 0, 'Subscriptions to the registration state that the S-CSCF holds. They outlive a de-registration, until they expire.'),
+        stat('Registered Contacts (P-CSCF)', cur(m.pcontacts), { h: 6, w: 6, x: 18, y: 58 }),
         ts('Registered Base', [
           tgt(cur(m.impus), 'IMPU records (S-CSCF)'),
           tgt(cur(m.contacts), 'contacts (S-CSCF)'),
           tgt(cur(m.subs), 'reg-event subs held'),
           tgt(cur(m.pcontacts), 'contacts (P-CSCF)'),
-        ], { h: 7, w: 24, x: 0, y: 69 }),
+        ], { h: 7, w: 24, x: 0, y: 64 }),
 
         // ===== Charging (Ro / TS 32.299) =====
-        row('Charging - Ro (TS 32.299)', 76),
-        stat('Active Ro Sessions', cur(m.ro_act), { h: 6, w: 6, x: 0, y: 77 }, 'short', 0, 'Ro sessions in the S-CSCF table: one per call leg that is up, so 2 per answered call between two users it serves.'),
-        stat('Initial CCRs', inc(m.ccr_i), { h: 6, w: 6, x: 6, y: 77 }),
-        stat('Successful Initial CCRs', inc(m.ccr_ok), { h: 6, w: 6, x: 12, y: 77 }),
-        stat('Killed Calls (out of credit)', inc(m.killed), { h: 6, w: 6, x: 18, y: 77 }),
+        row('Charging - Ro (TS 32.299)', 71),
+        stat('Active Ro Sessions', cur(m.ro_act), { h: 6, w: 6, x: 0, y: 72 }, 'short', 0, 'Ro sessions in the S-CSCF table: one per call leg that is up, so 2 per answered call between two users it serves.'),
+        stat('Initial CCRs', inc(m.ccr_i), { h: 6, w: 6, x: 6, y: 72 }),
+        stat('Successful Initial CCRs', inc(m.ccr_ok), { h: 6, w: 6, x: 12, y: 72 }),
+        stat('Killed Calls (out of credit)', inc(m.killed), { h: 6, w: 6, x: 18, y: 72 }),
 
         // ===== Element health - Diameter (Cx / Ro) =====
-        row('Element Health - Diameter (Cx / Ro)', 83),
-        stat('I-CSCF UAR Replies', inc(m.uar_rx), { h: 6, w: 6, x: 0, y: 84 }),
-        stat('I-CSCF LIR Replies', inc(m.lir_rx), { h: 6, w: 6, x: 6, y: 84 }),
-        kpi('MAR Timeouts (auth)', inc(m.mar_to), { h: 6, w: 4, x: 12, y: 84 }, to_thr, 'short', 0),
-        kpi('SAR Timeouts (reg)', inc(m.sar_to), { h: 6, w: 4, x: 16, y: 84 }, to_thr, 'short', 0),
-        kpi('CCR Timeouts (charging)', inc(m.ccr_to), { h: 6, w: 4, x: 20, y: 84 }, to_thr, 'short', 0),
+        row('Element Health - Diameter (Cx / Ro)', 78),
+        stat('I-CSCF UAR Replies', inc(m.uar_rx), { h: 6, w: 6, x: 0, y: 79 }),
+        stat('I-CSCF LIR Replies', inc(m.lir_rx), { h: 6, w: 6, x: 6, y: 79 }),
+        kpi('MAR Timeouts (auth)', inc(m.mar_to), { h: 6, w: 4, x: 12, y: 79 }, to_thr, 'short', 0),
+        kpi('SAR Timeouts (reg)', inc(m.sar_to), { h: 6, w: 4, x: 16, y: 79 }, to_thr, 'short', 0),
+        kpi('CCR Timeouts (charging)', inc(m.ccr_to), { h: 6, w: 4, x: 20, y: 79 }, to_thr, 'short', 0),
       ])
 
   load.jsonnet:
