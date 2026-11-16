@@ -1,0 +1,146 @@
+Add a Rx media component for every SDP media line in ims_qos.
+
+TS 29.213 6.2 asks for a Media-Component-Description "for each SDP media
+component". ims_qos only sent the RTP streams, so T.38 (udptl), BFCP,
+MSRP and plain UDP media got no bearer authorisation. The is_rtp flag
+of the SDP parser is not a good test either: it is left unset for the
+transports the parser does not know.
+
+Send a component for every media line and decide by the transport:
+RTP transports keep the RTCP flows; the others get none. Plain UDP
+media that has no better media type is Media-Type APPLICATION. The
+IPFilterRule protocol is now also set for udptl, UDP/BFCP, TCP/MSRP and
+UDP/DTLS/SCTP, which used to fail with "Not yet implemented" and left
+the component without a sub-component.
+
+diff --git a/src/modules/ims_qos/rx_aar.c b/src/modules/ims_qos/rx_aar.c
+index c188cdffe4..51384fc3f8 100644
+--- a/src/modules/ims_qos/rx_aar.c
++++ b/src/modules/ims_qos/rx_aar.c
+@@ -608,8 +608,9 @@ int add_media_components(AAAMessage *aar, struct sip_msg *req,
+ 						sdp_stream_num + 1);
+ 				rx_add_media_component_removed_avp(aar, sdp_stream_num + 1);
+ 			}
+-			// Check if this is a stream to add to AAR.
+-			if(req_sdp_stream->is_rtp) {
++			/* Every media line gets a component, not only RTP ones (TS 29.213
++			 * 6.2); the transport decides the type and the RTCP flows. */
++			{
+ 				// Check if the src or dst port is 0. If so, then don't add to Rx AAR.
+ 				int intportA = atoi(req_sdp_stream->port.s);
+ 				int intportB = atoi(rpl_sdp_stream->port.s);
+diff --git a/src/modules/ims_qos/rx_avp.c b/src/modules/ims_qos/rx_avp.c
+index 3a638b1f86..b573cb4551 100644
+--- a/src/modules/ims_qos/rx_avp.c
++++ b/src/modules/ims_qos/rx_avp.c
+@@ -374,6 +374,24 @@ inline static unsigned int sdp_b_value(str *payload, char *subtype)
+ 	return 0;
+ }
+ 
++static int rx_proto_has_prefix(str *proto, const char *prefix)
++{
++	int len = strlen(prefix);
++
++	return proto->len >= len && strncasecmp(proto->s, prefix, len) == 0;
++}
++
++/* RTP based transport: RTP/AVP, RTP/SAVPF, UDP/TLS/RTP/SAVP, ... */
++static int rx_proto_is_rtp(str *proto)
++{
++	int i;
++
++	for(i = 0; i + 4 <= proto->len; i++)
++		if(strncasecmp(proto->s + i, "RTP/", 4) == 0)
++			return 1;
++	return 0;
++}
++
+ /* Direction attribute of an SDP media description (RFC 4566 6) */
+ enum sdp_dir {
+ 	SDP_DIR_SENDRECV = 3,
+@@ -536,6 +554,9 @@ inline int rx_add_media_component_description_avp(AAAMessage *msg, int number,
+ 		type = AVP_IMS_Media_Type_Text;
+ 	} else if(strncmp(media_description->s, "message", 7) == 0) {
+ 		type = AVP_IMS_Media_Type_Message;
++	} else if(!rx_proto_is_rtp(transport)) {
++		/* UDP, UDPTL, BFCP, ...: no better type than Application */
++		type = AVP_IMS_Media_Type_Application;
+ 	} else {
+ 		type = AVP_IMS_Media_Type_Other;
+ 	}
+@@ -841,21 +862,22 @@ AAA_AVP *rx_create_media_subcomponent_avp(int number, str *proto, str *ipA,
+ 	} else if(proto->len == 3
+ 			  && strncasecmp(proto->s, "TCP", proto->len) == 0) {
+ 		proto_nr = "6";
+-	} else if(proto->len == 7
+-			  && strncasecmp(proto->s, "RTP/AVP", proto->len) == 0) {
+-		proto_nr = "17"; /* for now we just use UDP for all RTP */
+-	} else if(proto->len == 8
+-			  && strncasecmp(proto->s, "RTP/SAVP", proto->len) == 0) {
+-		proto_nr = "17"; /* for now we just use UDP for all RTP */
+-	} else if(proto->len == 8
+-			  && strncasecmp(proto->s, "RTP/AVPF", proto->len) == 0) {
++	} else if(rx_proto_is_rtp(proto)) {
+ 		proto_nr = "17"; /* for now we just use UDP for all RTP */
++	} else if(rx_proto_has_prefix(proto, "UDP/DTLS/SCTP")) {
++		proto_nr = "132";
++	} else if(rx_proto_has_prefix(proto, "TCP")) {
++		proto_nr = "6"; /* TCP, TCP/MSRP, TCP/TLS/MSRP, ... */
++	} else if(rx_proto_has_prefix(proto, "UDP")) {
++		proto_nr = "17"; /* UDP, UDPTL, UDP/BFCP, ... */
+ 	} else {
+ 		LOG(L_ERR, "Not yet implemented for protocol %.*s\n", proto->len,
+ 				proto->s);
+ 		return 0;
+ 	}
+ 	int proto_len = strlen(proto_nr);
++	/* RTCP only goes with RTP */
++	int with_rtcp = include_rtcp_fd && rx_proto_is_rtp(proto);
+ 
+ 	if(str2int(portA, (unsigned int *)&intportA) != 0) {
+ 		LM_ERR("Invalid port A\n");
+@@ -959,7 +981,7 @@ AAA_AVP *rx_create_media_subcomponent_avp(int number, str *proto, str *ipA,
+ 			AVP_DUPLICATE_DATA);
+ 	cdpb.AAAAddAVPToList(&list, flow_description2);
+ 
+-	if(include_rtcp_fd) {
++	if(with_rtcp) {
+ 		LM_DBG("Need to add RTCP FD description - RTCP ports are by default "
+ 			   "next odd port number up from RTP ports\n");
+ 		int_port_rctp_a = intportA + 1;
+@@ -1103,7 +1125,7 @@ AAA_AVP *rx_create_media_subcomponent_avp(int number, str *proto, str *ipA,
+ 				AVP_DUPLICATE_DATA);
+ 		cdpb.AAAAddAVPToList(&list, flow_description5);
+ 
+-		if(include_rtcp_fd) {
++		if(with_rtcp) {
+ 			/*7th (optional RTCP replace IP A with ANY) flow*/
+ 			len2 = (permit_out.len + from_s.len + to_s.len
+ 						   + 3 /*for 'any'*/ + ipB->len + 4 + proto_len
+@@ -1162,7 +1184,7 @@ AAA_AVP *rx_create_media_subcomponent_avp(int number, str *proto, str *ipA,
+ 				AVP_DUPLICATE_DATA);
+ 		cdpb.AAAAddAVPToList(&list, flow_description6);
+ 
+-		if(include_rtcp_fd) {
++		if(with_rtcp) {
+ 			/*8th (optional RTCP replace IP A with ANY) flow*/
+ 			len2 = (permit_in.len + from_s.len + to_s.len
+ 						   + 3 /*for 'any'*/ + ipB->len + 4 + proto_len
+@@ -1221,7 +1243,7 @@ AAA_AVP *rx_create_media_subcomponent_avp(int number, str *proto, str *ipA,
+ 				AVP_DUPLICATE_DATA);
+ 		cdpb.AAAAddAVPToList(&list, flow_description5);
+ 
+-		if(include_rtcp_fd) {
++		if(with_rtcp) {
+ 			/*7th (optional RTCP replace IP B with ANY) flow*/
+ 			len2 = (permit_out.len + from_s.len + to_s.len
+ 						   + 3 /*for 'any'*/ + ipA->len + 4 + proto_len
+@@ -1277,7 +1299,7 @@ AAA_AVP *rx_create_media_subcomponent_avp(int number, str *proto, str *ipA,
+ 				AVP_DUPLICATE_DATA);
+ 		cdpb.AAAAddAVPToList(&list, flow_description6);
+ 
+-		if(include_rtcp_fd) {
++		if(with_rtcp) {
+ 			/*8th (optional RTCP replace IP B with ANY) flow*/
+ 			len2 = (permit_in.len + from_s.len + to_s.len
+ 						   + 3 /*for 'any'*/ + ipA->len + 4 + proto_len
