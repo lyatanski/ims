@@ -211,12 +211,22 @@ configs:
       local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
       local ds = 'prometheus';
 
+      local steps(arr) =
+        g.panel.stat.standardOptions.thresholds.withSteps([
+          g.panel.stat.standardOptions.threshold.step.withColor(s.color)
+          + g.panel.stat.standardOptions.threshold.step.withValue(s.value)
+          for s in arr
+        ]);
+      // Grafana's default thresholds (red from 80) would paint a byte count red
+      local plain = steps([{ color: 'blue', value: null }]);
+
       local stat(title, expr, pos, unit=null) =
         g.panel.stat.new(title)
         + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
         + g.panel.stat.queryOptions.withTargets([g.query.prometheus.new(ds, expr)])
         + g.panel.stat.panelOptions.withGridPos(pos.h, pos.w, pos.x, pos.y)
         + g.panel.stat.panelOptions.withTransparent()
+        + plain
         + if unit == null then {} else g.panel.stat.standardOptions.withUnit(unit);
 
       local ts(title, expr, pos, unit) =
@@ -240,7 +250,8 @@ configs:
         stat('Total Mem Usage',    'sum(container_memory_usage_bytes{name!=\'\'})',                     {h: 3, w: 8, x: 8,  y: 0}, 'bytes'),
         stat('Total CPU Usage',    'sum(rate(container_cpu_user_seconds_total{name!=\'\'}[5m]) * 100)', {h: 3, w: 8, x: 16, y: 0}, 'percent')
         + g.panel.stat.standardOptions.withMin(0)
-        + g.panel.stat.standardOptions.withMax(100),
+        + g.panel.stat.standardOptions.withMax(100)
+        + steps([{ color: 'green', value: null }, { color: 'yellow', value: 70 }, { color: 'red', value: 90 }]),
 
         ts('CPU Usage',  'rate(container_cpu_user_seconds_total{name!=\'\'}[5m]) * 100',                {h: 7, w: 24, x: 0,  y: 3 }, 'percent'),
         ts('Mem Usage',  'container_memory_usage_bytes{name!=\'\'}',                                    {h: 7, w: 24, x: 0,  y: 10}, 'bytes'),
@@ -251,6 +262,7 @@ configs:
   ims.jsonnet:
     content: |
       // IMS KPI dashboard - aligned with 3GPP TS 32.454 (KPIs for the IMS).
+      // Covered, deviations and the KPIs left out: doc/monitor.md.
       //
       // KPIs are grouped by TS 32.454 category (accessibility, retainability,
       // utilization). Most panels reuse native Kamailio xhttp_prom statistics;
@@ -265,6 +277,8 @@ configs:
       local m = {
         reg_ok:    'kamailio_ims_registration_initial_success_total{job="scscf"}',
         reg_no:    'kamailio_ims_registration_initial_failure_total{job="scscf"}',
+        rereg_ok:  'kamailio_ims_registration_re_success_total{job="scscf"}',
+        rereg_no:  'kamailio_ims_registration_re_failure_total{job="scscf"}',
         sar_to:    'kamailio_ims_registrar_scscf_sar_timeouts{job="scscf"}',
         sar_rt:    'kamailio_ims_registrar_scscf_sar_avg_response_time{job="scscf"}',
         mar_to:    'kamailio_ims_auth_mar_timeouts{job="scscf"}',
@@ -300,10 +314,16 @@ configs:
       local rt(x)   = 'sum(rate(' + x + '[$$__rate_interval]))';
       local cur(x)  = 'sum(' + x + ')';
       local avgf(x) = 'avg(' + x + ')';
-      // failures TS 32.454 attributes to the UE / user, excluded from the
-      // network success rate: 404 not found, 480/486/600/603 busy/unavailable,
-      // 484 address incomplete, 487 released before answer.
-      local fail_user = 'sum(increase(kamailio_ims_session_setup_failure_total{job="scscf", code=~"404|480|484|486|487|600|603"}[$$__range]))';
+      // Session counters of one side. TS 32.454 computes SESR and SENSR for the
+      // originating and the terminating side separately: a session summed over
+      // both would count twice (Annex A.3). dir="na" (no dialog var) is left out.
+      local ses(n, d, extra='') = 'kamailio_ims_session_setup_' + n + '{job="scscf", dir="' + d + '"' + extra + '}';
+      // TS 32.454 5.1.9 adds the failures of the user to the numerator: 486
+      // busy, 600 busy everywhere, 404 not found, 484 address incomplete, and
+      // the release before ringing (a 487, the CANCEL before the first 180).
+      local fail_user(d) = inc(ses('failure_total', d, ', code=~"404|484|486|487|600"'));
+      local sesr(d)  = '100 * ' + inc(ses('success_total', d)) + ' / ' + inc(ses('attempts_total', d));
+      local sensr(d) = '100 * (' + inc(ses('success_total', d)) + ' + ' + fail_user(d) + ') / ' + inc(ses('attempts_total', d));
 
       // ---- threshold palettes ----
       local ok_thr   = [{ color: 'red', value: null }, { color: 'yellow', value: 95 }, { color: 'green', value: 99 }];
@@ -323,6 +343,14 @@ configs:
           for s in arr
         ]);
 
+      // A stat with no thresholds gets Grafana's default (red from 80), which
+      // paints a count, a byte total or an uptime red for being large: a plain
+      // figure has one fixed colour
+      local plain = g.panel.stat.standardOptions.thresholds.withSteps([
+        g.panel.stat.standardOptions.threshold.step.withColor('blue')
+        + g.panel.stat.standardOptions.threshold.step.withValue(null),
+      ]);
+
       local stat(title, expr, p, unit='short', decimals=0, desc='') =
         g.panel.stat.new(title)
         + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
@@ -330,7 +358,8 @@ configs:
         + g.panel.stat.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
         + g.panel.stat.panelOptions.withDescription(desc)
         + g.panel.stat.standardOptions.withUnit(unit)
-        + g.panel.stat.standardOptions.withDecimals(decimals);
+        + g.panel.stat.standardOptions.withDecimals(decimals)
+        + plain;
 
       local kpi(title, expr, p, thr, unit='percent', decimals=2, desc='') =
         g.panel.stat.new(title)
@@ -357,7 +386,7 @@ configs:
 
       g.dashboard.new('IMS KPI (3GPP TS 32.454)')
       + g.dashboard.withUid('ims')
-      + g.dashboard.withDescription('IMS Key Performance Indicators per 3GPP TS 32.454. Reuses Kamailio xhttp_prom statistics; session-establishment and setup-time KPIs use custom S-CSCF counters.')
+      + g.dashboard.withDescription('IMS KPIs aligned with 3GPP TS 32.454, measured at the S-CSCF from Kamailio xhttp_prom statistics and custom session counters. Not every TS 32.454 KPI is covered: see doc/monitor.md for the list and the deviations.')
       + g.dashboard.time.withFrom('now-6h')
       + g.dashboard.withRefresh('5s')
       + g.dashboard.graphTooltip.withSharedCrosshair()
@@ -368,73 +397,83 @@ configs:
         stat('Initial Registration Attempts', '(' + inc(m.reg_ok) + ' + ' + inc(m.reg_no) + ')', { h: 6, w: 6, x: 6, y: 1 }, 'short', 0, 'First registrations of an identity. Re-registrations and de-registrations are not counted.'),
         stat('Successful Initial Registrations', inc(m.reg_ok), { h: 6, w: 6, x: 12, y: 1 }),
         stat('Rejected Initial Registrations', inc(m.reg_no), { h: 6, w: 6, x: 18, y: 1 }),
-        ts('Initial Registration Rate', [tgt(rt(m.reg_ok), 'accepted'), tgt(rt(m.reg_no), 'rejected'), tgt(rt(m.sar_to), 'SAR timeouts')], { h: 7, w: 24, x: 0, y: 7 }, 'reqps'),
+        kpi('Re-registration Success Rate (S-CSCF)', '100 * ' + inc(m.rereg_ok) + ' / (' + inc(m.rereg_ok) + ' + ' + inc(m.rereg_no) + ')', { h: 6, w: 6, x: 0, y: 7 }, ok_thr, 'percent', 2,
+            'TS 32.454 5.1.5: REGISTERs with an Expires above 0 for an identity that is registered already.'),
+        stat('Re-registration Attempts', '(' + inc(m.rereg_ok) + ' + ' + inc(m.rereg_no) + ')', { h: 6, w: 6, x: 6, y: 7 }),
+        ts('Initial Registration Rate', [tgt(rt(m.reg_ok), 'accepted'), tgt(rt(m.reg_no), 'rejected'), tgt(rt(m.sar_to), 'SAR timeouts')], { h: 7, w: 24, x: 0, y: 13 }, 'reqps'),
 
         // ===== Accessibility - Session Establishment =====
-        row('Accessibility - Session Establishment (SESR)', 14),
-        kpi('Session Establishment Success Rate', '100 * ' + inc(m.ses_ok) + ' / ' + inc(m.ses_att), { h: 6, w: 8, x: 0, y: 15 }, ok_thr),
-        kpi('Session Establishment Network Success Rate', '100 * ' + inc(m.ses_ok) + ' / (' + inc(m.ses_att) + ' - ' + fail_user + ')', { h: 6, w: 8, x: 8, y: 15 }, ok_thr),
-        stat('Session Setup Attempts', inc(m.ses_att), { h: 6, w: 8, x: 16, y: 15 }),
-        ts('Session Setup Rate', [tgt(rt(m.ses_att), 'attempts'), tgt(rt(m.ses_ok), 'success'), tgt(rt(m.ses_no), 'failure')], { h: 7, w: 12, x: 0, y: 21 }, 'reqps'),
-        ts('Session Setup Failures by Code', [tgt('sum by (code) (rate(kamailio_ims_session_setup_failure_total{job="scscf"}[$$__rate_interval]))', '{{code}}')], { h: 7, w: 12, x: 12, y: 21 }, 'reqps'),
+        row('Accessibility - Session Establishment (SESR)', 20),
+        kpi('SESR Originating', sesr('orig'), { h: 6, w: 4, x: 0, y: 21 }, ok_thr, 'percent', 2,
+            'First 180 or 2xx over INVITE attempts, for sessions that start at a UE of this network (TS 32.454 5.1.3).'),
+        kpi('SESR Terminating', sesr('term'), { h: 6, w: 4, x: 4, y: 21 }, ok_thr, 'percent', 2,
+            'As SESR Originating, for sessions that arrive from another network. A session between two users of this S-CSCF is one session, counted as originating.'),
+        kpi('SENSR Originating', sensr('orig'), { h: 6, w: 4, x: 8, y: 21 }, ok_thr, 'percent', 2,
+            '(established + 486/600/404/484 + released before ringing) over attempts (TS 32.454 5.1.9): the failures of the user count as served.'),
+        kpi('SENSR Terminating', sensr('term'), { h: 6, w: 4, x: 12, y: 21 }, ok_thr, 'percent', 2,
+            'As SENSR Originating, for sessions that arrive from another network.'),
+        stat('Setup Attempts Originating', inc(ses('attempts_total', 'orig')), { h: 6, w: 4, x: 16, y: 21 }),
+        stat('Setup Attempts Terminating', inc(ses('attempts_total', 'term')), { h: 6, w: 4, x: 20, y: 21 }),
+        ts('Session Setup Rate', [tgt(rt(m.ses_att), 'attempts'), tgt(rt(m.ses_ok), 'success'), tgt(rt(m.ses_no), 'failure')], { h: 7, w: 12, x: 0, y: 27 }, 'reqps'),
+        ts('Session Setup Failures by Code', [tgt('sum by (code) (rate(kamailio_ims_session_setup_failure_total{job="scscf"}[$$__rate_interval]))', '{{code}}')], { h: 7, w: 12, x: 12, y: 27 }, 'reqps'),
 
         // ===== Accessibility - Session Setup Time (latency) =====
-        row('Accessibility - Session Setup Time', 28),
-        kpi('Session Setup Time (mean)', inc(m.dur_s) + ' / ' + inc(m.dur_c), { h: 6, w: 8, x: 0, y: 29 }, time_thr, 'ms', 0),
-        stat('Session Setup Time p95', 'histogram_quantile(0.95, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 8, y: 29 }, 'ms'),
-        stat('Session Setup Time p99', 'histogram_quantile(0.99, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 16, y: 29 }, 'ms'),
+        row('Accessibility - Session Setup Time', 34),
+        kpi('Session Setup Time (mean)', inc(m.dur_s) + ' / ' + inc(m.dur_c), { h: 6, w: 8, x: 0, y: 35 }, time_thr, 'ms', 0),
+        stat('Session Setup Time p95', 'histogram_quantile(0.95, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 8, y: 35 }, 'ms'),
+        stat('Session Setup Time p99', 'histogram_quantile(0.99, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', { h: 6, w: 8, x: 16, y: 35 }, 'ms'),
         ts('Session Setup Time Percentiles', [
           tgt('histogram_quantile(0.50, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', 'p50'),
           tgt('histogram_quantile(0.95, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', 'p95'),
           tgt('histogram_quantile(0.99, sum by (le) (rate(' + m.dur_b + '[$$__rate_interval])))', 'p99'),
-        ], { h: 7, w: 12, x: 0, y: 35 }, 'ms'),
+        ], { h: 7, w: 12, x: 0, y: 41 }, 'ms'),
         ts('Diameter Control-Plane Latency', [
           tgt(avgf(m.sar_rt), 'Cx SAR (registration)'),
           tgt(avgf(m.mar_rt), 'Cx MAR (authentication)'),
           tgt(avgf(m.ccr_rt), 'Ro CCR (charging)'),
           tgt('(' + rt(m.uar_rt) + ') / (' + rt(m.uar_rx) + ')', 'Cx UAR (I-CSCF)'),
-        ], { h: 7, w: 12, x: 12, y: 35 }, 'ms'),
+        ], { h: 7, w: 12, x: 12, y: 41 }, 'ms'),
 
         // ===== Retainability =====
-        row('Retainability - IMS Session Drop Rate', 42),
+        row('Retainability - IMS Session Drop Rate', 48),
         // TS 32.454 SEDR: sessions the network ended abnormally over the sessions
         // that were established. A call the S-CSCF kills for lack of credit ends
         // with a BYE, not a dialog timeout, so it is counted from the charging
         // counter; dialog_ng_processed would add the setups that never answered.
-        kpi('IMS Session Drop Rate', '100 * (' + inc(m.killed) + ' + ' + inc(m.dlg_exp) + ') / ' + inc(m.ses_ok), { h: 6, w: 8, x: 0, y: 43 }, drop_thr, 'percent', 2,
+        kpi('IMS Session Drop Rate', '100 * (' + inc(m.killed) + ' + ' + inc(m.dlg_exp) + ') / ' + inc(m.ses_ok), { h: 6, w: 8, x: 0, y: 49 }, drop_thr, 'percent', 2,
             'Sessions ended by the network (killed for lack of credit, or dialog timeout) over sessions answered in the same range.'),
-        stat('Active Sessions', cur(m.dlg_act), { h: 6, w: 8, x: 8, y: 43 }),
-        stat('Early Dialogs', cur(m.dlg_early), { h: 6, w: 8, x: 16, y: 43 }),
-        ts('Dialogs Processed vs Expired', [tgt(rt(m.dlg_proc), 'processed'), tgt(rt(m.dlg_exp), 'expired'), tgt(rt(m.killed), 'killed (charging)')], { h: 7, w: 12, x: 0, y: 49 }, 'reqps'),
-        ts('Active & Early Dialogs', [tgt(cur(m.dlg_act), 'active'), tgt(cur(m.dlg_early), 'early')], { h: 7, w: 12, x: 12, y: 49 }),
+        stat('Active Sessions', cur(m.dlg_act), { h: 6, w: 8, x: 8, y: 49 }),
+        stat('Early Dialogs', cur(m.dlg_early), { h: 6, w: 8, x: 16, y: 49 }),
+        ts('Dialogs Processed vs Expired', [tgt(rt(m.dlg_proc), 'processed'), tgt(rt(m.dlg_exp), 'expired'), tgt(rt(m.killed), 'killed (charging)')], { h: 7, w: 12, x: 0, y: 55 }, 'reqps'),
+        ts('Active & Early Dialogs', [tgt(cur(m.dlg_act), 'active'), tgt(cur(m.dlg_early), 'early')], { h: 7, w: 12, x: 12, y: 55 }),
 
         // ===== Utilization - Registered base =====
-        row('Utilization - Registered Base', 56),
-        stat('IMPU Records Held (S-CSCF)', cur(m.impus), { h: 6, w: 6, x: 0, y: 57 }, 'short', 0, 'IMPU records in the S-CSCF store, a UE registers an implicit set of them. A de-registered IMPU stays (state unregistered) for the reg-event subscription and for terminating services, so this is not the number of registered users: see Registered Contacts.'),
-        stat('Registered Contacts (S-CSCF)', cur(m.contacts), { h: 6, w: 6, x: 6, y: 57 }, 'short', 0, 'Bindings of registered UEs: the registered base.'),
-        stat('Reg-event Subscriptions Held', cur(m.subs), { h: 6, w: 6, x: 12, y: 57 }, 'short', 0, 'Subscriptions to the registration state that the S-CSCF holds. They outlive a de-registration, until they expire.'),
-        stat('Registered Contacts (P-CSCF)', cur(m.pcontacts), { h: 6, w: 6, x: 18, y: 57 }),
+        row('Utilization - Registered Base', 62),
+        stat('IMPU Records Held (S-CSCF)', cur(m.impus), { h: 6, w: 6, x: 0, y: 63 }, 'short', 0, 'IMPU records in the S-CSCF store, a UE registers an implicit set of them. A de-registered IMPU stays (state unregistered) for the reg-event subscription and for terminating services, so this is not the number of registered users: see Registered Contacts.'),
+        stat('Registered Contacts (S-CSCF)', cur(m.contacts), { h: 6, w: 6, x: 6, y: 63 }, 'short', 0, 'Bindings of registered UEs: the registered base.'),
+        stat('Reg-event Subscriptions Held', cur(m.subs), { h: 6, w: 6, x: 12, y: 63 }, 'short', 0, 'Subscriptions to the registration state that the S-CSCF holds. They outlive a de-registration, until they expire.'),
+        stat('Registered Contacts (P-CSCF)', cur(m.pcontacts), { h: 6, w: 6, x: 18, y: 63 }),
         ts('Registered Base', [
           tgt(cur(m.impus), 'IMPU records (S-CSCF)'),
           tgt(cur(m.contacts), 'contacts (S-CSCF)'),
           tgt(cur(m.subs), 'reg-event subs held'),
           tgt(cur(m.pcontacts), 'contacts (P-CSCF)'),
-        ], { h: 7, w: 24, x: 0, y: 63 }),
+        ], { h: 7, w: 24, x: 0, y: 69 }),
 
         // ===== Charging (Ro / TS 32.299) =====
-        row('Charging - Ro (TS 32.299)', 70),
-        stat('Active Ro Sessions', cur(m.ro_act), { h: 6, w: 6, x: 0, y: 71 }, 'short', 0, 'Ro sessions in the S-CSCF table: one per call leg that is up, so 2 per answered call between two users it serves.'),
-        stat('Initial CCRs', inc(m.ccr_i), { h: 6, w: 6, x: 6, y: 71 }),
-        stat('Successful Initial CCRs', inc(m.ccr_ok), { h: 6, w: 6, x: 12, y: 71 }),
-        stat('Killed Calls (out of credit)', inc(m.killed), { h: 6, w: 6, x: 18, y: 71 }),
+        row('Charging - Ro (TS 32.299)', 76),
+        stat('Active Ro Sessions', cur(m.ro_act), { h: 6, w: 6, x: 0, y: 77 }, 'short', 0, 'Ro sessions in the S-CSCF table: one per call leg that is up, so 2 per answered call between two users it serves.'),
+        stat('Initial CCRs', inc(m.ccr_i), { h: 6, w: 6, x: 6, y: 77 }),
+        stat('Successful Initial CCRs', inc(m.ccr_ok), { h: 6, w: 6, x: 12, y: 77 }),
+        stat('Killed Calls (out of credit)', inc(m.killed), { h: 6, w: 6, x: 18, y: 77 }),
 
         // ===== Element health - Diameter (Cx / Ro) =====
-        row('Element Health - Diameter (Cx / Ro)', 77),
-        stat('I-CSCF UAR Replies', inc(m.uar_rx), { h: 6, w: 6, x: 0, y: 78 }),
-        stat('I-CSCF LIR Replies', inc(m.lir_rx), { h: 6, w: 6, x: 6, y: 78 }),
-        kpi('MAR Timeouts (auth)', inc(m.mar_to), { h: 6, w: 4, x: 12, y: 78 }, to_thr, 'short', 0),
-        kpi('SAR Timeouts (reg)', inc(m.sar_to), { h: 6, w: 4, x: 16, y: 78 }, to_thr, 'short', 0),
-        kpi('CCR Timeouts (charging)', inc(m.ccr_to), { h: 6, w: 4, x: 20, y: 78 }, to_thr, 'short', 0),
+        row('Element Health - Diameter (Cx / Ro)', 83),
+        stat('I-CSCF UAR Replies', inc(m.uar_rx), { h: 6, w: 6, x: 0, y: 84 }),
+        stat('I-CSCF LIR Replies', inc(m.lir_rx), { h: 6, w: 6, x: 6, y: 84 }),
+        kpi('MAR Timeouts (auth)', inc(m.mar_to), { h: 6, w: 4, x: 12, y: 84 }, to_thr, 'short', 0),
+        kpi('SAR Timeouts (reg)', inc(m.sar_to), { h: 6, w: 4, x: 16, y: 84 }, to_thr, 'short', 0),
+        kpi('CCR Timeouts (charging)', inc(m.ccr_to), { h: 6, w: 4, x: 20, y: 84 }, to_thr, 'short', 0),
       ])
 
   load.jsonnet:
@@ -459,13 +498,22 @@ configs:
           for s in arr
         ]);
 
+      // A stat with no thresholds gets Grafana's default (red from 80), which
+      // paints a count, a byte total or an uptime red for being large: a plain
+      // figure has one fixed colour
+      local plain = g.panel.stat.standardOptions.thresholds.withSteps([
+        g.panel.stat.standardOptions.threshold.step.withColor('blue')
+        + g.panel.stat.standardOptions.threshold.step.withValue(null),
+      ]);
+
       local stat(title, expr, p, unit='short', decimals=0) =
         g.panel.stat.new(title)
         + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
         + g.panel.stat.queryOptions.withTargets([tgt(expr)])
         + g.panel.stat.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
         + g.panel.stat.standardOptions.withUnit(unit)
-        + g.panel.stat.standardOptions.withDecimals(decimals);
+        + g.panel.stat.standardOptions.withDecimals(decimals)
+        + plain;
 
       local kpi(title, expr, p, thr, unit='percent', decimals=2) =
         g.panel.stat.new(title)
@@ -906,12 +954,24 @@ configs:
       local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
       local ds = 'prometheus';
       
+      local steps(arr) =
+        g.panel.stat.standardOptions.thresholds.withSteps([
+          g.panel.stat.standardOptions.threshold.step.withColor(s.color)
+          + g.panel.stat.standardOptions.threshold.step.withValue(s.value)
+          for s in arr
+        ]);
+      // Grafana's default thresholds (red from 80) would paint a packet or
+      // byte total red. A plain figure is blue, a fault counter red from 1.
+      local plain = steps([{ color: 'blue', value: null }]);
+      local fault = steps([{ color: 'green', value: null }, { color: 'red', value: 1 }]);
+
       local stat(title, expr, x, y, w, h, unit=null) =
         g.panel.stat.new(title)
         + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
         + g.panel.stat.queryOptions.withTargets([g.query.prometheus.new(ds, expr)])
         + g.panel.stat.options.withGraphMode('area')
         + g.panel.stat.panelOptions.withGridPos(h=h, w=w, x=x, y=y)
+        + plain
         + if unit == null then {} else g.panel.stat.standardOptions.withUnit(unit);
 
       local gauge(title, expr, x, y) =
@@ -951,9 +1011,12 @@ configs:
         stat('Total sessions',        'rtpengine_sessions_total{job="$$job"}',            17, 0,  7, 5),
         stat('Total Relayed Packets', 'rtpengine_packets_total{type="userspace"}',        0,  13, 6, 5),
         stat('Total Relayed Bytes',   'rtpengine_bytes_total{type="userspace"}',          6,  13, 4, 5, 'decbytes'),
-        stat('Total Relayed Errors',  'rtpengine_packet_errors_total{type="userspace"}',  10, 13, 6, 5),
-        stat('Zero packet streams',   'rtpengine_zero_packet_streams_total{job="$$job"}', 16, 13, 4, 5),
-        stat('Total 1-way streams',   'rtpengine_one_way_sessions_total{job="$$job"}',    20, 13, 4, 5),
+        stat('Total Relayed Errors',  'rtpengine_packet_errors_total{type="userspace"}',  10, 13, 6, 5)
+        + fault,
+        stat('Zero packet streams',   'rtpengine_zero_packet_streams_total{job="$$job"}', 16, 13, 4, 5)
+        + fault,
+        stat('Total 1-way streams',   'rtpengine_one_way_sessions_total{job="$$job"}',    20, 13, 4, 5)
+        + fault,
       ])
 
   prometheus.yml:
