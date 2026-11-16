@@ -1,0 +1,47 @@
+Release the reference of the Ro timer that fired when ims_charging kills a call.
+
+Every Ro timer holds a reference on its session: dlg_callback_received()
+takes one when it starts the timer, and resume_ro_session_ontimeout() takes
+one for the timer it puts back and releases the one of the timer that fired.
+A call killed for lack of credit is the case where no timer is put back:
+ro_session_ontimeout() (the reservation ran out) and the "no more credit"
+branch of resume_ro_session_ontimeout() both end the call and leave the
+fired timer's reference taken. dlg_terminated() cannot release it, because
+remove_ro_timer() finds the timer already off the list (the "inconsistent
+ro timer data" warning) and so it releases the dialog's reference only.
+
+The session therefore never reached a reference count of 0: it stayed in
+the table, active_ro_sessions kept counting it after the dialog was gone
+and the memory was never freed. One session per killed call, seen as 10
+left over from 10 calls killed after their 20 s of credit.
+
+The "no more credit" branch of resume_ro_session_ontimeout() skips the
+release the other branches make at its end, because call_terminated is set,
+so release it right after the kill. Both releases come while the reference is
+still held, so the session cannot go away under them.
+
+diff --git a/src/modules/ims_charging/ro_timer.c b/src/modules/ims_charging/ro_timer.c
+index e7a5496aa5..0944e9a394 100644
+--- a/src/modules/ims_charging/ro_timer.c
++++ b/src/modules/ims_charging/ro_timer.c
+@@ -388,6 +388,10 @@ void resume_ro_session_ontimeout(
+ 			ro_session_unlock(ro_session_table, ro_session_entry);
+ 
+ 			ro_kill_call(i_req->ro_session, NULL);
++			/* the timer that fired is not put back, so its reference is
++			 * ours to release: dlg_terminated() finds no timer to remove
++			 * and only releases the dialog's own */
++			unref_ro_session(i_req->ro_session, 1, 1);
+ 			call_terminated = 1;
+ 		} else {
+ 			LM_DBG("No more credit for user - letting call run out of money in "
+@@ -549,5 +553,9 @@ void ro_session_ontimeout(struct ro_tl *tl)
+ 	}
+ 
+ 	ro_kill_call(ro_session, &default_out_of_credit_hdrs);
++	/* the timer that fired is not put back, so its reference is ours to
++	 * release: dlg_terminated() finds no timer to remove and only releases
++	 * the dialog's own */
++	unref_ro_session(ro_session, 1, 1);
+ 	return;
+ }

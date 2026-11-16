@@ -263,8 +263,8 @@ configs:
 
       // ---- metric names (all carry a job label: pcscf / icscf / scscf) ----
       local m = {
-        reg_ok:    'kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}',
-        reg_no:    'kamailio_ims_registrar_scscf_rejected_regs{job="scscf"}',
+        reg_ok:    'kamailio_ims_registration_initial_success_total{job="scscf"}',
+        reg_no:    'kamailio_ims_registration_initial_failure_total{job="scscf"}',
         sar_to:    'kamailio_ims_registrar_scscf_sar_timeouts{job="scscf"}',
         sar_rt:    'kamailio_ims_registrar_scscf_sar_avg_response_time{job="scscf"}',
         mar_to:    'kamailio_ims_auth_mar_timeouts{job="scscf"}',
@@ -323,19 +323,21 @@ configs:
           for s in arr
         ]);
 
-      local stat(title, expr, p, unit='short', decimals=0) =
+      local stat(title, expr, p, unit='short', decimals=0, desc='') =
         g.panel.stat.new(title)
         + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
         + g.panel.stat.queryOptions.withTargets([tgt(expr)])
         + g.panel.stat.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.stat.panelOptions.withDescription(desc)
         + g.panel.stat.standardOptions.withUnit(unit)
         + g.panel.stat.standardOptions.withDecimals(decimals);
 
-      local kpi(title, expr, p, thr, unit='percent', decimals=2) =
+      local kpi(title, expr, p, thr, unit='percent', decimals=2, desc='') =
         g.panel.stat.new(title)
         + g.panel.stat.queryOptions.withDatasource('prometheus', ds)
         + g.panel.stat.queryOptions.withTargets([tgt(expr)])
         + g.panel.stat.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
+        + g.panel.stat.panelOptions.withDescription(desc)
         + g.panel.stat.options.withColorMode('background')
         + g.panel.stat.options.withGraphMode('area')
         + g.panel.stat.standardOptions.withUnit(unit)
@@ -362,11 +364,11 @@ configs:
       + g.dashboard.withPanels([
         // ===== Accessibility - Registration =====
         row('Accessibility - Registration (Initial Registration Success Rate)', 0),
-        kpi('Registration Success Rate (S-CSCF)', '100 * ' + inc(m.reg_ok) + ' / (' + inc(m.reg_ok) + ' + ' + inc(m.reg_no) + ')', { h: 6, w: 6, x: 0, y: 1 }, ok_thr),
-        stat('Registration Attempts', '(' + inc(m.reg_ok) + ' + ' + inc(m.reg_no) + ')', { h: 6, w: 6, x: 6, y: 1 }),
-        stat('Successful Registrations', inc(m.reg_ok), { h: 6, w: 6, x: 12, y: 1 }),
-        stat('Rejected Registrations', inc(m.reg_no), { h: 6, w: 6, x: 18, y: 1 }),
-        ts('Registration Rate', [tgt(rt(m.reg_ok), 'accepted'), tgt(rt(m.reg_no), 'rejected'), tgt(rt(m.sar_to), 'SAR timeouts')], { h: 7, w: 24, x: 0, y: 7 }, 'reqps'),
+        kpi('Initial Registration Success Rate (S-CSCF)', '100 * ' + inc(m.reg_ok) + ' / (' + inc(m.reg_ok) + ' + ' + inc(m.reg_no) + ')', { h: 6, w: 6, x: 0, y: 1 }, ok_thr),
+        stat('Initial Registration Attempts', '(' + inc(m.reg_ok) + ' + ' + inc(m.reg_no) + ')', { h: 6, w: 6, x: 6, y: 1 }, 'short', 0, 'First registrations of an identity. Re-registrations and de-registrations are not counted.'),
+        stat('Successful Initial Registrations', inc(m.reg_ok), { h: 6, w: 6, x: 12, y: 1 }),
+        stat('Rejected Initial Registrations', inc(m.reg_no), { h: 6, w: 6, x: 18, y: 1 }),
+        ts('Initial Registration Rate', [tgt(rt(m.reg_ok), 'accepted'), tgt(rt(m.reg_no), 'rejected'), tgt(rt(m.sar_to), 'SAR timeouts')], { h: 7, w: 24, x: 0, y: 7 }, 'reqps'),
 
         // ===== Accessibility - Session Establishment =====
         row('Accessibility - Session Establishment (SESR)', 14),
@@ -395,28 +397,33 @@ configs:
 
         // ===== Retainability =====
         row('Retainability - IMS Session Drop Rate', 42),
-        kpi('IMS Session Drop Rate', '100 * ' + inc(m.dlg_exp) + ' / ' + inc(m.dlg_proc), { h: 6, w: 8, x: 0, y: 43 }, drop_thr),
+        // TS 32.454 SEDR: sessions the network ended abnormally over the sessions
+        // that were established. A call the S-CSCF kills for lack of credit ends
+        // with a BYE, not a dialog timeout, so it is counted from the charging
+        // counter; dialog_ng_processed would add the setups that never answered.
+        kpi('IMS Session Drop Rate', '100 * (' + inc(m.killed) + ' + ' + inc(m.dlg_exp) + ') / ' + inc(m.ses_ok), { h: 6, w: 8, x: 0, y: 43 }, drop_thr, 'percent', 2,
+            'Sessions ended by the network (killed for lack of credit, or dialog timeout) over sessions answered in the same range.'),
         stat('Active Sessions', cur(m.dlg_act), { h: 6, w: 8, x: 8, y: 43 }),
         stat('Early Dialogs', cur(m.dlg_early), { h: 6, w: 8, x: 16, y: 43 }),
-        ts('Dialogs Processed vs Expired', [tgt(rt(m.dlg_proc), 'processed'), tgt(rt(m.dlg_exp), 'expired / killed')], { h: 7, w: 12, x: 0, y: 49 }, 'reqps'),
+        ts('Dialogs Processed vs Expired', [tgt(rt(m.dlg_proc), 'processed'), tgt(rt(m.dlg_exp), 'expired'), tgt(rt(m.killed), 'killed (charging)')], { h: 7, w: 12, x: 0, y: 49 }, 'reqps'),
         ts('Active & Early Dialogs', [tgt(cur(m.dlg_act), 'active'), tgt(cur(m.dlg_early), 'early')], { h: 7, w: 12, x: 12, y: 49 }),
 
         // ===== Utilization - Registered base =====
         row('Utilization - Registered Base', 56),
-        stat('Registered IMPUs (S-CSCF)', cur(m.impus), { h: 6, w: 6, x: 0, y: 57 }),
-        stat('Registered Contacts (S-CSCF)', cur(m.contacts), { h: 6, w: 6, x: 6, y: 57 }),
-        stat('Reg-event Subscriptions', cur(m.subs), { h: 6, w: 6, x: 12, y: 57 }),
+        stat('IMPU Records Held (S-CSCF)', cur(m.impus), { h: 6, w: 6, x: 0, y: 57 }, 'short', 0, 'IMPU records in the S-CSCF store, a UE registers an implicit set of them. A de-registered IMPU stays (state unregistered) for the reg-event subscription and for terminating services, so this is not the number of registered users: see Registered Contacts.'),
+        stat('Registered Contacts (S-CSCF)', cur(m.contacts), { h: 6, w: 6, x: 6, y: 57 }, 'short', 0, 'Bindings of registered UEs: the registered base.'),
+        stat('Reg-event Subscriptions Held', cur(m.subs), { h: 6, w: 6, x: 12, y: 57 }, 'short', 0, 'Subscriptions to the registration state that the S-CSCF holds. They outlive a de-registration, until they expire.'),
         stat('Registered Contacts (P-CSCF)', cur(m.pcontacts), { h: 6, w: 6, x: 18, y: 57 }),
         ts('Registered Base', [
-          tgt(cur(m.impus), 'IMPUs (S-CSCF)'),
+          tgt(cur(m.impus), 'IMPU records (S-CSCF)'),
           tgt(cur(m.contacts), 'contacts (S-CSCF)'),
-          tgt(cur(m.subs), 'reg-event subs'),
+          tgt(cur(m.subs), 'reg-event subs held'),
           tgt(cur(m.pcontacts), 'contacts (P-CSCF)'),
         ], { h: 7, w: 24, x: 0, y: 63 }),
 
         // ===== Charging (Ro / TS 32.299) =====
         row('Charging - Ro (TS 32.299)', 70),
-        stat('Active Ro Sessions', cur(m.ro_act), { h: 6, w: 6, x: 0, y: 71 }),
+        stat('Active Ro Sessions', cur(m.ro_act), { h: 6, w: 6, x: 0, y: 71 }, 'short', 0, 'Ro sessions in the S-CSCF table: one per call leg that is up, so 2 per answered call between two users it serves.'),
         stat('Initial CCRs', inc(m.ccr_i), { h: 6, w: 6, x: 6, y: 71 }),
         stat('Successful Initial CCRs', inc(m.ccr_ok), { h: 6, w: 6, x: 12, y: 71 }),
         stat('Killed Calls (out of credit)', inc(m.killed), { h: 6, w: 6, x: 18, y: 71 }),
@@ -499,12 +506,12 @@ configs:
       + g.dashboard.withPanels([
         // ===== Outcome =====
         row('Outcome - registrations', 0),
-        kpi('Registration Success Rate', '100 * sum(increase(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}' + rng + ')) / (sum(increase(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}' + rng + ')) + sum(increase(kamailio_ims_registrar_scscf_rejected_regs{job="scscf"}' + rng + ')))', { h: 6, w: 8, x: 0, y: 1 }, ok_thr),
+        kpi('Initial Registration Success Rate', '100 * sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}' + rng + ')) / (sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}' + rng + ')) + sum(increase(kamailio_ims_registration_initial_failure_total{job="scscf"}' + rng + ')))', { h: 6, w: 8, x: 0, y: 1 }, ok_thr),
         stat('Registered Contacts (P-CSCF)', 'sum(kamailio_ims_usrloc_pcscf_registered_contacts{job="pcscf"})', { h: 6, w: 8, x: 8, y: 1 }),
         stat('Registered IMPUs (S-CSCF)', 'sum(kamailio_ims_usrloc_scscf_active_impus{job="scscf"})', { h: 6, w: 8, x: 16, y: 1 }),
-        ts('Registration rate', [
-          tgt('sum(rate(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}' + ri + '))', 'accepted'),
-          tgt('sum(rate(kamailio_ims_registrar_scscf_rejected_regs{job="scscf"}' + ri + '))', 'rejected'),
+        ts('Initial registration rate', [
+          tgt('sum(rate(kamailio_ims_registration_initial_success_total{job="scscf"}' + ri + '))', 'accepted'),
+          tgt('sum(rate(kamailio_ims_registration_initial_failure_total{job="scscf"}' + ri + '))', 'rejected'),
         ], { h: 7, w: 24, x: 0, y: 7 }, 'reqps'),
 
         // ===== SIP UDP transport =====

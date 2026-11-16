@@ -39,19 +39,21 @@ request and reply routes in dialog variables (`$dlg_var(kpi*)`).
 
 ### Accessibility — Registration (Initial Registration Success Rate)
 
-Reused: `ims_registrar_scscf` counters on the S-CSCF.
+Custom counters on the S-CSCF, incremented in `route[SAA]` and `route[MAA]`
+(`serving.cfg`) for a REGISTER of an identity that is not registered yet.
 
 ```promql
-# Registration Success Rate (%)
-100 * sum(increase(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}[$__range]))
-    / ( sum(increase(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}[$__range]))
-      + sum(increase(kamailio_ims_registrar_scscf_rejected_regs{job="scscf"}[$__range])) )
+# Initial Registration Success Rate (%)
+100 * sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}[$__range]))
+    / ( sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}[$__range]))
+      + sum(increase(kamailio_ims_registration_initial_failure_total{job="scscf"}[$__range])) )
 ```
 
-Approximation: `accepted_regs`/`rejected_regs` count all accepted/rejected
-registrations (initial, re-registration and de-registration), so this is a close
-proxy of the TS 32.454 *Initial* Registration Success Rate rather than an exact
-initial-only figure. The 401 auth-challenge leg is not counted as a rejection.
+A re-registration and a de-registration are not counted: the `ims_registrar_scscf`
+counters (`accepted_regs`, `rejected_regs`) count them, so those read 2 for a UE
+that registers and leaves. A failure is a Cx answer that does not assign the
+S-CSCF (SAA) or a failed MAR; the 401 auth-challenge leg and a REGISTER the UE
+fails to authenticate are not counted.
 
 ### Accessibility — Session Establishment (SESR)
 
@@ -94,34 +96,35 @@ to setup/registration time, reused from native stats:
 
 ### Retainability — IMS Session Drop Rate
 
-Reused: `ims_dialog` (`dialog_ng`) lifecycle counters on the S-CSCF.
+`dialog_ng` lifecycle counters and the `ims_charging` kill counter on the S-CSCF.
 
 ```promql
-# Session Drop Rate (%) — abnormally killed dialogs / processed dialogs
-100 * sum(increase(kamailio_dialog_ng_expired{job="scscf"}[$__range]))
-    / sum(increase(kamailio_dialog_ng_processed{job="scscf"}[$__range]))
+# Session Drop Rate (%) — sessions the network ended / sessions answered
+100 * ( sum(increase(kamailio_ims_charging_killed_calls{job="scscf"}[$__range]))
+      + sum(increase(kamailio_dialog_ng_expired{job="scscf"}[$__range])) )
+    / sum(increase(kamailio_ims_session_setup_success_total{job="scscf"}[$__range]))
 ```
 
-`dialog_ng_expired` counts dialogs forcibly killed by the dialog timer (i.e. no
-BYE seen — an abnormal release); `dialog_ng_processed` is the number of processed
-dialogs. `dialog_ng_active`/`dialog_ng_early` give the current confirmed/early
-session counts. A precise "abnormal release of *established* sessions only"
-figure would need a dialog end-event hook.
+A call the S-CSCF kills for lack of credit ends with a BYE, so `dialog_ng_expired`
+(dialogs the dialog timer ended, no BYE seen) never counts it; `killed_calls`
+does. The denominator is the answered sessions: `dialog_ng_processed` also
+counts the setups that never answered. `dialog_ng_active`/`dialog_ng_early` give
+the current confirmed/early session counts.
 
 ### Utilization — Registered base
 
 Reused: `ims_usrloc_scscf` / `ims_usrloc_pcscf` gauges.
 
-- `kamailio_ims_usrloc_scscf_active_impus` — registered IMPUs (S-CSCF)
-- `kamailio_ims_usrloc_scscf_active_contacts` — registered contacts (S-CSCF)
-- `kamailio_ims_usrloc_scscf_active_subscriptions` — reg-event subscriptions
+- `kamailio_ims_usrloc_scscf_active_impus` — IMPU records held (S-CSCF); a de-registered IMPU stays, unregistered, so this is not the registered count
+- `kamailio_ims_usrloc_scscf_active_contacts` — registered contacts (S-CSCF), the registered base
+- `kamailio_ims_usrloc_scscf_active_subscriptions` — reg-event subscriptions held, until they expire
 - `kamailio_ims_usrloc_pcscf_registered_contacts` — registered contacts (P-CSCF)
 
 ### Charging — Ro (TS 32.299)
 
 Reused: `ims_charging` counters/gauges (populated when the Ro/Rf peer is up).
 
-- `kamailio_ims_charging_active_ro_sessions`
+- `kamailio_ims_charging_active_ro_sessions` — one per call leg that is up
 - `kamailio_ims_charging_initial_ccrs` / `…_successful_initial_ccrs`
 - `kamailio_ims_charging_killed_calls` (calls dropped for lack of credit)
 
