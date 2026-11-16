@@ -83,6 +83,36 @@ index f4381ff2cb..895851d0a0 100644
      <index>
        <name>contact</name>
        <colref linkend="contact_field"/>
+diff --git a/src/modules/ims_rdn/ims_rdn.c b/src/modules/ims_rdn/ims_rdn.c
+index bff187a..844630b 100644
+--- a/src/modules/ims_rdn/ims_rdn.c
++++ b/src/modules/ims_rdn/ims_rdn.c
+@@ -1515,8 +1515,8 @@ static int prepare_term_unreg(struct sip_msg *_m, char *_t, char *_s)
+ 	//here we update the contacts and also build the new contact header for the 200 OK reply
+ 	if(success == 1
+ 			&& ra.update_contacts(req, (udomain_t *)_t, &impu,
+-					   AVP_IMS_SAR_UNREGISTERED_USER, &s, &ccf1, &ccf2, &ecf1,
+-					   &ecf2, 0, 0)
++					   0, AVP_IMS_SAR_UNREGISTERED_USER, &s, &ccf1, &ccf2,
++					   &ecf1, &ecf2, 0, 0)
+ 					   <= 0) {
+ 		LM_ERR("Error processing data base for initial INVITE for RDN "
+ 			   "Service\n");
+diff --git a/src/modules/ims_registrar_scscf/api.h b/src/modules/ims_registrar_scscf/api.h
+index 67b3341..1143e6e 100644
+--- a/src/modules/ims_registrar_scscf/api.h
++++ b/src/modules/ims_registrar_scscf/api.h
+@@ -41,8 +41,8 @@ typedef int (*regapi_lookup_f)(struct sip_msg *msg, char *table);
+ int regapi_lookup(struct sip_msg *msg, char *table);
+ 
+ typedef int (*regapi_update_contacts_f)(struct sip_msg *msg, udomain_t *_d,
+-		str *public_identity, int assignment_type, ims_subscription **s,
+-		str *ccf1, str *ccf2, str *ecf1, str *ecf2,
++		str *public_identity, str *private_identity, int assignment_type,
++		ims_subscription **s, str *ccf1, str *ccf2, str *ecf1, str *ecf2,
+ 		contact_for_header_t **contact_header, restoration_info_t *ri);
+ typedef ims_subscription *(*regapi_parse_user_data_f)(str xml);
+ 
 diff --git a/src/modules/ims_registrar_scscf/cxdx_avp.c b/src/modules/ims_registrar_scscf/cxdx_avp.c
 index 68d94690e7..212a94d1cd 100644
 --- a/src/modules/ims_registrar_scscf/cxdx_avp.c
