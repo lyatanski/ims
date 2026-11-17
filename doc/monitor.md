@@ -28,7 +28,7 @@ just skipped or labelled `dir="na"`):
 
 | Metric | Type | Labels | Incremented on |
 |--------|------|--------|----------------|
-| `kamailio_ims_session_setup_attempts_total` | counter | `dir` | initial INVITE (orig in `MORIG`, term in `MTERM`); a call whose both legs this S-CSCF serves is counted once, as `orig` |
+| `kamailio_ims_session_setup_attempts_total` | counter | `dir` | initial INVITE (orig in `MORIG`, term in `MTERM`); a call whose both legs this S-CSCF serves is counted on both sides, once as `orig` and once as `term` |
 | `kamailio_ims_session_setup_success_total`  | counter | `dir` | first `180` or `2xx` to the INVITE, once per session (TS 32.409 4.1.2.2) |
 | `kamailio_ims_session_setup_failure_total`  | counter | `dir`,`code` | `>=300` final response with no `180` before it, including the 402 / 500 the S-CSCF answers itself when charging refuses the call |
 | `kamailio_ims_session_setup_duration`       | histogram (ms) | `dir` | INVITE→first `180` or `2xx` elapsed time |
@@ -92,14 +92,16 @@ on the user: `486`, `600`, `404`, `484` and the release before ringing (`487`).
 Custom histogram (milliseconds), INVITE to the first `180` or `2xx` (TS 32.409
 4.1.2.6), so it is the time to ring, not to answer. It is not split per media
 name.
+Both legs record a sample, and the originating one contains the terminating one
+(it is the caller's wait), so the panels read `dir="orig"` only.
 
 ```promql
 # mean setup time (ms)
-sum(increase(kamailio_ims_session_setup_duration_sum{job="scscf"}[$__range]))
-/ sum(increase(kamailio_ims_session_setup_duration_count{job="scscf"}[$__range]))
+sum(increase(kamailio_ims_session_setup_duration_sum{job="scscf", dir="orig"}[$__range]))
+/ sum(increase(kamailio_ims_session_setup_duration_count{job="scscf", dir="orig"}[$__range]))
 
 # p95 / p99 setup time (ms)
-histogram_quantile(0.95, sum by (le) (rate(kamailio_ims_session_setup_duration_bucket{job="scscf"}[$__rate_interval])))
+histogram_quantile(0.95, sum by (le) (rate(kamailio_ims_session_setup_duration_bucket{job="scscf", dir="orig"}[$__rate_interval])))
 ```
 
 The dashboard also shows the **Diameter control-plane latency** that contributes
@@ -167,9 +169,10 @@ Reused: I-CSCF and S-CSCF Diameter counters.
   counters at the P-CSCF (`SC.AttSessionOrig`) and the P-/I-CSCF
   (`SC.AttSessionTerm`) and computes the KPI "by I-CSCF" or "by P-CSCF", with
   roamer scoping that follows from the node; only registration is S-CSCF
-  specific. Here `dir=orig` is a session that starts at a UE of this network and
-  `dir=term` one that arrives from another network; a call between two users of
-  this S-CSCF is one session, counted as `orig`.
+  specific. Here `dir=orig` is the originating leg of a session and `dir=term`
+  the terminating leg, each with its own outcome and setup time (dialog
+  variables `_o` and `_t`); a call between two users of this S-CSCF is one
+  originating and one terminating session, as the spec counts it.
 - Setup-time samples are in **milliseconds** (Kamailio config integer math);
   the panels are configured with the `ms` unit.
 

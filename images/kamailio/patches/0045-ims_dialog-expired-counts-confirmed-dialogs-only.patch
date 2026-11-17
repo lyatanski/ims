@@ -1,0 +1,35 @@
+Count an expired dialog as dropped only if it was confirmed.
+
+dlg_ontimeout() took every dialog it deleted off the active count and added
+it to the expired count, an early dialog too. An early dialog is on the
+early count, not the active one, so its expiry left the early gauge one
+higher for good and pushed the active gauge one below the dialogs that are
+up. The expired counter is what the IMS session drop rate (TS 32.454 5.2.1,
+dropped over established sessions) reads, and a call that rang and then
+timed out before an answer is not a dropped session.
+
+Do what the BYE path does: an early dialog leaves the early count, and only
+a confirmed one goes off the active count and onto the expired one.
+
+diff --git a/src/modules/ims_dialog/dlg_handlers.c b/src/modules/ims_dialog/dlg_handlers.c
+index 6ba63b2c14..5c18c991ff 100644
+--- a/src/modules/ims_dialog/dlg_handlers.c
++++ b/src/modules/ims_dialog/dlg_handlers.c
+@@ -1939,8 +1939,15 @@ void dlg_ontimeout(struct dlg_tl *tl)
+ 		run_dlg_callbacks(DLGCB_EXPIRED, dlg, NULL, NULL, DLG_DIR_NONE, 0);
+ 
+ 		unref_dlg(dlg, unref + 1);
+-		counter_add(dialog_ng_cnts_h.active, -1);
+-		counter_inc(dialog_ng_cnts_h.expired);
++		/* the same balance as a BYE: an early dialog is on the early
++		 * count, not the active one, and it never was a session that
++		 * could be dropped */
++		if(old_state == DLG_STATE_EARLY) {
++			counter_add(dialog_ng_cnts_h.early, -1);
++		} else {
++			counter_add(dialog_ng_cnts_h.active, -1);
++			counter_inc(dialog_ng_cnts_h.expired);
++		}
+ 	} else {
+ 		unref_dlg(dlg, 1);
+ 	}
