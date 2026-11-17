@@ -46,11 +46,6 @@ services:
       target: /etc/cscf/diameter.xml
     cap_add:
     - NET_ADMIN
-    # The port pool alone takes ~840 fds in the TCP main process at start (see
-    # proxy.cfg), so the default 1024 leaves room for ~180 connections and
-    # accept() then fails in a loop. The pool itself must stay as it is
-    ulimits:
-      nofile: 8192
     networks:
       default:            # Mw
         ipv4_address: ${IPSEC}
