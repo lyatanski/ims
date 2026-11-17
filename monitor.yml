@@ -247,14 +247,29 @@ configs:
       + g.dashboard.graphTooltip.withSharedCrosshair()
       + g.dashboard.withPanels([
         stat('Running containers', 'count(time() - container_last_seen{name!=\'\'} < 30)',              {h: 3, w: 8, x: 0,  y: 0}),
-        stat('Total Mem Usage',    'sum(container_memory_usage_bytes{name!=\'\'})',                     {h: 3, w: 8, x: 8,  y: 0}, 'bytes'),
-        stat('Total CPU Usage',    'sum(rate(container_cpu_user_seconds_total{name!=\'\'}[5m]) * 100)', {h: 3, w: 8, x: 16, y: 0}, 'percent')
+        // working set = what the OOM killer counts; usage_bytes also includes reclaimable page cache
+        stat('Total Mem Usage',    'sum(container_memory_working_set_bytes{name!=\'\'})',               {h: 3, w: 8, x: 8,  y: 0}, 'bytes'),
+        // 100% = one core, as in the per-container panels, so the ceiling is cores x 100%;
+        // query B carries it into the panel's max and the thresholds are fractions of that
+        stat('Total CPU Usage',    'sum(rate(container_cpu_usage_seconds_total{name!=\'\'}[5m]) * 100)', {h: 3, w: 8, x: 16, y: 0}, 'percent')
+        + g.panel.stat.queryOptions.withTargetsMixin([
+            g.query.prometheus.new(ds, 'max(machine_cpu_cores) * 100')
+            + g.query.prometheus.withRefId('B')
+            + g.query.prometheus.withLegendFormat('max')
+          ])
+        + g.panel.stat.queryOptions.withTransformations([
+            g.panel.stat.queryOptions.transformation.withId('configFromQuery')
+            + g.panel.stat.queryOptions.transformation.withOptions({
+                configRefId: 'B',
+                mappings: [{ fieldName: 'max', handlerKey: 'max', reducerId: 'lastNotNull' }],
+              }),
+          ])
         + g.panel.stat.standardOptions.withMin(0)
-        + g.panel.stat.standardOptions.withMax(100)
-        + steps([{ color: 'green', value: null }, { color: 'yellow', value: 70 }, { color: 'red', value: 90 }]),
+        + steps([{ color: 'green', value: null }, { color: 'yellow', value: 70 }, { color: 'red', value: 90 }])
+        + g.panel.stat.standardOptions.thresholds.withMode('percentage'),
 
-        ts('CPU Usage',  'rate(container_cpu_user_seconds_total{name!=\'\'}[5m]) * 100',                {h: 7, w: 24, x: 0,  y: 3 }, 'percent'),
-        ts('Mem Usage',  'container_memory_usage_bytes{name!=\'\'}',                                    {h: 7, w: 24, x: 0,  y: 10}, 'bytes'),
+        ts('CPU Usage',  'rate(container_cpu_usage_seconds_total{name!=\'\'}[5m]) * 100',               {h: 7, w: 24, x: 0,  y: 3 }, 'percent'),
+        ts('Mem Usage',  'container_memory_working_set_bytes{name!=\'\'}',                              {h: 7, w: 24, x: 0,  y: 10}, 'bytes'),
         ts('Network Rx', 'irate(container_network_receive_bytes_total{name!=\'\'}[5m])',                {h: 7, w: 12, x: 0,  y: 17}, 'Bps'),
         ts('Network Tx', 'irate(container_network_transmit_bytes_total{name!=\'\'}[5m])',               {h: 7, w: 12, x: 12, y: 17}, 'Bps'),
       ])
@@ -625,7 +640,7 @@ configs:
 
         // ===== Resources =====
         row('Resources', 45),
-        ts('CPU % per container', [tgt('rate(container_cpu_user_seconds_total{name!=\'\'}' + ri + ')*100', '{{name}}')], { h: 8, w: 24, x: 0, y: 46 }, 'percent'),
+        ts('CPU % per container', [tgt('rate(container_cpu_usage_seconds_total{name!=\'\'}' + ri + ')*100', '{{name}}')], { h: 8, w: 24, x: 0, y: 46 }, 'percent'),
       ])
 
   open5gs.jsonnet:
