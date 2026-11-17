@@ -32,8 +32,10 @@ just skipped or labelled `dir="na"`):
 | `kamailio_ims_session_setup_success_total`  | counter | `dir` | first `180` or `2xx` to the INVITE, once per session (TS 32.409 4.1.2.2) |
 | `kamailio_ims_session_setup_failure_total`  | counter | `dir`,`code` | `>=300` final response with no `180` before it, including the 402 / 500 the S-CSCF answers itself when charging refuses the call |
 | `kamailio_ims_session_setup_duration`       | histogram (ms) | `dir` | INVITE→first `180` or `2xx` elapsed time |
-| `kamailio_ims_registration_initial_{success,failure}_total` | counter | | initial REGISTER (identity not registered), `route[SAA]` / `route[MAA]` |
-| `kamailio_ims_registration_re_{success,failure}_total` | counter | | REGISTER with Expires > 0 for an identity that is registered already |
+| `kamailio_ims_session_established_total` | counter | | the first `180` or `2xx` of a dialog, once: the success counters are per leg and a call between two users of this S-CSCF has two |
+| `kamailio_ims_registration_initial_attempts_total` | counter | | a challenge or a failed authentication for an identity that is not registered, `route[REGISTER]` |
+| `kamailio_ims_registration_initial_{success,failure}_total` | counter | | initial registration: SAA assigned / MAR or SAR failed or the credentials failed, `route[SAA]`, `route[MAA]`, `route[REGISTER]` |
+| `kamailio_ims_registration_re_{attempts,success,failure}_total` | counter | | the same for a REGISTER with Expires > 0 for an identity that is registered already |
 
 `dir` is `orig`/`term`; setup direction and start time are carried between the
 request and reply routes in dialog variables (`$dlg_var(kpi*)`).
@@ -42,24 +44,27 @@ request and reply routes in dialog variables (`$dlg_var(kpi*)`).
 
 ### Accessibility — Registration (Initial Registration Success Rate)
 
-Custom counters on the S-CSCF, incremented in `route[SAA]` and `route[MAA]`
+Custom counters on the S-CSCF, in `route[REGISTER]`, `route[MAA]` and `route[SAA]`
 (`serving.cfg`) for a REGISTER of an identity that is not registered yet.
 
 ```promql
 # Initial Registration Success Rate (%)
 100 * sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}[$__range]))
-    / ( sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}[$__range]))
-      + sum(increase(kamailio_ims_registration_initial_failure_total{job="scscf"}[$__range])) )
+    / sum(increase(kamailio_ims_registration_initial_attempts_total{job="scscf"}[$__range]))
 ```
 
-A re-registration and a de-registration are not counted: the `ims_registrar_scscf`
-counters (`accepted_regs`, `rejected_regs`) count them, so those read 2 for a UE
-that registers and leaves. A failure is a Cx answer that does not assign the
-S-CSCF (SAA) or a failed MAR; the 401 auth-challenge leg and a REGISTER the UE
-fails to authenticate are not counted.
+A procedure starts when the S-CSCF challenges an identity that is not registered
+(or answers a failed authentication), so an attempt the UE abandons after the
+401 stays in the denominator, as TS 32.409 4.1.1.1.1 counts it. The answer to
+the challenge belongs to the same procedure and is not a second attempt. A
+failure is a Cx answer that does not assign the S-CSCF (SAA), a failed MAR, or
+credentials that do not authenticate; the challenge that follows a failed
+answer starts the next attempt. A re-registration and a de-registration are not
+counted: the `ims_registrar_scscf` counters (`accepted_regs`, `rejected_regs`)
+count them, so those read 2 for a UE that registers and leaves.
 
 Re-registration Success Rate (5.1.5) is the same ratio over
-`kamailio_ims_registration_re_{success,failure}_total`. A REGISTER with
+`kamailio_ims_registration_re_{attempts,success}_total`. A REGISTER with
 `Expires: 0` is a de-registration and is in neither.
 
 ### Accessibility — Session Establishment (SESR, SENSR)
@@ -119,13 +124,15 @@ to setup/registration time, reused from native stats:
 # Session Drop Rate (%) — sessions the network ended / sessions established
 100 * ( sum(increase(kamailio_ims_charging_killed_calls{job="scscf"}[$__range]))
       + sum(increase(kamailio_dialog_ng_expired{job="scscf"}[$__range])) )
-    / sum(increase(kamailio_ims_session_setup_success_total{job="scscf"}[$__range]))
+    / sum(increase(kamailio_ims_session_established_total{job="scscf"}[$__range]))
 ```
 
 A call the S-CSCF kills for lack of credit ends with a BYE, so `dialog_ng_expired`
 (dialogs the dialog timer ended, no BYE seen) never counts it; `killed_calls`
-does. The denominator is the established sessions (TS 32.454 5.2.1):
-`dialog_ng_processed` also counts the setups that never got a `180`. Patch 0045
+does. The denominator is the established sessions (TS 32.454 5.2.1), counted once per
+dialog like the drops: `ims_session_setup_success_total` is per leg and would
+count a call between two users of this S-CSCF twice, and `dialog_ng_processed`
+also counts the setups that never got a `180`. Patch 0045
 keeps an early dialog that times out out of `dialog_ng_expired`, which would
 count a call that never rang as dropped. `dialog_ng_active`/`dialog_ng_early` give
 the current confirmed/early session counts.
@@ -180,7 +187,7 @@ Reused: I-CSCF and S-CSCF Diameter counters.
 
 | § | KPI | State |
 |---|-----|-------|
-| 5.1.1 | Initial registration success rate | done (S-CSCF) |
+| 5.1.1 | Initial registration success rate | done (S-CSCF), attempts are the challenges sent, not every REGISTER received |
 | 5.1.2 | Session setup time (mean) | done, not per media name |
 | 5.1.3 | SESR | done, per side |
 | 5.1.4 | Third-party registration success rate | **not supported**: the REGISTER to the AS and its answer are in `ims_isc`, which exports no counter |

@@ -275,8 +275,10 @@ configs:
 
       // ---- metric names (all carry a job label: pcscf / icscf / scscf) ----
       local m = {
+        reg_att:   'kamailio_ims_registration_initial_attempts_total{job="scscf"}',
         reg_ok:    'kamailio_ims_registration_initial_success_total{job="scscf"}',
         reg_no:    'kamailio_ims_registration_initial_failure_total{job="scscf"}',
+        rereg_att: 'kamailio_ims_registration_re_attempts_total{job="scscf"}',
         rereg_ok:  'kamailio_ims_registration_re_success_total{job="scscf"}',
         rereg_no:  'kamailio_ims_registration_re_failure_total{job="scscf"}',
         sar_to:    'kamailio_ims_registrar_scscf_sar_timeouts{job="scscf"}',
@@ -285,6 +287,7 @@ configs:
         mar_rt:    'kamailio_ims_auth_mar_avg_response_time{job="scscf"}',
         ses_att:   'kamailio_ims_session_setup_attempts_total{job="scscf"}',
         ses_ok:    'kamailio_ims_session_setup_success_total{job="scscf"}',
+        ses_est:   'kamailio_ims_session_established_total{job="scscf"}',
         ses_no:    'kamailio_ims_session_setup_failure_total{job="scscf"}',
         dur_b:     'kamailio_ims_session_setup_duration_bucket{job="scscf", dir="orig"}',
         dur_s:     'kamailio_ims_session_setup_duration_sum{job="scscf", dir="orig"}',
@@ -324,6 +327,10 @@ configs:
       local fail_user(d) = inc(ses('failure_total', d, ', code=~"404|484|486|487|600"'));
       local sesr(d)  = '100 * ' + inc(ses('success_total', d)) + ' / ' + inc(ses('attempts_total', d));
       local sensr(d) = '100 * (' + inc(ses('success_total', d)) + ' + ' + fail_user(d) + ') / ' + inc(ses('attempts_total', d));
+
+      // IRSR (5.1.1) and its re-registration twin (5.1.5): successes over the
+      // attempts, which include the ones the UE abandoned after the challenge
+      local regr(ok, att) = '100 * ' + inc(ok) + ' / ' + inc(att);
 
       // ---- threshold palettes ----
       local ok_thr   = [{ color: 'red', value: null }, { color: 'yellow', value: 95 }, { color: 'green', value: 99 }];
@@ -458,8 +465,11 @@ configs:
         // that were established. A call the S-CSCF kills for lack of credit ends
         // with a BYE, not a dialog timeout, so it is counted from the charging
         // counter; dialog_ng_processed would add the setups that never answered.
-        kpi('IMS Session Drop Rate', '100 * (' + inc(m.killed) + ' + ' + inc(m.dlg_exp) + ') / ' + inc(m.ses_ok), { h: 6, w: 8, x: 0, y: 44 }, drop_thr, 'percent', 2,
-            'Sessions ended by the network (killed for lack of credit, or dialog timeout) over sessions answered in the same range.'),
+        // Drops are counted per dialog, so the denominator is the established
+        // sessions per dialog: the success counters are per leg, and a call
+        // between two users of this S-CSCF has two.
+        kpi('IMS Session Drop Rate', '100 * (' + inc(m.killed) + ' + ' + inc(m.dlg_exp) + ') / ' + inc(m.ses_est), { h: 6, w: 8, x: 0, y: 44 }, drop_thr, 'percent', 2,
+            'Sessions ended by the network (killed for lack of credit, or dialog timeout) over sessions established in the same range, one per dialog.'),
         stat('Active Sessions', cur(m.dlg_act), { h: 6, w: 8, x: 8, y: 44 }),
         stat('Early Dialogs', cur(m.dlg_early), { h: 6, w: 8, x: 16, y: 44 }),
         ts('Dialogs Processed vs Expired', [tgt(rt(m.dlg_proc), 'processed'), tgt(rt(m.dlg_exp), 'expired'), tgt(rt(m.killed), 'killed (charging)')], { h: 7, w: 12, x: 0, y: 50 }, 'reqps'),
