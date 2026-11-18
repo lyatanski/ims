@@ -12,6 +12,9 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.bgp.enabled }}
+        checksum/bird: {{ include (print .Template.BasePath "/bird.yaml") . | sha256sum }}
+        {{- end }}
         {{- with include "rtpengine.networks" . }}
         k8s.v1.cni.cncf.io/networks: {{ . | quote }}
         {{- end }}
@@ -53,16 +56,95 @@ spec:
           httpGet:
             path: /ping
             port: monitor
+        {{- if .Values.bgp.enabled }}
+        # Keeps relaying while the router moves to the other replica
+        lifecycle:
+          preStop:
+            exec:
+              command: [sleep, {{ .Values.bgp.drain | quote }}]
+        {{- end }}
         {{- with .Values.resources }}
         resources: {{- toYaml . | nindent 12 }}
         {{- end }}
         volumeMounts:
         - name: conf
           mountPath: /etc/rtpengine
+      {{- if .Values.bgp.enabled }}
+      {{- $bird := printf "%s:%s" .Values.bgp.image.repository (.Values.bgp.image.tag | toString) }}
+      - name: bird
+        imagePullPolicy: {{ .Values.bgp.image.pullPolicy }}
+        image: {{ $bird }}
+        # The image's own -c names a file the chart does not write
+        args:
+        - -c
+        - /etc/bird/$(HOSTNAME).conf
+        env:
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        livenessProbe:
+          exec:
+            command: [birdcl, -s, /run/bird/bird.ctl, show, status]
+        lifecycle:
+          preStop:
+            exec:
+              # Withdraw first, and tell the probe loop not to announce again
+              command:
+              - sh
+              - -c
+              - >-
+                touch /run/bird/draining;
+                for p in {{ include "rtpengine.bgp.protocols" . }}; do
+                birdcl -s /run/bird/bird.ctl disable $p; done;
+                sleep {{ .Values.bgp.drain }}
+        {{- with .Values.bgp.resources }}
+        resources: {{- toYaml . | nindent 12 }}
+        {{- end }}
+        volumeMounts:
+        - name: bird-conf
+          mountPath: /etc/bird
+        - name: bird-run
+          mountPath: /run/bird
+      - name: bird-probe
+        imagePullPolicy: {{ .Values.bgp.image.pullPolicy }}
+        image: {{ $bird }}
+        command: [sh, /etc/bird/probe.sh]
+        env:
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: URL
+          value: http://$(HOSTNAME):{{ .Values.monitor.port }}/ping
+        - name: PROTOS
+          value: {{ include "rtpengine.bgp.protocols" . | quote }}
+        - name: INTERVAL
+          value: {{ .Values.bgp.probe.interval | quote }}
+        - name: MISSES
+          value: {{ .Values.bgp.probe.misses | quote }}
+        - name: HOLD
+          value: {{ .Values.bgp.probe.holdDown | quote }}
+        resources:
+          requests: {cpu: 10m, memory: 16Mi}
+          limits: {memory: 32Mi}
+        volumeMounts:
+        - name: bird-conf
+          mountPath: /etc/bird
+        - name: bird-run
+          mountPath: /run/bird
+      {{- end }}
       volumes:
       - name: conf
         configMap:
           name: {{ include "rtpengine.name" . }}
+      {{- if .Values.bgp.enabled }}
+      - name: bird-conf
+        configMap:
+          name: {{ include "rtpengine.name" . }}-bird
+      - name: bird-run
+        emptyDir: {}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

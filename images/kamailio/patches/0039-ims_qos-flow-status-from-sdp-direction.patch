@@ -1,0 +1,127 @@
+Derive the Rx Flow-Status from the SDP direction in ims_qos.
+
+TS 29.213 6.2 (Table 6.2.1) sets the Flow-Status of a media component
+from the SDP direction attributes of the offer and the answer. ims_qos
+always sent ENABLED, so a held call (a=inactive, sendonly) kept its
+bearer authorised in both directions.
+
+Combine the offer and the answer, the answer's attribute being from the
+answerer's point of view, to get the way the offerer sends and receives;
+an a=inactive in either one disables the flow. Map this to the UE's point
+of view (UE offers in an originating dialog) and send ENABLED-UPLINK,
+ENABLED-DOWNLINK, ENABLED or DISABLED. TCP, TCP/MSRP, UDP/DTLS/SCTP and
+the AF signalling flow stay ENABLED.
+
+diff --git a/src/modules/ims_qos/rx_avp.c b/src/modules/ims_qos/rx_avp.c
+index 3dd76d3597..2d3cc5dc2b 100644
+--- a/src/modules/ims_qos/rx_avp.c
++++ b/src/modules/ims_qos/rx_avp.c
+@@ -374,6 +374,97 @@ inline static unsigned int sdp_b_value(str *payload, char *subtype)
+ 	return 0;
+ }
+ 
++/* Direction attribute of an SDP media description (RFC 4566 6) */
++enum sdp_dir {
++	SDP_DIR_SENDRECV = 3,
++	SDP_DIR_SENDONLY = 1,
++	SDP_DIR_RECVONLY = 2,
++	SDP_DIR_INACTIVE = 0
++};
++
++static enum sdp_dir rx_sdp_stream_direction(str *raw)
++{
++	static const struct
++	{
++		const char *name;
++		int len;
++		enum sdp_dir dir;
++	} attrs[] = {{"sendrecv", 8, SDP_DIR_SENDRECV},
++			{"sendonly", 8, SDP_DIR_SENDONLY},
++			{"recvonly", 8, SDP_DIR_RECVONLY},
++			{"inactive", 8, SDP_DIR_INACTIVE}};
++	char *p, *end, *eol;
++	int i, len;
++
++	if(!raw || !raw->s || raw->len <= 0)
++		return SDP_DIR_SENDRECV;
++	p = raw->s;
++	end = raw->s + raw->len;
++	while(p < end) {
++		eol = memchr(p, '\n', end - p);
++		len = (eol ? eol : end) - p;
++		if(len > 0 && p[len - 1] == '\r')
++			len--;
++		if(len >= 2 && p[0] == 'a' && p[1] == '=') {
++			for(i = 0; i < 4; i++) {
++				if(len - 2 == attrs[i].len
++						&& strncasecmp(p + 2, attrs[i].name, attrs[i].len)
++								   == 0)
++					return attrs[i].dir;
++			}
++		}
++		if(!eol)
++			break;
++		p = eol + 1;
++	}
++	return SDP_DIR_SENDRECV;
++}
++
++/* Flow-Status of a media component (TS 29.213 6.2, Table 6.2.1): the
++ * offer and the answer together tell which way the offerer sends and
++ * receives; it is mapped to the UE's point of view. Transports without a
++ * direction (TCP, MSRP, DTLS/SCTP) are always enabled. */
++static int rx_flow_status(str *transport, str *req_raw_payload,
++		str *rpl_raw_payload, enum dialog_direction dlg_direction,
++		int flow_usage_type)
++{
++	int offerer_sends, offerer_receives, ue_sends, ue_receives;
++	enum sdp_dir offer, answer;
++
++	if(flow_usage_type == AVP_EPC_Flow_Usage_AF_Signaling)
++		return AVP_IMS_Flow_Status_Enabled;
++	if(transport && transport->s
++			&& (strncasecmp(transport->s, "TCP", 3) == 0
++					|| (transport->len >= 13
++							&& strncasecmp(transport->s, "UDP/DTLS/SCTP", 13)
++										   == 0)))
++		return AVP_IMS_Flow_Status_Enabled;
++
++	offer = rx_sdp_stream_direction(req_raw_payload);
++	answer = rx_sdp_stream_direction(rpl_raw_payload);
++
++	/* the answer's attribute is from the answerer's point of view */
++	offerer_sends = (offer & SDP_DIR_SENDONLY) && (answer & SDP_DIR_RECVONLY);
++	offerer_receives =
++			(offer & SDP_DIR_RECVONLY) && (answer & SDP_DIR_SENDONLY);
++
++	if(dlg_direction == DLG_MOBILE_ORIGINATING) {
++		ue_sends = offerer_sends;
++		ue_receives = offerer_receives;
++	} else {
++		ue_sends = offerer_receives;
++		ue_receives = offerer_sends;
++	}
++
++	if(ue_sends && ue_receives)
++		return AVP_IMS_Flow_Status_Enabled;
++	if(ue_sends)
++		return AVP_IMS_Flow_Status_Enabled_Uplink;
++	if(ue_receives)
++		return AVP_IMS_Flow_Status_Enabled_Downlink;
++	return AVP_IMS_Flow_Status_Disabled;
++}
++
+ inline int rx_add_media_component_description_avp(AAAMessage *msg, int number,
+ 		str *media_description, str *ipA, str *portA, str *ipB, str *portB,
+ 		str *transport, str *req_raw_payload, str *rpl_raw_payload,
+@@ -560,7 +651,9 @@ inline int rx_add_media_component_description_avp(AAAMessage *msg, int number,
+ 	}
+ 
+ 
+-	set_4bytes(x, AVP_IMS_Flow_Status_Enabled);
++	set_4bytes(x,
++			rx_flow_status(transport, req_raw_payload, rpl_raw_payload,
++					dlg_direction, flow_usage_type));
+ 	flow_status = cdpb.AAACreateAVP(AVP_IMS_Flow_Status,
+ 			AAA_AVP_FLAG_MANDATORY | AAA_AVP_FLAG_VENDOR_SPECIFIC,
+ 			IMS_vendor_id_3GPP, x, 4, AVP_DUPLICATE_DATA);

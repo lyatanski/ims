@@ -1,0 +1,66 @@
+Do not hold a cdp session lock while looking a peer up for routing.
+
+AAASendMessage() and AAASendRecvMessage() route a request with the
+session of its Session-Id locked (cdp_get_session()), and routing looks
+the peer up with get_peer_by_fqdn(), which takes peer_list_lock. Two other
+paths take the same locks in the other order:
+
+  check_application() (cdp_has_app())  peer_list_lock, then a peer's lock
+  sm_process(Send_Message)             a peer's lock, then a session's,
+                                       in Snd_Message()
+
+so a request being routed, a cdp_has_app() and a request being sent to
+that peer close a cycle. The S-CSCF of the load test hit it at about
+70 calls/s: a CCR-T for a BYE held the OCS peer and waited for a session
+slot, cdp_has_app() held peer_list_lock and waited for the OCS peer, and
+three initial and interim CCRs held session slots and waited for
+peer_list_lock. Every SIP worker, the cdp receiver and timer and the
+xhttp /metrics then waited behind them; the process never recovered.
+
+get_first_connected_route() already drops the session lock around the
+sticky peer's lookup ("Don't attempt to hold two locks at same time").
+Do the same around the loop over the routing entries, which does not
+touch the session, and around the Destination-Host lookup in
+get_routing_peer(). Callers still get the session back locked.
+
+diff --git a/src/modules/cdp/routing.c b/src/modules/cdp/routing.c
+index 24ffd98..1fc1674 100644
+--- a/src/modules/cdp/routing.c
++++ b/src/modules/cdp/routing.c
+@@ -110,6 +110,13 @@ peer *get_first_connected_route(
+ 		}
+ 	}
+ 
++	/* get_peer_by_fqdn() takes peer_list_lock, and check_application()
++	 * takes it before a peer's lock, while sm_process() takes a peer's lock
++	 * before a session's (Snd_Message()): holding the session lock across
++	 * it closes that cycle, and every SIP worker of a busy CSCF ends up
++	 * waiting in it. The loop does not touch the session. */
++	if(cdp_session)
++		AAASessionsUnlock(cdp_session->hash);
+ 	for(i = r; i; i = i->next) {
+ 		if(peer_count >= LB_MAX_PEERS)
+ 			break;
+@@ -139,6 +146,9 @@ peer *get_first_connected_route(
+ 		}
+ 	}
+ 
++	if(cdp_session)
++		AAASessionsLock(cdp_session->hash);
++
+ 	if(peer_count == 0) {
+ 		return 0;
+ 	}
+@@ -258,7 +268,12 @@ peer *get_routing_peer(cdp_session_t *cdp_session, AAAMessage *m)
+ 
+ 	if(destination_host.len) {
+ 		/* There is a destination host present in the message try and route directly there */
++		/* not under the session lock: see get_first_connected_route() */
++		if(cdp_session)
++			AAASessionsUnlock(cdp_session->hash);
+ 		p = get_peer_by_fqdn(&destination_host);
++		if(cdp_session)
++			AAASessionsLock(cdp_session->hash);
+ 		if(p && (p->state == I_Open || p->state == R_Open)
+ 				&& (peer_handles_application(p, app_id)
+ 						|| peer_handles_application(p, RELAY_APP_ID))) {

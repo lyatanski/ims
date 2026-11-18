@@ -27,24 +27,15 @@ diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd
 index 5f0db96b1a..0c03ad60ba 100644
 --- a/src/modules/ims_ipsec_pcscf/cmd.c
 +++ b/src/modules/ims_ipsec_pcscf/cmd.c
-@@ -46,6 +46,7 @@
+@@ -46,7 +46,8 @@
  
  #include "../../core/parser/msg_parser.h"
+ #include "../../core/route.h"
  #include "../../core/socket_info.h"
 +#include "../../core/data_lump_rpl.h"
  #include "../../lib/ims/ims_getters.h"
  #include "../../modules/tm/tm_load.h"
  #include "../ims_usrloc_pcscf/usrloc.h"
-@@ -66,6 +67,9 @@
- extern str ipsec_listen_addr;
- extern str ipsec_listen_addr6;
- extern int ipsec_reuse_server_port;
-+extern int ipsec_client_port;
-+extern int ipsec_server_port;
-+extern int ipsec_max_connections;
- extern int ipsec_restore_oseq_rate;
- extern ip_addr_t ipsec_listen_ip_addr;
- extern ip_addr_t ipsec_listen_ip_addr6;
 @@ -1901,6 +1905,364 @@ cleanup:
  	return ret;
  }

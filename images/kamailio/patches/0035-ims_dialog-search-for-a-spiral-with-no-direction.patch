@@ -1,0 +1,33 @@
+Search for a spiralled INVITE's dialog with no direction set.
+
+dlg_new_dialog() passes &dir to search_dlg() to detect a spiral - the
+same INVITE coming back through this CSCF - but dir is not initialised
+until after the search. match_dialog() reads it to pick what to compare
+while the dialog has no dlg_out entries yet:
+
+	DLG_DIR_DOWNSTREAM (1)	from_tag against the From tag
+	DLG_DIR_UPSTREAM (2)	from_tag against the To tag
+	anything else		both, and sets *dir to the one that matched
+
+With stack garbage of 2 a spiralled INVITE, which has no To tag, is
+compared on the wrong tag, no spiral is detected and a second dialog is
+created for the same Call-ID. Seen under valgrind memcheck on the P-CSCF
+and the S-CSCF ("Conditional jump or move depends on uninitialised
+value(s)" at match_dialog, origin the stack frame of dlg_new_dialog).
+
+dlg_onroute() and dlg_get_msg_dialog() set DLG_DIR_NONE before their
+lookups; do the same here.
+
+diff --git a/src/modules/ims_dialog/dlg_handlers.c b/src/modules/ims_dialog/dlg_handlers.c
+index d14e5e039c..ff40a2b3a4 100644
+--- a/src/modules/ims_dialog/dlg_handlers.c
++++ b/src/modules/ims_dialog/dlg_handlers.c
+@@ -1680,7 +1680,7 @@ int dlg_new_dialog(
+ 	str ftag;
+ 	str ttag;
+ 	str req_uri;
+-	unsigned int dir;
++	unsigned int dir = DLG_DIR_NONE;
+ 	int mlock;
+ 
+ 	if(req->first_line.u.request.method_value != METHOD_INVITE)

@@ -1,0 +1,112 @@
+name: Soak
+
+# doc/test-plan.md, L6: calls at a steady rate for hours against the compose
+# stack, checking that nothing grows. Call-only for now: the UEs register once
+# and never refresh, so the registration path is not soaked (L2).
+#
+# The verdict is .github/soak/check.py over what Prometheus scraped during the
+# run. A hosted runner kills a job at 6 h, so the load is held for at most
+# about 5 h: the rest is pulling, start-up and the settle at the end.
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: How long the calls run, in minutes (at most 300)
+        default: '240'
+      scale:
+        description: Subscribers; every two make a pair with one call up at a time
+        default: '10'
+      hold_ms:
+        description: Talk time of each call, in ms
+        default: '30000'
+  schedule:
+  - cron: '0 2 * * SAT'
+
+concurrency: soak
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      SCALE: ${{ inputs.scale || '10' }}
+      CALL_HOLD_MS: ${{ inputs.hold_ms || '30000' }}
+      CALL_GAP_MS: 2000
+      CALL_MEDIA: -1       # RTP on every call: the UPF and the bearers are soaked too
+      CALL_REPORT_S: 300
+      # Each UE's OCS account (billing.yml) holds 5 minutes of talk unless
+      # set, then every later INVITE from it gets 402
+      CREDIT: 100000m
+      # Each pair's calls, in turn: a test of its own (pro2call's CALL_MIX).
+      # No kill/nocredit: they empty the account, which the loop never
+      # refills
+      CALL_MIX: ok,busy,noanswer,cancel
+    steps:
+    - uses: actions/checkout@v7
+    - name: Length
+      run: |
+        minutes=${{ inputs.minutes || '240' }}
+        [ "$minutes" -le 300 ] || { echo "minutes must be at most 300"; exit 1; }
+        echo "CALL_DURATION_S=$((minutes * 60))" >> "$GITHUB_ENV"
+        # The UEs' reg-event subscriptions must outlive the run: they are
+        # not refreshed either
+        echo "REG_EVENT_EXPIRES=$((minutes * 60 + 3600))" >> "$GITHUB_ENV"
+    # No debug profile: its pcap records every packet and fills the disk
+    # within hours.
+    - name: Set Up
+      run: docker compose up --detach --wait --quiet-pull
+    - name: Test
+      run: |
+        docker compose --profile test up --detach test
+        .github/soak/sample.sh 30 > sa.csv 2> sample.err &
+    - name: Wait
+      run: docker wait "$(docker compose --profile test ps --all --quiet test)"
+    # Let the de-REGISTERs' NOTIFYs, the P-CSCF's reg-info queue and the
+    # Delete Bearers finish before reading what is left.
+    - name: Settle
+      run: sleep 120
+    - name: Check
+      run: |
+        id=$(docker compose --profile test ps --all --quiet test)
+        start=$(date -d "$(docker inspect -f '{{.State.StartedAt}}' "$id")" +%s)
+        end=$(date -d "$(docker inspect -f '{{.State.FinishedAt}}' "$id")" +%s)
+        # A pro2call without CALL_DURATION_S runs one series and stops,
+        # which would pass on a window of a minute
+        if [ $((end - start)) -lt "$CALL_DURATION_S" ]; then
+          echo "the test ran $((end - start)) s of the $CALL_DURATION_S s asked for"
+          exit 1
+        fi
+        prom=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' \
+               "$(docker compose ps --quiet prometheus)" | awk '{print $1}')
+        python3 .github/soak/check.py --prom "http://$prom:9090" \
+          --start "$start" --end "$end" --sa sa.csv --csv series.csv
+    # pro2call's own verdict: every call it placed was answered, every
+    # registration and subscription went through.
+    - name: Calls
+      run: |
+        docker compose --profile test logs --no-log-prefix test > test.log
+        grep -E '^== (Summary|Call setup|Media quality)' -A3 test.log || true
+        exit "$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose --profile test ps --all --quiet test)")"
+      if: always()
+    - name: Logs
+      run: |
+        docker compose --profile test logs --no-color --timestamps > compose.log
+        touch test.log
+        gzip -f compose.log test.log
+      if: always()
+    - name: Upload
+      uses: actions/upload-artifact@v7
+      with:
+        name: soak
+        path: |
+          series.csv
+          sa.csv
+          sample.err
+          test.log.gz
+          compose.log.gz
+        if-no-files-found: warn
+      if: always()
+    - name: Tear Down
+      run: docker compose --profile test down --volumes
+      if: always()

@@ -1,0 +1,55 @@
+Copy the AOR out of the request before fill_contact() frees it.
+
+For a reply, fill_contact() re-parses the transaction's request into tmsg to
+find the UE's Contact, and then frees tmsg straight after parsing:
+
+	cb = cscf_parse_contacts(&tmsg);
+	free_sip_msg(&tmsg);
+	if(!cb || (!cb->contacts)) {
+	...
+		if(pkg_str_dup(&aor, &cb->contacts->uri) < 0) {
+
+cb is the parsed Contact body hanging off tmsg's headers, so free_sip_msg()
+releases it (free_contact() via free_hdr_field_lst()) and both cb->contacts
+and cb->contacts->uri are read from freed pkg memory. ipsec_create() runs
+this on every 401 to a REGISTER. With kamailio's own pkg allocator the freed
+fragment usually still holds the old bytes, so it went unnoticed; memcheck
+with system malloc (-X sm) reports "Invalid read of size 8 at fill_contact"
+on the 401 of a registration.
+
+Duplicate the AOR while tmsg is still parsed, then free it, and fall back to
+the Via-built AOR when no Contact gave one.
+
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index 0c03ad60ba..e9b668cba9 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -346,8 +346,15 @@ static int fill_contact(
+ 			goto error;
+ 		}
+ 		cb = cscf_parse_contacts(&tmsg);
++		/* cb hangs off tmsg's parsed headers: copy the AOR out before
++		 * free_sip_msg() releases them */
++		if(cb && cb->contacts && pkg_str_dup(&aor, &cb->contacts->uri) < 0) {
++			LM_ERR("failed to duplicate aor\n");
++			free_sip_msg(&tmsg);
++			goto error;
++		}
+ 		free_sip_msg(&tmsg);
+-		if(!cb || (!cb->contacts)) {
++		if(aor.s == NULL) {
+ 			LM_DBG("Reply No contact headers, building AOR from Via\n");
+ 			// Handle the messages without contacts (e.g.BYE)
+ 			// Build AOR as "sip:<via_host>:<via_port>"
+@@ -366,11 +373,6 @@ static int fill_contact(
+ 			aor.len = aor_len;
+ 			LM_DBG("set AOR [%.*s], VIA [%d://%.*s:%d]\n", STR_FMT(&aor),
+ 					vb->proto, STR_FMT(&vb->host), vb->port);
+-		} else {
+-			if(pkg_str_dup(&aor, &cb->contacts->uri) < 0) {
+-				LM_ERR("failed to duplicate aor\n");
+-				goto error;
+-			}
+ 		}
+ 
+ 		// populate CI with bare minimum

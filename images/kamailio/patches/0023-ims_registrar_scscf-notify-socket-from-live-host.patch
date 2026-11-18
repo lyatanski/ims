@@ -1,0 +1,34 @@
+Look up a NOTIFY's send socket before freeing the string the host is in.
+
+build_dlg_t_from_notification() parses the subscription's stored socket
+string into a pkg copy, frees the copy, and then looks the socket up by the
+host it parsed - which points into that copy:
+
+	parse_phostport(tmp, &host.s, &host.len, &port, &proto);
+	pkg_free(tmp);
+	td->send_sock = grep_sock_info(&host, ...);
+
+grep_sock_info() compares freed memory against the listen sockets' names, so
+a NOTIFY can go out from the wrong socket, or none matches and the default
+one is used. memcheck with system malloc (-X sm) reports it in the
+notification process: "Invalid read at grep_sock_info, by
+build_dlg_t_from_notification".
+
+Free the copy after the lookup.
+
+diff --git a/src/modules/ims_registrar_scscf/registrar_notify.c b/src/modules/ims_registrar_scscf/registrar_notify.c
+index dcafbc8dc4..a5f11f312c 100644
+--- a/src/modules/ims_registrar_scscf/registrar_notify.c
++++ b/src/modules/ims_registrar_scscf/registrar_notify.c
+@@ -2949,9 +2949,10 @@ dlg_t *build_dlg_t_from_notification(reg_notification *n)
+ 			pkg_free(tmp);
+ 			goto error;
+ 		}
+-		pkg_free(tmp);
++		/* host points into tmp */
+ 		td->send_sock = grep_sock_info(
+ 				&host, (unsigned short)port, (unsigned short)proto);
++		pkg_free(tmp);
+ 	}
+ 
+ 	return td;

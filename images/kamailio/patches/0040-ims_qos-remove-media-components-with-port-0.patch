@@ -1,0 +1,185 @@
+Send Flow-Status REMOVED for media streams disabled by port 0 in ims_qos.
+
+TS 29.213 Table 6.2.1: for an SDP media line with port 0 the AF sends
+Flow-Status REMOVED. TS 29.214 5.3.16 says a media component left out of
+an AAR keeps its earlier authorisation, so a stream that was rejected or
+removed in a re-INVITE kept its bearer open at the PCRF.
+
+For a stream with port 0 in the offer or the answer that the PCRF
+authorised before, add a Media-Component-Description with the
+Media-Component-Number (the ordinal of the m= line) and Flow-Status
+REMOVED only. Streams never authorised are left out as before.
+
+The AAR that removes the video of an update the SIP side rejected did
+the same by omission; it now sends REMOVED for the video components of
+that update.
+
+diff --git a/src/modules/ims_qos/ims_qos_mod.c b/src/modules/ims_qos/ims_qos_mod.c
+index f0232f4fce..219ebce5f6 100644
+--- a/src/modules/ims_qos/ims_qos_mod.c
++++ b/src/modules/ims_qos/ims_qos_mod.c
+@@ -502,6 +502,7 @@ void callback_dialog(
+ 	flow_description_t *new_fd = 0;
+ 	int current_has_video = 0;
+ 	int new_has_video = 0;
++	unsigned int removed_video = 0;
+ 	int must_unlock_aaa = 1;
+ 
+ 	if(rx_session_id == 0) {
+@@ -632,6 +633,8 @@ void callback_dialog(
+ 						if(strncmp(new_fd->media.s, "video", 5) == 0) {
+ 							LM_DBG("The new flow has a video fd in it\n");
+ 							new_has_video = 1;
++							if(new_fd->stream_num > 0 && new_fd->stream_num <= 32)
++								removed_video |= 1u << (new_fd->stream_num - 1);
+ 						}
+ 						new_fd = new_fd->next;
+ 					}
+@@ -665,7 +668,7 @@ void callback_dialog(
+ 		} else {
+ 			//We need to send AAR asynchronously with current fd
+ 			//this unlocks (or on error drops) the session
+-			rx_send_aar_update_no_video(auth);
++			rx_send_aar_update_no_video(auth, removed_video);
+ 		}
+ 	} else {
+ 		LM_DBG("Callback type not supported - just returning");
+diff --git a/src/modules/ims_qos/rx_aar.c b/src/modules/ims_qos/rx_aar.c
+index 55c1a1a205..c188cdffe4 100644
+--- a/src/modules/ims_qos/rx_aar.c
++++ b/src/modules/ims_qos/rx_aar.c
+@@ -515,6 +515,17 @@ int add_media_components_using_current_flow_description(
+ }
+ 
+ 
++/* whether the media component was authorised by an earlier AAR */
++static int rx_media_was_authorised(rx_authsessiondata_t *session_data, int num)
++{
++	flow_description_t *fd;
++
++	for(fd = session_data->first_current_flow_description; fd; fd = fd->next)
++		if(fd->stream_num == num)
++			return 1;
++	return 0;
++}
++
+ /*
+  * Helper function for adding media component AVPs for each SDP stream.
+  */
+@@ -587,6 +598,16 @@ int add_media_components(AAAMessage *aar, struct sip_msg *req,
+ 			if(sdp_stream_num < 32 && atoi(req_sdp_stream->port.s) != 0
+ 					&& atoi(rpl_sdp_stream->port.s) != 0)
+ 				kept |= 1u << sdp_stream_num;
++			/* A stream disabled by port 0 (TS 29.213 Table 6.2.1): tell the PCRF
++			 * to remove the component it was authorised for, else it keeps
++			 * its old authorisation (TS 29.214 5.3.16). */
++			if(sdp_stream_num < 32 && !(kept & (1u << sdp_stream_num))
++					&& rx_media_was_authorised(
++							p_session_data, sdp_stream_num + 1)) {
++				LM_DBG("Stream %d has port 0, removing its media component\n",
++						sdp_stream_num + 1);
++				rx_add_media_component_removed_avp(aar, sdp_stream_num + 1);
++			}
+ 			// Check if this is a stream to add to AAR.
+ 			if(req_sdp_stream->is_rtp) {
+ 				// Check if the src or dst port is 0. If so, then don't add to Rx AAR.
+@@ -729,7 +750,7 @@ error:
+  * Sends the Authorization Authentication Request - specifically this is an asynchronous AAR sent if another update adding video has failed so we need to remove video
+  */
+ 
+-int rx_send_aar_update_no_video(AAASession *auth)
++int rx_send_aar_update_no_video(AAASession *auth, unsigned int removed)
+ {
+ 
+ 	AAAMessage *aar = 0;
+@@ -846,6 +867,12 @@ int rx_send_aar_update_no_video(AAASession *auth)
+ 
+ 	add_media_components_using_current_flow_description(aar, p_session_data);
+ 
++	/* the video components of the failed update: the PCRF keeps the
++	 * authorisation of components left out, so remove them explicitly */
++	for(int i = 0; i < 32; i++)
++		if(removed & (1u << i))
++			rx_add_media_component_removed_avp(aar, i + 1);
++
+ 	LM_DBG("Adding framed ip address [%.*s]\n", recv_ip.len, recv_ip.s);
+ 	/* Add Framed IP address AVP*/
+ 	if(!rx_add_framed_ip_avp(&aar->avpList, recv_ip, ip_version)) {
+diff --git a/src/modules/ims_qos/rx_aar.h b/src/modules/ims_qos/rx_aar.h
+index 6264f41a1c..38f1cd7727 100644
+--- a/src/modules/ims_qos/rx_aar.h
++++ b/src/modules/ims_qos/rx_aar.h
+@@ -115,7 +115,7 @@ int rx_send_aar(struct sip_msg *req, struct sip_msg *res, AAASession *auth,
+ 		char *direction, saved_transaction_t *saved_t_data);
+ 
+ //send AAR to remove video after failed AAR update that added video
+-int rx_send_aar_update_no_video(AAASession *auth);
++int rx_send_aar_update_no_video(AAASession *auth, unsigned int removed);
+ 
+ 
+ //TODOD remove - no longer user AOR parm
+diff --git a/src/modules/ims_qos/rx_avp.c b/src/modules/ims_qos/rx_avp.c
+index 2d3cc5dc2b..3a638b1f86 100644
+--- a/src/modules/ims_qos/rx_avp.c
++++ b/src/modules/ims_qos/rx_avp.c
+@@ -671,6 +671,48 @@ inline int rx_add_media_component_description_avp(AAAMessage *msg, int number,
+ }
+ 
+ 
++/* Media-Component-Description removing a media component: only the
++ * number and Flow-Status REMOVED (TS 29.213 Table 6.2.1) */
++int rx_add_media_component_removed_avp(AAAMessage *msg, int number)
++{
++	str data;
++	AAA_AVP_LIST list;
++	AAA_AVP *media_component_number, *flow_status;
++	char x[4];
++
++	list.head = 0;
++	list.tail = 0;
++
++	set_4bytes(x, number);
++	media_component_number = cdpb.AAACreateAVP(AVP_IMS_Media_Component_Number,
++			AAA_AVP_FLAG_MANDATORY | AAA_AVP_FLAG_VENDOR_SPECIFIC,
++			IMS_vendor_id_3GPP, x, 4, AVP_DUPLICATE_DATA);
++	if(!media_component_number) {
++		LM_ERR("Unable to create media_component_number AVP\n");
++		return 0;
++	}
++	cdpb.AAAAddAVPToList(&list, media_component_number);
++
++	set_4bytes(x, AVP_IMS_Flow_Status_Removed);
++	flow_status = cdpb.AAACreateAVP(AVP_IMS_Flow_Status,
++			AAA_AVP_FLAG_MANDATORY | AAA_AVP_FLAG_VENDOR_SPECIFIC,
++			IMS_vendor_id_3GPP, x, 4, AVP_DUPLICATE_DATA);
++	if(!flow_status) {
++		LM_ERR("Unable to create flow_status AVP\n");
++		cdpb.AAAFreeAVPList(&list);
++		return 0;
++	}
++	cdpb.AAAAddAVPToList(&list, flow_status);
++
++	data = cdpb.AAAGroupAVPS(list);
++	cdpb.AAAFreeAVPList(&list);
++
++	return rx_add_avp(msg, data.s, data.len,
++			AVP_IMS_Media_Component_Description,
++			AAA_AVP_FLAG_MANDATORY | AAA_AVP_FLAG_VENDOR_SPECIFIC,
++			IMS_vendor_id_3GPP, AVP_FREE_DATA, __FUNCTION__);
++}
++
+ //just for registration to signalling path - much cut down MCD AVP
+ //See 3GPP TS 29.214 section 4.4.5
+ 
+diff --git a/src/modules/ims_qos/rx_avp.h b/src/modules/ims_qos/rx_avp.h
+index 3f14e3a485..c09dbfbb8c 100644
+--- a/src/modules/ims_qos/rx_avp.h
++++ b/src/modules/ims_qos/rx_avp.h
+@@ -89,6 +89,7 @@ int rx_add_media_component_description_avp(AAAMessage *msg, int number,
+ 		enum dialog_direction dlg_direction, int flow_usage_type);
+ 
+ int rx_add_media_component_description_avp_register(AAAMessage *msg);
++int rx_add_media_component_removed_avp(AAAMessage *msg, int number);
+ 
+ AAA_AVP *rx_create_media_subcomponent_avp(int number, str *proto, str *ipA,
+ 		str *portA, str *ipB, str *portB, int flow_usage_type);

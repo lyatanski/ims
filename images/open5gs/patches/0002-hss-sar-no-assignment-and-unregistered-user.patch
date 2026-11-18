@@ -23,8 +23,8 @@ Augmented: TS 23.380 4.6.2 restoration information
 ---------------------------------------------------
 The above restores the profile, but not the registration binding a
 terminating request needs to actually be delivered. This closes that gap on
-the HSS side; the matching kamailio patch (patches/0011, images/kamailio)
-does the S-CSCF half, backing up Path and Contact at the HSS and restoring
+the HSS side; kamailio's ims_registrar_scscf does the S-CSCF half (upstream
+since b155a96eb9), backing up Path and Contact at the HSS and restoring
 bindings from them.
 
 TS 23.380 4.6.2 has the S-CSCF back up, during (RE_)REGISTRATION, "the list
@@ -174,11 +174,11 @@ index 4bfa682..c53c42f 100644
  extern struct dict_object *ogs_diam_cx_sip_item_number;
  extern struct dict_object *ogs_diam_cx_sip_auth_data_item;
 diff --git a/src/hss/hss-context.c b/src/hss/hss-context.c
-index d62f640..4ffa6cc 100644
+index 629cfa7..eda9b87 100644
 --- a/src/hss/hss-context.c
 +++ b/src/hss/hss-context.c
-@@ -48,6 +48,14 @@ typedef struct hss_impu_s {
-     char *id;
+@@ -50,6 +50,14 @@ typedef struct hss_impu_s {
+     /* Replaced by MAR/SAR; must not be borrowed beyond cx_lock. */
      char *server_name;
  
 +    /* TS 23.380 4.6.2 restoration information: the Contact and the Path
@@ -192,7 +192,7 @@ index d62f640..4ffa6cc 100644
      hss_impi_t *impi;
  } hss_impu_t;
  
-@@ -679,6 +687,10 @@ static void impu_remove(hss_impu_t *impu)
+@@ -683,6 +691,10 @@ static void impu_remove(hss_impu_t *impu)
  
      if (impu->server_name)
          ogs_free(impu->server_name);
@@ -203,7 +203,7 @@ index d62f640..4ffa6cc 100644
  
      ogs_pool_free(&impu_pool, impu);
  }
-@@ -913,6 +925,60 @@ void hss_cx_set_server_name(
+@@ -930,6 +942,64 @@ void hss_cx_set_server_name(
      ogs_thread_mutex_unlock(&self.cx_lock);
  }
  
@@ -220,9 +220,13 @@ index d62f640..4ffa6cc 100644
 +
 +    impu = impu_find_by_id(public_identity);
 +    if (impu && impu->impi) {
++        /* contact/path: another SAR can free them once cx_lock is
++         * released, so copy them under it. */
 +        *user_name = impu->impi->id;
-+        *contact = impu->restoration_contact;
-+        *path = impu->restoration_path;
++        if (impu->restoration_contact)
++            *contact = ogs_strdup(impu->restoration_contact);
++        if (impu->restoration_path)
++            *path = ogs_strdup(impu->restoration_path);
 +    }
 +
 +    ogs_thread_mutex_unlock(&self.cx_lock);
@@ -265,10 +269,10 @@ index d62f640..4ffa6cc 100644
          char *user_name, char *visited_network_identifier,
          ogs_ims_data_t *ims_data)
 diff --git a/src/hss/hss-context.h b/src/hss/hss-context.h
-index 1fe0ddc..249f02b 100644
+index 53a5d99..a7e43fb 100644
 --- a/src/hss/hss-context.h
 +++ b/src/hss/hss-context.h
-@@ -90,6 +90,16 @@ char *hss_cx_get_server_name(char *public_identity);
+@@ -101,6 +101,18 @@ char *hss_cx_get_server_name(char *public_identity);
  void hss_cx_set_server_name(
          char *public_identity, char *server_name, bool overwrite);
  
@@ -276,20 +280,22 @@ index 1fe0ddc..249f02b 100644
 + * single return value, since it may legitimately be absent (no REGISTER
 + * backed up yet) without that being an error. user_name is the private
 + * identity the binding belongs to, the User-Name TS 29.229 6.3.46 requires
-+ * alongside it. */
++ * alongside it: an immutable identifier, borrowed like hss_cx_get_user_name()'s.
++ * contact and path are replaced by every SAR, so like the server name they are
++ * copies taken under cx_lock, owned by the caller, who must ogs_free() them. */
 +void hss_cx_get_restoration_info(char *public_identity,
 +        char **user_name, char **contact, char **path);
 +void hss_cx_set_restoration_info(
 +        char *public_identity, char *contact, char *path);
 +
+ /* Returns caller-owned XML; caller must ogs_free() it. */
  char *hss_cx_download_user_data(
          char *user_name, char *visited_network_identifier,
-         ogs_ims_data_t *ims_data);
 diff --git a/src/hss/hss-cx-path.c b/src/hss/hss-cx-path.c
-index ab89036..5985ccd 100644
+index ca19d85..a08ccea 100644
 --- a/src/hss/hss-cx-path.c
 +++ b/src/hss/hss-cx-path.c
-@@ -1068,6 +1068,160 @@ out:
+@@ -1070,6 +1070,160 @@ out:
      return 0;
  }
  
@@ -450,15 +456,15 @@ index ab89036..5985ccd 100644
  /* Callback for incoming Server-Assignment-Request messages */
  static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
          struct session *session, void *opaque, enum disp_action *act)
-@@ -1087,9 +1241,16 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+@@ -1089,9 +1243,16 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
      char *user_data = NULL;
      char *imsi_bcd = NULL;
      char *visited_network_identifier = NULL;
 +    char *restoration_contact = NULL; /* owned: ogs_strndup'd from the SAR */
 +    char *restoration_path = NULL;    /* owned: ogs_strndup'd from the SAR */
 +    char *stored_user_name = NULL; /* borrowed from the impi, do not free */
-+    char *stored_contact = NULL; /* borrowed from the impu, do not free */
-+    char *stored_path = NULL;    /* borrowed from the impu, do not free */
++    char *stored_contact = NULL;
++    char *stored_path = NULL;
  
      ogs_ims_data_t ims_data;
      int error_occurred = 0;
@@ -467,7 +473,7 @@ index ab89036..5985ccd 100644
  
      ogs_debug("Rx Server-Assignment-Request");
  
-@@ -1278,8 +1439,29 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+@@ -1280,8 +1441,31 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
          goto out;
      }
  
@@ -488,10 +494,12 @@ index ab89036..5985ccd 100644
 +            ogs_warn("NO_ASSIGNMENT from [%s] for [%s] assigned to [%s]",
 +                    server_name, public_identity,
 +                    assigned ? assigned : "none");
++            if (assigned) ogs_free(assigned);
 +            unable_to_comply = 1;
 +            error_occurred = 1;
 +            goto out;
 +        }
++        ogs_free(assigned);
 +    } else {
 +        /* Overwrite Server-Name for IMPU(Public-Identity) */
 +        hss_cx_set_server_name(public_identity, server_name, true);
@@ -499,7 +507,7 @@ index ab89036..5985ccd 100644
  
      if (!error_occurred) {
          /* Set Vendor-Specific-Application-Id AVP */
-@@ -1369,9 +1551,19 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+@@ -1371,9 +1555,19 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
              goto out;
          }
  
@@ -522,7 +530,7 @@ index ab89036..5985ccd 100644
  
              /* Get User-Data-Already-Available AVP (Mandatory) */
              ret = fd_msg_search_avp(
-@@ -1479,6 +1671,114 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
+@@ -1481,6 +1675,114 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
              }
          }
  
@@ -637,18 +645,19 @@ index ab89036..5985ccd 100644
          /* Send the answer */
          ret = fd_msg_send(msg, NULL, NULL);
          if (ret != 0) {
-@@ -1501,6 +1801,10 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
-         if (user_name) ogs_free(user_name);
+@@ -1504,6 +1806,11 @@ static int hss_ogs_diam_cx_sar_cb(struct msg **msg, struct avp *avp,
          if (public_identity) ogs_free(public_identity);
          if (server_name) ogs_free(server_name);
-+        /* restoration_contact/path: ours, ogs_strndup'd above.
-+         * stored_*: borrowed from the impu/impi, never ours to free. */
+         if (visited_network_identifier) ogs_free(visited_network_identifier);
++        /* stored_user_name is borrowed from the impi, never ours to free */
 +        if (restoration_contact) ogs_free(restoration_contact);
 +        if (restoration_path) ogs_free(restoration_path);
++        if (stored_contact) ogs_free(stored_contact);
++        if (stored_path) ogs_free(stored_path);
  
          return 0;
      }
-@@ -1513,7 +1817,11 @@ out:
+@@ -1516,7 +1823,11 @@ out:
                  ans, OGS_DIAM_CX_APPLICATION_ID);
  
          /* Set the Experimental-Result, Origin-Host and Origin-Realm AVPs */
@@ -661,7 +670,7 @@ index ab89036..5985ccd 100644
              ret = ogs_diam_message_experimental_rescode_set(ans, result_code);
          }
  
-@@ -1527,6 +1835,13 @@ out:
+@@ -1530,6 +1841,13 @@ out:
              }
          }
  
@@ -675,12 +684,14 @@ index ab89036..5985ccd 100644
          ret = fd_msg_send(msg, NULL, NULL);
          if (ret != 0) {
              ogs_error("Failed to send error response");
-@@ -1544,6 +1859,8 @@ out:
-     if (user_name) ogs_free(user_name);
+@@ -1548,6 +1866,10 @@ out:
      if (public_identity) ogs_free(public_identity);
      if (server_name) ogs_free(server_name);
+     if (visited_network_identifier) ogs_free(visited_network_identifier);
 +    if (restoration_contact) ogs_free(restoration_contact);
 +    if (restoration_path) ogs_free(restoration_path);
++    if (stored_contact) ogs_free(stored_contact);
++    if (stored_path) ogs_free(stored_path);
  
      return 0;
  }

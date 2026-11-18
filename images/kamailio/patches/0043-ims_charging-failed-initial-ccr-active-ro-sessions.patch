@@ -1,0 +1,32 @@
+Take a failed initial CCR off ims_charging's active_ro_sessions.
+
+An initial CCR bumps active_ro_sessions when it is sent, but the Ro session
+only goes into the session table when the CCA grants credit
+(link_ro_session() in resume_on_initial_ccr()). Taking it off the count is
+done when the session is unlinked, and unlinking a session that was never
+linked returns early. So a CCA that refuses the credit (Result-Code 4012, a
+call with no credit left), a CCR that times out or a CCA that cannot be used
+left the gauge one higher for good, and it kept rising for as long as such
+calls were placed. A mix of 60 calls that included 10 without credit left
+the gauge 10 higher with no call up.
+
+Take the session off the count in the failure path, where the increment is
+known not to have been balanced; the line that did it was commented out.
+
+diff --git a/src/modules/ims_charging/ims_ro.c b/src/modules/ims_charging/ims_ro.c
+index 652d12cfb7..880aa1e64f 100644
+--- a/src/modules/ims_charging/ims_ro.c
++++ b/src/modules/ims_charging/ims_ro.c
+@@ -1770,7 +1770,11 @@ error0:
+ 
+ 	LM_DBG("Trying to reserve credit on initial INVITE failed on cdp "
+ 		   "callback\n");
+-	//    counter_add(ims_charging_cnts_h.active_ro_sessions, -1); /*we bumped active on the original initial ccr sent */
++	/* active_ro_sessions was bumped when the initial CCR went out, but the
++	 * session is only linked into the table on a granted CCA, and unlinking
++	 * is what takes it off the count again: a session that never got linked
++	 * has to be taken off here */
++	counter_add(ims_charging_cnts_h.active_ro_sessions, -1);
+ 	counter_inc(
+ 			ims_charging_cnts_h
+ 					.failed_initial_ccrs); /* drop by one as theoretically this is failed initial ccr */

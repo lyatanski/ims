@@ -2,7 +2,7 @@
 # SIP procedures:
 # - REGISTER
 # - SUBSCRIBE (reg)
-# - INVITE (if at least 2 UEs)
+# - INVITE (if at least 2 UEs): answered, busy, cancelled (test.calls)
 apiVersion: v1
 kind: Pod
 metadata:
@@ -23,4 +23,5 @@ spec:
     env:
     {{- include "ims.test.env" . | nindent 4 }}
     - {name: IMS_SUBS,  value: {{ .Values.test.subscribers | quote }}}
+    - {name: CALL_MIX,  value: {{ .Values.test.calls | quote }}}
     securityContext: {{- include "ims.test.securityContext" . | nindent 6 }}
