@@ -397,13 +397,18 @@ configs:
 
       // Outcome split of a counter pair as a donut: the legend table carries the
       // count and the share. The queries are instant, over the dashboard range.
-      local pie(title, ok, no, p, okname='accepted', noname='rejected', desc='') =
+      // With `att`, a third slice holds the attempts that ended neither way: a
+      // challenge the UE never answered, which an accepted/rejected split hides.
+      local pie(title, ok, no, p, okname='accepted', noname='rejected', desc='', att=null) =
         g.panel.pieChart.new(title)
         + g.panel.pieChart.queryOptions.withDatasource('prometheus', ds)
         + g.panel.pieChart.queryOptions.withTargets([
           tgt(inc(ok), okname) + g.query.prometheus.withInstant(true),
           tgt(inc(no), noname) + g.query.prometheus.withInstant(true),
-        ])
+        ] + (if att == null then [] else [
+          tgt('clamp_min(' + inc(att) + ' - ' + inc(ok) + ' - ' + inc(no) + ', 0)', 'abandoned')
+          + g.query.prometheus.withInstant(true),
+        ]))
         + g.panel.pieChart.panelOptions.withGridPos(h=p.h, w=p.w, x=p.x, y=p.y)
         + g.panel.pieChart.panelOptions.withDescription(desc)
         + g.panel.pieChart.options.withPieType('donut')
@@ -438,8 +443,8 @@ configs:
       + g.dashboard.withPanels([
         // ===== Accessibility - Registration =====
         row('Accessibility - Registration (Initial Registration Success Rate)', 0),
-        pie('Initial Registrations', m.reg_ok, m.reg_no, { h: 7, w: 12, x: 0, y: 1 }, desc='Initial Registration Success Rate (TS 32.454 5.1.1): first registrations of an identity, as accepted and rejected. Re-registrations and de-registrations are not counted.'),
-        pie('Re-registrations', m.rereg_ok, m.rereg_no, { h: 7, w: 12, x: 12, y: 1 }, desc='Re-registration Success Rate (TS 32.454 5.1.5): REGISTERs with an Expires above 0 for an identity that is registered already.'),
+        pie('Initial Registrations', m.reg_ok, m.reg_no, { h: 7, w: 12, x: 0, y: 1 }, desc='Initial Registration Success Rate (TS 32.454 5.1.1): first registrations of an identity, as accepted, rejected and abandoned (challenged, never answered). The accepted share is the IRSR. Re-registrations and de-registrations are not counted.', att=m.reg_att),
+        pie('Re-registrations', m.rereg_ok, m.rereg_no, { h: 7, w: 12, x: 12, y: 1 }, desc='Re-registration Success Rate (TS 32.454 5.1.5): REGISTERs with an Expires above 0 for an identity that is registered already. The accepted share is the success rate.', att=m.rereg_att),
         ts('Initial Registration Rate', [tgt(rt(m.reg_ok), 'accepted'), tgt(rt(m.reg_no), 'rejected'), tgt(rt(m.sar_to), 'SAR timeouts')], { h: 7, w: 24, x: 0, y: 8 }, 'reqps'),
 
         // ===== Accessibility - Session Establishment =====
@@ -597,9 +602,9 @@ configs:
       + g.dashboard.withPanels([
         // ===== Outcome =====
         row('Outcome - registrations', 0),
-        kpi('Initial Registration Success Rate', '100 * sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}' + rng + ')) / (sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}' + rng + ')) + sum(increase(kamailio_ims_registration_initial_failure_total{job="scscf"}' + rng + ')))', { h: 6, w: 8, x: 0, y: 1 }, ok_thr),
+        kpi('Initial Registration Success Rate', '100 * sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}' + rng + ')) / sum(increase(kamailio_ims_registration_initial_attempts_total{job="scscf"}' + rng + '))', { h: 6, w: 8, x: 0, y: 1 }, ok_thr),
         stat('Registered Contacts (P-CSCF)', 'sum(kamailio_ims_usrloc_pcscf_registered_contacts{job="pcscf"})', { h: 6, w: 8, x: 8, y: 1 }),
-        stat('Registered IMPUs (S-CSCF)', 'sum(kamailio_ims_usrloc_scscf_active_impus{job="scscf"})', { h: 6, w: 8, x: 16, y: 1 }),
+        stat('Registered Contacts (S-CSCF)', 'sum(kamailio_ims_usrloc_scscf_active_contacts{job="scscf"})', { h: 6, w: 8, x: 16, y: 1 }),
         ts('Initial registration rate', [
           tgt('sum(rate(kamailio_ims_registration_initial_success_total{job="scscf"}' + ri + '))', 'accepted'),
           tgt('sum(rate(kamailio_ims_registration_initial_failure_total{job="scscf"}' + ri + '))', 'rejected'),
