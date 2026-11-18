@@ -55,7 +55,7 @@ a binding too, and "unregistered" is what RFC 3680 and 5.4.2.1.2 / 5.4.1.5
 call that.
 
 diff --git a/src/lib/srdb1/schema/contact.xml b/src/lib/srdb1/schema/contact.xml
-index f4381ff2cb..895851d0a0 100644
+index f4381ff..895851d 100644
 --- a/src/lib/srdb1/schema/contact.xml
 +++ b/src/lib/srdb1/schema/contact.xml
 @@ -9,7 +9,7 @@
@@ -114,7 +114,7 @@ index 67b3341..1143e6e 100644
  typedef ims_subscription *(*regapi_parse_user_data_f)(str xml);
  
 diff --git a/src/modules/ims_registrar_scscf/cxdx_avp.c b/src/modules/ims_registrar_scscf/cxdx_avp.c
-index 68d94690e7..212a94d1cd 100644
+index 68d9469..212a94d 100644
 --- a/src/modules/ims_registrar_scscf/cxdx_avp.c
 +++ b/src/modules/ims_registrar_scscf/cxdx_avp.c
 @@ -1047,12 +1047,14 @@ int cxdx_get_charging_info(
@@ -147,7 +147,7 @@ index 68d94690e7..212a94d1cd 100644
  	cdpb.AAAFreeAVPList(&list);
  	return ret;
 diff --git a/src/modules/ims_registrar_scscf/cxdx_avp.h b/src/modules/ims_registrar_scscf/cxdx_avp.h
-index 109b7a35ee..084ddb5df9 100644
+index 109b7a3..084ddb5 100644
 --- a/src/modules/ims_registrar_scscf/cxdx_avp.h
 +++ b/src/modules/ims_registrar_scscf/cxdx_avp.h
 @@ -203,9 +203,11 @@ int cxdx_add_scscf_restoration_info(
@@ -174,7 +174,7 @@ index 109b7a35ee..084ddb5df9 100644
  /**
   * Creates and adds a Supported-Features AVP for Feature-List-ID 1, the Cx
 diff --git a/src/modules/ims_registrar_scscf/cxdx_sar.c b/src/modules/ims_registrar_scscf/cxdx_sar.c
-index 621fafed77..56d1880908 100644
+index 621fafe..56d1880 100644
 --- a/src/modules/ims_registrar_scscf/cxdx_sar.c
 +++ b/src/modules/ims_registrar_scscf/cxdx_sar.c
 @@ -102,6 +102,10 @@ void free_saved_transaction_data(saved_transaction_t *data)
@@ -218,7 +218,7 @@ index 621fafed77..56d1880908 100644
  			LM_ERR("Error processing REGISTER\n");
  			rerrno = R_SAR_FAILED;
 diff --git a/src/modules/ims_registrar_scscf/cxdx_sar.h b/src/modules/ims_registrar_scscf/cxdx_sar.h
-index 639039cdfd..1a2db0465f 100644
+index 639039c..1a2db04 100644
 --- a/src/modules/ims_registrar_scscf/cxdx_sar.h
 +++ b/src/modules/ims_registrar_scscf/cxdx_sar.h
 @@ -65,6 +65,7 @@ typedef struct saved_transaction
@@ -230,7 +230,7 @@ index 639039cdfd..1a2db0465f 100644
  	contact_for_header_t *
  			contact_header; //used to send the 200 OK with contacts after async callback for dereg where we don't rebuild the contacts
 diff --git a/src/modules/ims_registrar_scscf/registrar_notify.c b/src/modules/ims_registrar_scscf/registrar_notify.c
-index e64a63e05a..d284fa98fb 100644
+index 6ea4969..677cc9f 100644
 --- a/src/modules/ims_registrar_scscf/registrar_notify.c
 +++ b/src/modules/ims_registrar_scscf/registrar_notify.c
 @@ -1945,8 +1945,12 @@ static void process_xml_for_explit_dereg_contact(
@@ -241,9 +241,9 @@ index e64a63e05a..d284fa98fb 100644
 +	 * de-REGISTER, by the network (reg_rpc_dereg_impu()), or replaced by a
 +	 * later registration - it did not run out: "unregistered" (RFC 3680),
 +	 * one of the values TS 24.229 5.4.2.1.2 allows for a removed binding */
- 	reginfo_printf(buf, contact_s_q.s, (void *)1, r_terminated.len,
--			r_terminated.s, r_expired.len, r_expired.s, 0, 0.0);
-+			r_terminated.s, r_unregistered.len, r_unregistered.s, 0, 0.0);
+ 	reginfo_printf(buf, contact_s.s, (void *)1, r_terminated.len,
+-			r_terminated.s, r_expired.len, r_expired.s, 0);
++			r_terminated.s, r_unregistered.len, r_unregistered.s, 0);
  	reginfo_append(buf, &uri_s);
  
  	reginfo_append(buf, &explit_dereg_contact);
@@ -288,7 +288,7 @@ index e64a63e05a..d284fa98fb 100644
  		}
  
 diff --git a/src/modules/ims_registrar_scscf/save.c b/src/modules/ims_registrar_scscf/save.c
-index 24cca9272f..9f108f2993 100644
+index 8e5a452..009ea96 100644
 --- a/src/modules/ims_registrar_scscf/save.c
 +++ b/src/modules/ims_registrar_scscf/save.c
 @@ -47,6 +47,7 @@
@@ -725,7 +725,7 @@ index 24cca9272f..9f108f2993 100644
  
  	create_return_code(CSCF_RETURN_ERROR);
 diff --git a/src/modules/ims_registrar_scscf/save.h b/src/modules/ims_registrar_scscf/save.h
-index 2a579d2ba6..c6185c9f79 100644
+index 2a579d2..c6185c9 100644
 --- a/src/modules/ims_registrar_scscf/save.h
 +++ b/src/modules/ims_registrar_scscf/save.h
 @@ -57,9 +57,12 @@
@@ -755,7 +755,7 @@ index 2a579d2ba6..c6185c9f79 100644
  
  #endif /* SAVE_H */
 diff --git a/src/modules/ims_usrloc_scscf/ucontact.c b/src/modules/ims_usrloc_scscf/ucontact.c
-index 4e83f8b7d3..a31a169074 100644
+index 4e83f8b..a31a169 100644
 --- a/src/modules/ims_usrloc_scscf/ucontact.c
 +++ b/src/modules/ims_usrloc_scscf/ucontact.c
 @@ -163,6 +163,10 @@ ucontact_t *new_ucontact(
@@ -809,7 +809,7 @@ index 4e83f8b7d3..a31a169074 100644
  		update_str(&_c->received, &_ci->received);
  	} else {
 diff --git a/src/modules/ims_usrloc_scscf/ul_rpc.c b/src/modules/ims_usrloc_scscf/ul_rpc.c
-index e88381e485..39bde6b7f4 100644
+index e88381e..39bde6b 100644
 --- a/src/modules/ims_usrloc_scscf/ul_rpc.c
 +++ b/src/modules/ims_usrloc_scscf/ul_rpc.c
 @@ -206,8 +206,9 @@ static void ul_rpc_show_impu(rpc_t *rpc, void *ctx)
@@ -825,7 +825,7 @@ index e88381e485..39bde6b7f4 100644
  			rpc->fault(ctx, 500, "Internal error adding impu contact data");
  			unlock_udomain(domain, &impu);
 diff --git a/src/modules/ims_usrloc_scscf/usrloc.h b/src/modules/ims_usrloc_scscf/usrloc.h
-index 7f04b9ff8e..df4f1798b7 100644
+index 7f04b9f..df4f179 100644
 --- a/src/modules/ims_usrloc_scscf/usrloc.h
 +++ b/src/modules/ims_usrloc_scscf/usrloc.h
 @@ -375,6 +375,7 @@ typedef struct ucontact
@@ -845,7 +845,7 @@ index 7f04b9ff8e..df4f1798b7 100644
  
  	unsigned int methods; /*!< supported methods */
 diff --git a/src/modules/ims_usrloc_scscf/usrloc_db.c b/src/modules/ims_usrloc_scscf/usrloc_db.c
-index f13c0c4a88..5780df24c3 100644
+index f13c0c4..5780df2 100644
 --- a/src/modules/ims_usrloc_scscf/usrloc_db.c
 +++ b/src/modules/ims_usrloc_scscf/usrloc_db.c
 @@ -42,6 +42,8 @@ str cflags_col =
@@ -932,7 +932,7 @@ index f13c0c4a88..5780df24c3 100644
  
  	char *p_subscriber =
 diff --git a/src/modules/ims_usrloc_scscf/usrloc_db.h b/src/modules/ims_usrloc_scscf/usrloc_db.h
-index 215a9d68ef..e8d05f3bb4 100644
+index 215a9d6..e8d05f3 100644
 --- a/src/modules/ims_usrloc_scscf/usrloc_db.h
 +++ b/src/modules/ims_usrloc_scscf/usrloc_db.h
 @@ -19,6 +19,7 @@ extern db_func_t ul_dbf;
@@ -944,7 +944,7 @@ index 215a9d68ef..e8d05f3bb4 100644
  #define PATH_COL "path"
  #define SOCK_COL "socket"
 diff --git a/utils/kamctl/db_redis/kamailio/contact b/utils/kamctl/db_redis/kamailio/contact
-index 70d2b1b9db..fc5b0d29fe 100644
+index 70d2b1b..fc5b0d2 100644
 --- a/utils/kamctl/db_redis/kamailio/contact
 +++ b/utils/kamctl/db_redis/kamailio/contact
 @@ -1,2 +1,2 @@
@@ -953,7 +953,7 @@ index 70d2b1b9db..fc5b0d29fe 100644
 +id/int,contact/string,params/string,path/string,received/string,user_agent/string,expires/time,callid/string,private_identity/string,
 +7
 diff --git a/utils/kamctl/db_sqlite/ims_usrloc_scscf-create.sql b/utils/kamctl/db_sqlite/ims_usrloc_scscf-create.sql
-index 1f624a41fc..a999fc8622 100644
+index 1f624a4..a999fc8 100644
 --- a/utils/kamctl/db_sqlite/ims_usrloc_scscf-create.sql
 +++ b/utils/kamctl/db_sqlite/ims_usrloc_scscf-create.sql
 @@ -7,10 +7,11 @@ CREATE TABLE contact (
@@ -970,14 +970,14 @@ index 1f624a41fc..a999fc8622 100644
  CREATE TABLE impu (
      id INTEGER PRIMARY KEY NOT NULL,
 diff --git a/utils/kamctl/dbtext/kamailio/contact b/utils/kamctl/dbtext/kamailio/contact
-index 2e0facdbc8..eaf8b19352 100644
+index 2e0facd..eaf8b19 100644
 --- a/utils/kamctl/dbtext/kamailio/contact
 +++ b/utils/kamctl/dbtext/kamailio/contact
 @@ -1 +1 @@
 -id(int,auto) contact(string) params(string,null) path(string,null) received(string,null) user_agent(string,null) expires(int,null) callid(string,null)
 +id(int,auto) contact(string) params(string,null) path(string,null) received(string,null) user_agent(string,null) expires(int,null) callid(string,null) private_identity(string,null)
 diff --git a/utils/kamctl/dbtext/kamailio/version b/utils/kamctl/dbtext/kamailio/version
-index 6e38a10cd2..27059ec38d 100644
+index 3578989..6016af1 100644
 --- a/utils/kamctl/dbtext/kamailio/version
 +++ b/utils/kamctl/dbtext/kamailio/version
 @@ -8,7 +8,7 @@ id(int,auto) table_name(string) table_version(int)
@@ -990,7 +990,7 @@ index 6e38a10cd2..27059ec38d 100644
  0:dbaliases:1
  0:dialog:7
 diff --git a/utils/kamctl/mongodb/kamailio/contact.json b/utils/kamctl/mongodb/kamailio/contact.json
-index fa8d02ce67..1dcb2a6b51 100644
+index fa8d02c..1dcb2a6 100644
 --- a/utils/kamctl/mongodb/kamailio/contact.json
 +++ b/utils/kamctl/mongodb/kamailio/contact.json
 @@ -1,6 +1,6 @@
@@ -1014,7 +1014,7 @@ index fa8d02ce67..1dcb2a6b51 100644
    ]
  }
 diff --git a/utils/kamctl/mongodb/kamailio/version-create.mongo b/utils/kamctl/mongodb/kamailio/version-create.mongo
-index 55a738d2c3..5165deeac3 100644
+index 7af6eec..f7f63ad 100644
 --- a/utils/kamctl/mongodb/kamailio/version-create.mongo
 +++ b/utils/kamctl/mongodb/kamailio/version-create.mongo
 @@ -8,7 +8,7 @@ db.getCollection("version").insert({ table_name: "aliases", table_version: Numbe
@@ -1027,7 +1027,7 @@ index 55a738d2c3..5165deeac3 100644
  db.getCollection("version").insert({ table_name: "dbaliases", table_version: NumberInt(1) });
  db.getCollection("version").insert({ table_name: "dialog", table_version: NumberInt(7) });
 diff --git a/utils/kamctl/mysql/ims_usrloc_scscf-create.sql b/utils/kamctl/mysql/ims_usrloc_scscf-create.sql
-index 476023fd09..8919736df9 100644
+index 476023f..8919736 100644
 --- a/utils/kamctl/mysql/ims_usrloc_scscf-create.sql
 +++ b/utils/kamctl/mysql/ims_usrloc_scscf-create.sql
 @@ -7,10 +7,11 @@ CREATE TABLE `contact` (
@@ -1044,7 +1044,7 @@ index 476023fd09..8919736df9 100644
  CREATE TABLE `impu` (
      `id` INT(10) AUTO_INCREMENT PRIMARY KEY NOT NULL,
 diff --git a/utils/kamctl/oracle/ims_usrloc_scscf-create.sql b/utils/kamctl/oracle/ims_usrloc_scscf-create.sql
-index 8839567409..8ee9f141a2 100644
+index 8839567..8ee9f14 100644
 --- a/utils/kamctl/oracle/ims_usrloc_scscf-create.sql
 +++ b/utils/kamctl/oracle/ims_usrloc_scscf-create.sql
 @@ -7,6 +7,7 @@ CREATE TABLE contact (
@@ -1065,7 +1065,7 @@ index 8839567409..8ee9f141a2 100644
  CREATE TABLE impu (
      id NUMBER(10) PRIMARY KEY,
 diff --git a/utils/kamctl/postgres/ims_usrloc_scscf-create.sql b/utils/kamctl/postgres/ims_usrloc_scscf-create.sql
-index 6b532f0ca7..55036f8322 100644
+index 6b532f0..55036f8 100644
 --- a/utils/kamctl/postgres/ims_usrloc_scscf-create.sql
 +++ b/utils/kamctl/postgres/ims_usrloc_scscf-create.sql
 @@ -7,10 +7,11 @@ CREATE TABLE contact (
@@ -1082,7 +1082,7 @@ index 6b532f0ca7..55036f8322 100644
  CREATE TABLE impu (
      id SERIAL PRIMARY KEY NOT NULL,
 diff --git a/utils/kamctl/xhttp_pi/ims_usrloc_scscf-mod b/utils/kamctl/xhttp_pi/ims_usrloc_scscf-mod
-index f82c3d1f60..6f0c677792 100644
+index f82c3d1..6f0c677 100644
 --- a/utils/kamctl/xhttp_pi/ims_usrloc_scscf-mod
 +++ b/utils/kamctl/xhttp_pi/ims_usrloc_scscf-mod
 @@ -12,6 +12,7 @@
@@ -1110,7 +1110,7 @@ index f82c3d1f60..6f0c677792 100644
  		</cmd>
  		<cmd><cmd_name>delete</cmd_name>
 diff --git a/utils/kamctl/xhttp_pi/ims_usrloc_scscf-table b/utils/kamctl/xhttp_pi/ims_usrloc_scscf-table
-index 99e24e1d6b..29bb0569aa 100644
+index 99e24e1..29bb056 100644
 --- a/utils/kamctl/xhttp_pi/ims_usrloc_scscf-table
 +++ b/utils/kamctl/xhttp_pi/ims_usrloc_scscf-table
 @@ -10,6 +10,7 @@
@@ -1122,7 +1122,7 @@ index 99e24e1d6b..29bb0569aa 100644
  	<!-- Declaration of impu table-->
  	<db_table id="impu">
 diff --git a/utils/kamctl/xhttp_pi/pi_framework.xml b/utils/kamctl/xhttp_pi/pi_framework.xml
-index 2065fde733..b7f80e6daf 100644
+index 2065fde..b7f80e6 100644
 --- a/utils/kamctl/xhttp_pi/pi_framework.xml
 +++ b/utils/kamctl/xhttp_pi/pi_framework.xml
 @@ -505,6 +505,7 @@
