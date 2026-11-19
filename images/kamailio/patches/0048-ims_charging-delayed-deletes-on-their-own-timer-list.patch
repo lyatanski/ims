@@ -1,0 +1,242 @@
+Keep the Ro sessions waiting for their delayed delete on a timer list of their own.
+
+A terminated Ro session is put back on the timer for 120 s before it is
+deleted (put_ro_session_on_wait()). Every Ro timer shares one sorted list
+under one lock, and insertion walks it from the tail to the first entry
+that is not later than the new one. The waiting sessions are the latest
+entries on the list most of the time, so the credit timer of a call being
+answered (dlg_answered(), reserved seconds minus the timer buffer) walks
+past all the sessions that ended in the last ~95 s.
+
+That is 2 Ro sessions x 120 s of the call rate: about 30000 entries at
+127 calls/s, walked by every answer, under the lock every BYE and every
+answer of every SIP worker needs. Sampling the S-CSCF's four SIP workers at
+150 calls/s offered found 33 of 48 stacks in insert_ro_timer(), 29 of them
+waiting for its lock, and the S-CSCF capped at ~127 calls/s with none of
+its processes above a quarter of a core.
+
+All waits have the same interval, so on a list of their own every insert
+lands at the tail and the credit-timer list holds the live calls only.
+remove_ro_timer() unlinks from either list as before, and the timer routine
+takes what expired from both.
+
+diff --git a/src/modules/ims_charging/ro_session_hash.c b/src/modules/ims_charging/ro_session_hash.c
+index 68c35c5..4b75001 100644
+--- a/src/modules/ims_charging/ro_session_hash.c
++++ b/src/modules/ims_charging/ro_session_hash.c
+@@ -156,7 +156,7 @@ int put_ro_session_on_wait(struct ro_session *session)
+ 			session, session->ro_session_id.len, session->ro_session_id.s);
+ 	session->event_type = delayed_delete;
+ 	session->last_event_timestamp = get_current_time_micro();
+-	if(insert_ro_timer(&session->ro_tl, 120) != 0) {
++	if(insert_ro_wait_timer(&session->ro_tl, 120) != 0) {
+ 		LM_CRIT("Unable to insert session [%p] - [%.*s] on wait queue for "
+ 				"deletion\n",
+ 				session, STR_FMT(&session->ro_session_id));
+diff --git a/src/modules/ims_charging/ro_timer.c b/src/modules/ims_charging/ro_timer.c
+index 0944e9a..fd1ba77 100644
+--- a/src/modules/ims_charging/ro_timer.c
++++ b/src/modules/ims_charging/ro_timer.c
+@@ -48,6 +48,7 @@ int init_ro_timer(ro_timer_handler hdl)
+ 	memset(roi_timer, 0, sizeof(struct ro_timer));
+ 
+ 	roi_timer->first.next = roi_timer->first.prev = &(roi_timer->first);
++	roi_timer->wait.next = roi_timer->wait.prev = &(roi_timer->wait);
+ 
+ 	roi_timer->lock = lock_alloc();
+ 	if(roi_timer->lock == 0) {
+@@ -88,15 +89,15 @@ void destroy_ro_timer(void)
+ /*!
+  * \brief Helper function for insert_ro_session_timer
+  * \see insert_ro_session_timer
++ * \param head the list to insert in
+  * \param tl ro_session timer list
+  */
+-static inline void insert_ro_timer_unsafe(struct ro_tl *tl)
++static inline void insert_ro_timer_unsafe(struct ro_tl *head, struct ro_tl *tl)
+ {
+ 	struct ro_tl *ptr;
+ 
+ 	/* insert in sorted order */
+-	for(ptr = roi_timer->first.prev; ptr != &roi_timer->first;
+-			ptr = ptr->prev) {
++	for(ptr = head->prev; ptr != head; ptr = ptr->prev) {
+ 		if(ptr->timeout <= tl->timeout)
+ 			break;
+ 	}
+@@ -111,13 +112,7 @@ static inline void insert_ro_timer_unsafe(struct ro_tl *tl)
+ 	LM_DBG("AFTER tl->prev [%p], tl->next [%p]\n", tl->prev, tl->next);
+ }
+ 
+-/*!
+- * \brief Insert a ro_session timer to the list
+- * \param tl ro_session timer list
+- * \param interval timeout value in seconds
+- * \return 0 on success, -1 when the input timer list is invalid
+- */
+-int insert_ro_timer(struct ro_tl *tl, int interval)
++static int insert_ro_timer_in(struct ro_tl *head, struct ro_tl *tl, int interval)
+ {
+ 	lock_get(roi_timer->lock);
+ 
+@@ -129,7 +124,7 @@ int insert_ro_timer(struct ro_tl *tl, int interval)
+ 		return -1;
+ 	}
+ 	tl->timeout = get_ticks() + interval;
+-	insert_ro_timer_unsafe(tl);
++	insert_ro_timer_unsafe(head, tl);
+ 
+ 
+ 	LM_DBG("TIMER inserted\n");
+@@ -138,6 +133,36 @@ int insert_ro_timer(struct ro_tl *tl, int interval)
+ 	return 0;
+ }
+ 
++/*!
++ * \brief Insert a ro_session timer to the list
++ * \param tl ro_session timer list
++ * \param interval timeout value in seconds
++ * \return 0 on success, -1 when the input timer list is invalid
++ */
++int insert_ro_timer(struct ro_tl *tl, int interval)
++{
++	return insert_ro_timer_in(&roi_timer->first, tl, interval);
++}
++
++/*!
++ * \brief Insert the timer of a session waiting for its delayed delete
++ *
++ * A terminated session stays 120 s on a timer before it is deleted. On the
++ * one sorted list that is at any time 2 x 120 s worth of the call rate --
++ * 30000 entries at 127 calls/s -- all later than the credit timer of a call
++ * being answered, which insertion walks past from the tail under the one
++ * lock every worker takes: the S-CSCF's workers spent most of their time
++ * there. All waits have the same interval, so on a list of their own every
++ * insert lands at the tail.
++ * \param tl ro_session timer list
++ * \param interval timeout value in seconds
++ * \return 0 on success, -1 when the input timer list is invalid
++ */
++int insert_ro_wait_timer(struct ro_tl *tl, int interval)
++{
++	return insert_ro_timer_in(&roi_timer->wait, tl, interval);
++}
++
+ /*!
+  * \brief Helper function for remove_ro_session_timer
+  * \param tl ro_session timer list
+@@ -201,12 +226,39 @@ int update_ro_timer(struct ro_tl *tl, int timeout)
+ 	}
+ 
+ 	tl->timeout = get_ticks() + timeout;
+-	insert_ro_timer_unsafe(tl);
++	insert_ro_timer_unsafe(&roi_timer->first, tl);
+ 
+ 	lock_release(roi_timer->lock);
+ 	return 0;
+ }
+ 
++/*!
++ * \brief Detach the expired head of one timer list
++ * \param head the list
++ * \param time time for expiration check
++ * \return the expired timers chained by next (prev and timeout cleared),
++ * 0 when none expired
++ */
++static inline struct ro_tl *detach_expired_unsafe(
++		struct ro_tl *head, unsigned int time)
++{
++	struct ro_tl *tl, *last = 0, *ret = head->next;
++
++	for(tl = head->next; tl != head && tl->timeout <= time; tl = tl->next) {
++		LM_DBG("getting tl=%p tl->prev=%p tl->next=%p with %d\n", tl, tl->prev,
++				tl->next, tl->timeout);
++		tl->prev = 0;
++		tl->timeout = 0;
++		last = tl;
++	}
++	if(!last)
++		return 0;
++	last->next = 0;
++	head->next = tl;
++	tl->prev = head;
++	return ret;
++}
++
+ /*!
+  * \brief Helper function for ro_timer_routine
+  * \param time time for expiration check
+@@ -214,42 +266,20 @@ int update_ro_timer(struct ro_tl *tl, int timeout)
+  */
+ static inline struct ro_tl *get_expired_ro_sessions(unsigned int time)
+ {
+-	struct ro_tl *tl, *end, *ret;
++	struct ro_tl *ret, *waits, *tl;
+ 
+ 	lock_get(roi_timer->lock);
+ 
+ 	LM_DBG("my ticks are [%d]\n", time);
+ 
+-	if(roi_timer->first.next == &(roi_timer->first)
+-			|| roi_timer->first.next->timeout > time) {
+-		lock_release(roi_timer->lock);
+-		return 0;
+-	}
+-
+-	end = &roi_timer->first;
+-	tl = roi_timer->first.next;
+-	LM_DBG("start with tl=%p tl->prev=%p tl->next=%p (%d) at %d and end with "
+-		   "end=%p end->prev=%p end->next=%p\n",
+-			tl, tl->prev, tl->next, tl->timeout, time, end, end->prev,
+-			end->next);
+-	while(tl != end && tl->timeout <= time) {
+-		LM_DBG("getting tl=%p tl->prev=%p tl->next=%p with %d\n", tl, tl->prev,
+-				tl->next, tl->timeout);
+-		tl->prev = 0;
+-		tl->timeout = 0;
+-		tl = tl->next;
+-	}
+-	LM_DBG("end with tl=%p tl->prev=%p tl->next=%p and "
+-		   "d_timer->first.next->prev=%p\n",
+-			tl, tl->prev, tl->next, roi_timer->first.next->prev);
+-
+-	if(tl == end && roi_timer->first.next->prev) {
+-		ret = 0;
+-	} else {
+-		ret = roi_timer->first.next;
+-		tl->prev->next = 0;
+-		roi_timer->first.next = tl;
+-		tl->prev = &roi_timer->first;
++	ret = detach_expired_unsafe(&roi_timer->first, time);
++	waits = detach_expired_unsafe(&roi_timer->wait, time);
++	if(!ret) {
++		ret = waits;
++	} else if(waits) {
++		for(tl = ret; tl->next; tl = tl->next)
++			;
++		tl->next = waits;
+ 	}
+ 
+ 	lock_release(roi_timer->lock);
+diff --git a/src/modules/ims_charging/ro_timer.h b/src/modules/ims_charging/ro_timer.h
+index 1a04fff..a2790d0 100644
+--- a/src/modules/ims_charging/ro_timer.h
++++ b/src/modules/ims_charging/ro_timer.h
+@@ -25,6 +25,7 @@ struct ro_tl
+ struct ro_timer
+ {
+ 	struct ro_tl first; /*!< ro session timeout list */
++	struct ro_tl wait;	/*!< sessions waiting for their delayed delete */
+ 	gen_lock_t *lock;	/*!< lock for the list */
+ };
+ 
+@@ -56,6 +57,9 @@ void destroy_ro_timer(void);
+  */
+ int insert_ro_timer(struct ro_tl *tl, int interval);
+ 
++/*! like insert_ro_timer(), on the list of the sessions waiting to be deleted */
++int insert_ro_wait_timer(struct ro_tl *tl, int interval);
++
+ 
+ /*!
+  * \brief Remove a ro_session timer from the list
