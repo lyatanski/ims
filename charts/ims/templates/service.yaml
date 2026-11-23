@@ -1,7 +1,8 @@
 {{- $dot := . -}}
-{{- range tuple "p" "i" "s" }}
+{{- range tuple "p" "i" "s" "e" }}
 {{- $cscf := . -}}
 {{- with $dot }}
+{{- if or (ne "e" $cscf) .Values.cscf.emergency.enabled }}
 ---
 apiVersion: v1
 kind: Service
@@ -23,5 +24,6 @@ spec:
   publishNotReadyAddresses: true
   selector: {{- include "ims.selectorLabels" . | nindent 4 }}
     role: {{ $cscf }}cscf
+{{- end }}
 {{- end }}
 {{- end }}

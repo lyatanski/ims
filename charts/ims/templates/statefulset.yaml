@@ -1,7 +1,15 @@
 {{- $dot := . -}}
-{{- range tuple "proxy" "interrogating" "serving" }}
+{{- range tuple "proxy" "interrogating" "serving" "emergency" }}
 {{- $cscf := . -}}
 {{- with $dot }}
+{{- /*
+The E-CSCF (emergency) has no Diameter, so no identity to render, and no state
+store to wait for. Ready once its PSAP table is non-empty, which is what
+/check reports for this role.
+*/}}
+{{- $e := dig $cscf dict .Values.cscf }}
+{{- $diameter := ne "emergency" $cscf }}
+{{- if or $diameter $e.enabled }}
 {{- /*
 With Gm attached the P-CSCF is a single pod with every `gm.addresses` entry on
 its one attachment: the networks annotation lives in the pod template, so a
@@ -33,14 +41,16 @@ spec:
       role: {{ trunc 1 $cscf }}cscf
   template:
     metadata:
-      annotations:
-        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- if $gm }}
-        k8s.v1.cni.cncf.io/networks: {{ list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" $gms) | toJson | quote }}
-        {{- end }}
-        {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+      {{- $ann := dict }}
+      {{- if $diameter }}
+      {{- $_ := set $ann "checksum/config" (include (print .Template.BasePath "/configmap.yaml") . | sha256sum) }}
+      {{- end }}
+      {{- if $gm }}
+      {{- $_ := set $ann "k8s.v1.cni.cncf.io/networks" (list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" $gms) | toJson) }}
+      {{- end }}
+      {{- with merge (deepCopy (.Values.podAnnotations | default dict)) $ann }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
       labels: {{- include "ims.labels" . | nindent 8 }}
         role: {{ trunc 1 $cscf }}cscf
     spec:
@@ -53,11 +63,13 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if $diameter }}
       initContainers:
       {{- include "ims.identity" . | nindent 6 }}
       {{- include "ims.waitdb" (dict "root" . "cscf" $cscf) | nindent 6 }}
       {{- if eq "proxy" $cscf }}
       {{- include "ims.ipsec" . | nindent 6 }}
+      {{- end }}
       {{- end }}
       containers:
       - name: cscf
@@ -91,8 +103,21 @@ spec:
         {{- end }}
         {{- end }}
         {{- end }}
+        {{- if eq "emergency" $cscf }}
+        - name: PSAP
+          value: {{ tpl (join " " (required "cscf.emergency.psap: at least one PSAP" $e.psap)) $ | quote }}
+        {{- with $e.trunk | default (include "ims.ibcf" .) }}
+        # Left out when unset: an empty value would still define TRUNK
+        - name: TRUNK
+          value: {{ tpl . $ | quote }}
+        {{- end }}
+        {{- with include "ims.sosnum" . }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- else }}
         - name: DBURL
           value: {{ template "valkey.name" .Subcharts.trgw.Subcharts.valkey }}:{{ .Values.trgw.valkey.ports.valkey }}/{{ index .Values.db $cscf }}
+        {{- end }}
         {{- if eq "serving" $cscf }}
         - name: REGSRV
           value: {{ include "ims.regsrv" . | quote }}
@@ -129,7 +154,7 @@ spec:
         - name: mon
           containerPort: 9090
           protocol: TCP
-        # /check is `cdp_has_app(...)`
+        # /check is `cdp_has_app(...)`, the PSAP table for the E-CSCF
         readinessProbe:
           httpGet: {path: /check, port: mon}
           periodSeconds: 5
@@ -137,14 +162,16 @@ spec:
           httpGet: {path: /metrics, port: mon}
           periodSeconds: 20
           failureThreshold: 6
-        # Per-role, because the three roles are not the same size
-        {{- with dig $cscf "resources" dict .Values.cscf }}
+        # Per-role, because the roles are not the same size
+        {{- with $e.resources }}
         resources: {{- toYaml . | nindent 10 }}
         {{- end }}
+        {{- if $diameter }}
         volumeMounts:
         - name: identity
           mountPath: /etc/cscf/diameter.xml
           subPath: diameter.xml
+        {{- end }}
         {{- if eq "proxy" $cscf }}
         securityContext:
           capabilities:
@@ -155,6 +182,7 @@ spec:
       {{- if and (eq "proxy" $cscf) (not $gm) .Values.global.ue.subnet }}
       {{- include "ims.ueroute" . | nindent 6 }}
       {{- end }}
+      {{- if $diameter }}
       volumes:
       - name: diameter
         configMap:
@@ -167,6 +195,7 @@ spec:
       {{- if eq "proxy" $cscf }}
       {{- include "ims.kmod" . | nindent 6 }}
       {{- end }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -176,5 +205,6 @@ spec:
       {{- with .Values.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
