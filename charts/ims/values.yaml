@@ -198,7 +198,8 @@ cscf:
   serving:
     resources:
       requests: {cpu: 400m, memory: 256Mi}
-      limits: {cpu: 2, memory: 768Mi}
+      # room for serving.cfg's 1024 MB shared memory pool
+      limits: {cpu: 2, memory: 1280Mi}
 
   emergency:
     enabled: true
@@ -225,7 +226,8 @@ cscf:
     enabled: true
     resources:
       requests: {cpu: 50m, memory: 64Mi}
-      limits: {cpu: 1, memory: 256Mi}
+      # room for telephony.cfg's 256 MB shared memory pool
+      limits: {cpu: 1, memory: 384Mi}
 
   # IBCF (cscf/border.cfg): the entry and exit point on Ici, with rtpengine
   # as its TrGW, and the S-CSCF's next hop for other networks' domains and,
