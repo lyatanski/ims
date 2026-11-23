@@ -212,6 +212,16 @@ Call with the root context.
 {{- end }}
 
 {{/*
+The name of the media interface the BGP addresses belong to: `bgp.interface`,
+or the first entry of `media.interfaces`.
+
+Call with the root context.
+*/}}
+{{- define "rtpengine.bgp.interface" -}}
+{{- .Values.bgp.interface | default (first .Values.media.interfaces).name -}}
+{{- end }}
+
+{{/*
 Check `bgp` against `addresses` and `replicaCount`, and fail the render rather
 than announce something that cannot work: a pair has one address per replica
 and no more than two replicas, a session needs a router and an AS to be
@@ -235,6 +245,29 @@ Call with the root context. Renders nothing.
 {{- end -}}
 {{- if eq (int .Values.bgp.localAs) (int .Values.bgp.peerAs) }}
 {{- fail "rtpengine: bgp.localAs equals bgp.peerAs; the secondary route is told apart by AS path prepending, which an internal session does not do" }}
+{{- end -}}
+{{- $want := include "rtpengine.bgp.interface" . -}}
+{{- $found := false -}}
+{{- $names := list -}}
+{{- range $if := .Values.media.interfaces -}}
+{{- $names = append $names $if.name -}}
+{{- if eq $if.name $want -}}
+{{- $found = true -}}
+{{- if $if.alias }}
+{{- fail (printf "rtpengine: bgp.interface %q is an alias; name the interface it stands for" $want) }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $found }}
+{{- fail (printf "rtpengine: bgp.interface %q is not in media.interfaces" $want) }}
+{{- end -}}
+{{- if contains ":" $want }}
+{{- fail (printf "rtpengine: bgp.interface %q is in a round-robin group; the pair's addresses are not" $want) }}
+{{- end -}}
+{{- range $k := until $n -}}
+{{- if has (printf "%s-%d" $want $k) $names }}
+{{- fail (printf "rtpengine: media.interfaces has %s-%d, the name bgp.interface %q takes for addresses[%d]" $want $k $want $k) }}
+{{- end -}}
 {{- end -}}
 {{- range $fam := include "rtpengine.bgp.families" . | fromJsonArray -}}
 {{- range $k, $a := $.Values.addresses -}}

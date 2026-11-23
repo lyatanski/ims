@@ -26,6 +26,33 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.bgp.enabled }}
+      # Both media addresses, on every replica: the router decides which one
+      # relays an address, and a replica restoring the other's calls binds the
+      # other's address. On lo, so nothing answers ARP for them on the media
+      # network; the router's next hop is the pod's own address there.
+      initContainers:
+      - name: addresses
+        imagePullPolicy: {{ .Values.bgp.image.pullPolicy }}
+        image: {{ printf "%s:%s" .Values.bgp.image.repository (.Values.bgp.image.tag | toString) }}
+        command:
+        - sh
+        - -ec
+        - >-
+          {{- range $a := .Values.addresses }}
+          {{- range $fam := include "rtpengine.bgp.families" $ | fromJsonArray }}
+          {{- $f := int $fam }}
+          ip -{{ $f }} addr replace {{ index $a (printf "v%d" $f) }}/{{ ternary 128 32 (eq $f 6) }} dev lo;
+          {{- end }}
+          {{- end }}
+          ip addr show dev lo
+        securityContext:
+          capabilities:
+            add: [NET_ADMIN]
+        resources:
+          requests: {cpu: 10m, memory: 16Mi}
+          limits: {memory: 32Mi}
+      {{- end }}
       containers:
       - name: {{ .Chart.Name }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -74,10 +101,16 @@ spec:
       - name: bird
         imagePullPolicy: {{ .Values.bgp.image.pullPolicy }}
         image: {{ $bird }}
-        # The image's own -c names a file the chart does not write
-        args:
+        # The image's own -c names a file the chart does not write. The marker
+        # preStop leaves is cleared first: preStop also runs when a failed
+        # liveness probe restarts this container, and the marker would then
+        # outlive it and keep the probe loop withdrawing for good.
+        command:
+        - sh
         - -c
-        - /etc/bird/$(HOSTNAME).conf
+        - >-
+          rm -f /run/bird/draining;
+          exec bird -f -s /run/bird/bird.ctl -c "/etc/bird/$HOSTNAME.conf"
         env:
         - name: HOSTNAME
           valueFrom:

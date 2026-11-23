@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The verdict of a soak run (doc/test-plan.md, L6).
+"""The verdict of a soak run: calls at a steady rate for hours, and nothing grows.
 
 Two checks over what Prometheus scraped during the run, plus the IPsec SA
 counts sample.sh wrote:
@@ -7,10 +7,14 @@ counts sample.sh wrote:
   * trend: nothing grows while the load is steady. The first WARMUP of the
     window is dropped (pools filling, the first calls), and the rest is cut
     into quarters. Memory fails when the median of the last quarter exceeds
-    the first quarter's by more than REL and FLOOR both. A count fails when
-    the peak of the last quarter exceeds the peak of the first: with a fixed
-    number of call pairs the peak is fixed too, unless something is left
-    behind.
+    the first quarter's by more than REL and FLOOR both. A registration count
+    fails when the peak of the last quarter exceeds the peak of the first: the
+    UEs register once, so it is fixed unless something is left behind. A call
+    count is not -- its peak is how many pairs happen to be in an answered
+    call at a sample, and a later quarter can catch one more of them by chance
+    -- so it fails only when the mean of the last quarter exceeds the first
+    quarter's by more than CALL_TOL of the first quarter's peak. A small leak
+    of per-call state is caught by the zero check instead, exactly.
   * zero at the end: once the run has de-registered and torn its PDN
     connections down, every session, dialog, binding and SA is gone.
 
@@ -30,17 +34,19 @@ import urllib.request
 # out: Prometheus and Loki grow by design.
 NODES = "pcscf|icscf|scscf|tas|redis|hss|pcrf|smf|upf|ocs"
 
-# (label, query, kind): kind "bytes" is checked on medians, "count" on peaks.
+# (label, query, kind): "bytes" is checked on medians, "reg" on peaks, "call"
+# on means. Bearers are a mix -- the default one per UE, a dedicated one per
+# call -- and vary with the calls, so they count as "call".
 TREND = [
     ("RSS", f'container_memory_rss{{name=~".+-({NODES})-[0-9]+"}}', "bytes"),
     ("shm used", "kamailio_shmem_real_used_size", "bytes"),
-    ("dialogs", "kamailio_dialog_ng_active", "count"),
-    ("Ro sessions", "kamailio_ims_charging_active_ro_sessions", "count"),
-    ("Rx media sessions", "kamailio_ims_qos_active_media_rx_sessions", "count"),
-    ("Rx registration sessions", "kamailio_ims_qos_active_registration_rx_sessions", "count"),
-    ("P-CSCF contacts", "kamailio_ims_usrloc_pcscf_registered_contacts", "count"),
-    ("S-CSCF contacts", "kamailio_ims_usrloc_scscf_active_contacts", "count"),
-    ("bearers", "bearers_active", "count"),
+    ("dialogs", "kamailio_dialog_ng_active", "call"),
+    ("Ro sessions", "kamailio_ims_charging_active_ro_sessions", "call"),
+    ("Rx media sessions", "kamailio_ims_qos_active_media_rx_sessions", "call"),
+    ("Rx registration sessions", "kamailio_ims_qos_active_registration_rx_sessions", "reg"),
+    ("P-CSCF contacts", "kamailio_ims_usrloc_pcscf_registered_contacts", "reg"),
+    ("S-CSCF contacts", "kamailio_ims_usrloc_scscf_active_contacts", "reg"),
+    ("bearers", "bearers_active", "call"),
 ]
 
 # Everything here is per call or per registration, so 0 once the run is over.
@@ -78,6 +84,8 @@ def where(metric):
 def human(v, kind):
     if kind == "bytes":
         return f"{v / 2**20:.1f} MiB"
+    if kind == "call":
+        return f"{v:.2f}"
     return f"{v:g}"
 
 
@@ -104,6 +112,8 @@ def main():
     ap.add_argument("--warmup", type=float, default=0.2, help="fraction of the window dropped")
     ap.add_argument("--rel", type=float, default=0.03, help="memory growth allowed, fraction")
     ap.add_argument("--floor", type=float, default=4, help="memory growth allowed, MiB")
+    ap.add_argument("--call-tol", type=float, default=0.5,
+                    help="call count growth allowed in the mean, fraction of the first quarter's peak")
     a = ap.parse_args()
 
     rows, failed, dump = [], False, []
@@ -125,6 +135,9 @@ def main():
             if kind == "bytes":
                 f, l = statistics.median(first), statistics.median(last)
                 bad = l - f > max(a.rel * f, a.floor * 2**20)
+            elif kind == "call":
+                f, l = statistics.mean(first), statistics.mean(last)
+                bad = l - f > a.call_tol * max(first)
             else:
                 f, l = max(first), max(last)
                 bad = l > f
@@ -160,7 +173,8 @@ def main():
 
     out = [f"### Soak: {'FAILED' if failed else 'passed'}", "",
            f"Load window {(a.end - a.start) / 60:.0f} min, first {a.warmup:.0%} "
-           f"dropped, first quarter against last.", "",
+           f"dropped, first quarter against last (memory: median, calls: mean, "
+           f"registrations: peak).", "",
            "| Series | First quarter | Last quarter | Change | |", "|---|---|---|---|---|"]
     out += [f"| {' | '.join(r)} |" for r in rows]
     out += ["", "After the run:", "", "| Series | Value | |", "|---|---|---|"]

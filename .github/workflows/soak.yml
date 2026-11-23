@@ -1,8 +1,8 @@
 name: Soak
 
-# doc/test-plan.md, L6: calls at a steady rate for hours against the compose
-# stack, checking that nothing grows. Call-only for now: the UEs register once
-# and never refresh, so the registration path is not soaked (L2).
+# Calls at a steady rate for hours against the compose stack, checking that
+# nothing grows. Call-only for now: the UEs register once and never refresh, so
+# the registration path is not soaked.
 #
 # The verdict is .github/soak/check.py over what Prometheus scraped during the
 # run. A hosted runner kills a job at 6 h, so the load is held for at most

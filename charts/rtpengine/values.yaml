@@ -14,8 +14,10 @@ valkey:
 
 # The media addresses of a replica pair, one per replica: replica `i` is the
 # primary for `addresses[i]` and the secondary for the other. Static, so a
-# failure moves no address -- only the route to it. `v4` and `v6` are each
-# optional, but a BGP peer of one family needs it on every entry.
+# failure moves no address -- only the route to it: every replica has both on
+# its lo, and its `bgp.interface` binds both, its own as the one it answers
+# offers with. `v4` and `v6` are each optional, but a BGP peer of one family
+# needs it on every entry, and only the families peered are bound.
 addresses: []
 # - v4: 198.51.100.10
 #   v6: 2001:db8:100::10
@@ -30,6 +32,10 @@ addresses: []
 # filters, BFD, max-prefix -- is not configured here.
 bgp:
   enabled: false
+  # The entry of media.interfaces whose address the pair's addresses replace;
+  # empty for the first. Its `network` still attaches the media network, which
+  # the BGP sessions and the media both run over.
+  interface: ""
   localAs: 65001
   peerAs: 65000
   # The router's addresses on the media network. The session runs over it, so
