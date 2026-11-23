@@ -52,8 +52,11 @@ As the setup loads and uses kernel module, best to test in VM
 For always up to date commands, check out [CI](.github/workflows/container.yml) configuration
 
 To swap the HSS (and the mongo / subscriber-seed / DRA machinery behind it) for the
-[pro2call](../pro2call) Cx emulator — no provisioning, any IMSI, so load lands on the
-CSCF chain instead — point `$CORE` at [stub.yml](stub.yml)
+[pro2call](../pro2call) Cx emulator and the PCRF for its Gx/Rx emulator — no
+provisioning, any IMSI, so load lands on the CSCF chain instead — point `$CORE` at
+[stub.yml](stub.yml). `PCRF_GX_PUSH=0` also keeps the per-call bearer work off the SMF.
+The UPF there is pro2call's eBPF `upfd` instead of open5gs: GTP-U never leaves the
+kernel's TC hooks, and it has no metrics endpoint, so Grafana's UPF panels stay empty.
 
     CORE=stub.yml docker compose up -d --remove-orphans
 

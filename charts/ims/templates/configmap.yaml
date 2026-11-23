@@ -6,6 +6,8 @@ metadata:
   name: {{ .Release.Name }}-cscf
   labels: {{- include "ims.labels" . | nindent 4 }}
 data:
+  # SessionsHashSize: cdp takes 128 buckets without it, too few for the
+  # sessions a few hundred calls/s keep (ended ones stay 60 s)
   proxy.xml: |
     <?xml version="1.0" encoding="UTF-8"?>
     <DiameterPeer
@@ -14,6 +16,7 @@ data:
         Vendor_Id="10415"
         Product_Name="PCSCF"
         Workers="{{ .Values.workers }}"
+        SessionsHashSize="16384"
     >
             <Peer FQDN="pcrf.{{ $epc }}" Realm="{{ $epc }}" port="3868"/>
             <Auth id="16777236" vendor="10415"/> <!-- Rx 3GPP -->
@@ -29,6 +32,7 @@ data:
         Vendor_Id="10415"
         Product_Name="ICSCF"
         Workers="{{ .Values.workers }}"
+        SessionsHashSize="16384"
     >
             <Peer FQDN="hss.{{ $epc }}" Realm="{{ $epc }}" port="3868"/>
             <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->
@@ -44,6 +48,7 @@ data:
         Vendor_Id="10415"
         Product_Name="SCSCF"
         Workers="{{ .Values.workers }}"
+        SessionsHashSize="16384"
     >
             <Peer FQDN="hss.{{ $epc }}" Realm="{{ $epc }}" port="3868"/>
             <Auth id="16777216" vendor="10415"/> <!-- Cx 3GPP -->

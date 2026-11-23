@@ -8,7 +8,14 @@ WORKDIR open5gs
 # a code the I-CSCF cannot map, and the UE gets 500 instead of 604.
 COPY patches/ /patches/
 RUN git apply --verbose /patches/*.patch
-RUN meson build --prefix=/opt
+# musl gives a thread 128 KiB of stack unless a loaded object's PT_GNU_STACK
+# asks for more. The daemons run their event loop in such a thread, and
+# ogs_pfcp_send_error_message() alone puts a 145 KB message on the stack: any
+# PFCP error answer from the UPF overflowed it (SIGSEGV), and a UPF restarted
+# into PFCP restoration answered an error and died again. 8 MiB is musl's cap.
+# The C libraries (libogscore, ...) carry it; musl honours it from any object
+# loaded at startup, so the daemons, linked as C++ for libtins, need not.
+RUN meson build --prefix=/opt -Dc_link_args=-Wl,-z,stack-size=8388608
 RUN ninja -C build install
 
 FROM alpine
