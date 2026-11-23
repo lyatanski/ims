@@ -1,15 +1,16 @@
 {{- $dot := . -}}
-{{- range tuple "proxy" "interrogating" "serving" "emergency" }}
+{{- $roles := dict "proxy" "pcscf" "interrogating" "icscf" "serving" "scscf" "emergency" "ecscf" "border" "ibcf" }}
+{{- range tuple "proxy" "interrogating" "serving" "emergency" "border" }}
 {{- $cscf := . -}}
+{{- $role := get $roles $cscf }}
 {{- with $dot }}
-{{- /*
-The E-CSCF (emergency) has no Diameter, so no identity to render, and no state
-store to wait for. Ready once its PSAP table is non-empty, which is what
-/check reports for this role.
-*/}}
 {{- $e := dig $cscf dict .Values.cscf }}
-{{- $diameter := ne "emergency" $cscf }}
+{{- $diameter := has $cscf (list "proxy" "interrogating" "serving") }}
 {{- if or $diameter $e.enabled }}
+{{- $border := dict }}
+{{- if eq "border" $cscf }}
+{{- $border = include "ims.border" . | fromJson }}
+{{- end }}
 {{- /*
 With Gm attached the P-CSCF is a single pod with every `gm.addresses` entry on
 its one attachment: the networks annotation lives in the pod template, so a
@@ -27,23 +28,28 @@ and IPv6 address, empty everywhere else.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ .Release.Name }}-{{ trunc 1 $cscf }}cscf
+  name: {{ .Release.Name }}-{{ $role }}
   labels: {{- include "ims.labels" . | nindent 4 }}
-    role: {{ trunc 1 $cscf }}cscf
+    role: {{ $role }}
 spec:
-  replicas: {{ if $gm }}1{{ else }}{{ .Values.replicaCount }}{{ end }}
-  serviceName: {{ .Release.Name }}-{{ trunc 1 $cscf }}cscf
+  replicas: {{ if or $gm $border }}1{{ else }}{{ .Values.replicaCount }}{{ end }}
+  serviceName: {{ .Release.Name }}-{{ $role }}
   podManagementPolicy: Parallel
   updateStrategy:
     type: RollingUpdate
   selector:
     matchLabels: {{- include "ims.selectorLabels" . | nindent 6 }}
-      role: {{ trunc 1 $cscf }}cscf
+      role: {{ $role }}
   template:
     metadata:
       {{- $ann := dict }}
       {{- if $diameter }}
       {{- $_ := set $ann "checksum/config" (include (print .Template.BasePath "/configmap.yaml") . | sha256sum) }}
+      {{- end }}
+      {{- with $border }}
+      {{- /* peers.list and ici.cfg are read at startup only */}}
+      {{- $_ := set $ann "checksum/peers" (toJson (list $e.peers .nets) | sha256sum) }}
+      {{- $_ := set $ann "k8s.v1.cni.cncf.io/networks" (toJson .attach) }}
       {{- end }}
       {{- if $gm }}
       {{- $_ := set $ann "k8s.v1.cni.cncf.io/networks" (list (dict "name" (printf "%s-gm" .Release.Name) "interface" .Values.gm.interface "ips" $gms) | toJson) }}
@@ -52,7 +58,7 @@ spec:
       annotations: {{- toYaml . | nindent 8 }}
       {{- end }}
       labels: {{- include "ims.labels" . | nindent 8 }}
-        role: {{ trunc 1 $cscf }}cscf
+        role: {{ $role }}
     spec:
       dnsPolicy: None
       dnsConfig:
@@ -76,74 +82,18 @@ spec:
         image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         args: ["-f", {{ printf  "/etc/cscf/%s.cfg" $cscf | quote }}]
-        env:
-        - name: REALM
-          value: {{ tpl .Values.domain . }}
-        {{- if eq "proxy" $cscf }}
-        {{- if $gm }}
-        - name: GMDEV
-          value: {{ .Values.gm.interface | quote }}
-        - name: IPSEC
-          value: {{ (split "/" $gm)._0 | quote }}
-        {{- with $gm6 }}
-        - name: IPSEC6
-          value: {{ (split "/" .)._0 | quote }}
-        {{- end }}
-        {{- else }}
-        - name: IPSEC
-          valueFrom:
-            fieldRef:
-              fieldPath: status.podIP
-        {{- end }}
-        {{- if .Values.cscf.emergency.enabled }}
-        - name: ECSCF
-          value: {{ printf "sip:ecscf.%s" (include "ims.realm.ims" .) | quote }}
-        {{- with include "ims.sosnum" . }}
-        {{- . | nindent 8 }}
+        {{- $env := include "ims.cscf.env" (dict "root" . "cscf" $cscf "gm" $gm "gm6" $gm6 "border" $border) | fromYamlArray }}
+        {{- $names := list }}
+        {{- range $env }}{{ $names = append $names .name }}{{ end }}
+        {{- range $k, $v := $e.env }}
+        {{- if has $k $names }}{{ fail (printf "cscf.%s.env.%s: set by the chart" $cscf $k) }}{{ end }}
+        {{- with tpl (ternary "" (toString $v) (kindIs "invalid" $v)) $ }}
+        {{- $env = append $env (dict "name" $k "value" .) }}
+        {{- $names = append $names $k }}
         {{- end }}
         {{- end }}
-        {{- end }}
-        {{- if eq "emergency" $cscf }}
-        - name: PSAP
-          value: {{ tpl (join " " (required "cscf.emergency.psap: at least one PSAP" $e.psap)) $ | quote }}
-        {{- with $e.trunk | default (include "ims.ibcf" .) }}
-        # Left out when unset: an empty value would still define TRUNK
-        - name: TRUNK
-          value: {{ tpl . $ | quote }}
-        {{- end }}
-        {{- with include "ims.sosnum" . }}
-        {{- . | nindent 8 }}
-        {{- end }}
-        {{- else }}
-        - name: DBURL
-          value: {{ template "valkey.name" .Subcharts.trgw.Subcharts.valkey }}:{{ .Values.trgw.valkey.ports.valkey }}/{{ index .Values.db $cscf }}
-        {{- end }}
-        {{- if eq "serving" $cscf }}
-        - name: REGSRV
-          value: {{ include "ims.regsrv" . | quote }}
-        {{- with .Values.enum }}
-        # The ENUM tree, left out entirely when unset -- an empty value would
-        # still count as defined in the cfg and take the module with it. Same
-        # for the trunk below, whose define is what enables the breakout.
-        - name: ENUM
-          value: {{ tpl . $ | quote }}
-        {{- end }}
-        {{- $ibcf := include "ims.ibcf" . }}
-        {{- with $ibcf }}
-        - name: IBCF
-          value: {{ . | quote }}
-        {{- end }}
-        {{- with .Values.trunk | default $ibcf }}
-        - name: TRUNK
-          value: {{ tpl . $ | quote }}
-        {{- end }}
-        {{- range $k, $v := .Values.dialplan }}
-        {{- with $v }}
-        - name: E164{{ upper $k }}
-          value: {{ tpl (toString .) $ | quote }}
-        {{- end }}
-        {{- end }}
-        {{- end }}
+        {{- if and (eq "emergency" $cscf) (not (has "PSAP" $names)) }}{{ fail "cscf.emergency.env.PSAP: at least one PSAP" }}{{ end }}
+        env: {{- toYaml $env | nindent 8 }}
         ports:
         - name: tcp
           containerPort: {{ .Values.service.port }}
@@ -154,7 +104,8 @@ spec:
         - name: mon
           containerPort: 9090
           protocol: TCP
-        # /check is `cdp_has_app(...)`, the PSAP table for the E-CSCF
+        # /check is `cdp_has_app(...)`, the PSAP table for the E-CSCF and
+        # `ds_list_exists("1")` for the IBCF
         readinessProbe:
           httpGet: {path: /check, port: mon}
           periodSeconds: 5
@@ -171,6 +122,14 @@ spec:
         - name: identity
           mountPath: /etc/cscf/diameter.xml
           subPath: diameter.xml
+        {{- else if $border }}
+        volumeMounts:
+        - name: peers
+          mountPath: /etc/cscf/peers.list
+          subPath: peers.list
+        - name: peers
+          mountPath: /etc/cscf/ici.cfg
+          subPath: ici.cfg
         {{- end }}
         {{- if eq "proxy" $cscf }}
         securityContext:
@@ -195,6 +154,11 @@ spec:
       {{- if eq "proxy" $cscf }}
       {{- include "ims.kmod" . | nindent 6 }}
       {{- end }}
+      {{- else if $border }}
+      volumes:
+      - name: peers
+        configMap:
+          name: {{ .Release.Name }}-ibcf
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}

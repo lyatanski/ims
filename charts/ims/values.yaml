@@ -10,18 +10,6 @@ realm:
   ims: ims.{{ tpl .Values.domain . }}
   epc: epc.{{ tpl .Values.domain . }}
 
-# ENUM (RFC 6116)
-enum: e164.{{ tpl .Values.domain . }}.
-
-dialplan:
-  cc: "{{ .Values.global.e164.home }}"
-  idd: "00"
-  ndd: "0"
-
-# The next hop for a number the ENUM tree does not claim.
-# Empty with cscf.border on: the IBCF, which routes it by its peers' `routes`.
-trunk: ""
-
 # Under `global` because Helm passes that -- and only that -- down to the
 # subcharts, and the CoreDNS zone below is rendered by the dns subchart with its
 # own context. Anything the zone templates need has to live here.
@@ -184,18 +172,37 @@ podAnnotations: {}
 service:
   port: 5060
 
+# Per role, `env` is extra environment for its cfg, NAME: value, each value
+# templated like `domain` (quote numbers: 00 is read as 0). One that renders
+# empty, or is set to null, is left out -- an empty define still counts as
+# defined in the cfg. What the chart derives itself (REALM, IPSEC, DBURL,
+# ECSCF and the like) cannot be set here.
 cscf:
   proxy:
+    env: {}
     resources:
       requests: {cpu: 500m, memory: 512Mi}
       limits: {cpu: 2, memory: 1Gi}
 
   interrogating:
+    env: {}
     resources:
       requests: {cpu: 200m, memory: 128Mi}
       limits: {cpu: 1, memory: 384Mi}
 
   serving:
+    env:
+      # The ENUM tree (RFC 6116)
+      ENUM: e164.{{ tpl .Values.domain . }}.
+      # The dial plan the served user's local numbers are normalised against:
+      # country code, international and national prefix
+      E164CC: "{{ .Values.global.e164.home }}"
+      E164IDD: "00"
+      E164NDD: "0"
+      # The next hop for a number the ENUM tree does not claim. By default the
+      # IBCF with cscf.border on, which routes it by its peers' `routes`, and
+      # none without it
+      TRUNK: '{{ include "ims.ibcf" . }}'
     resources:
       requests: {cpu: 400m, memory: 256Mi}
       # room for serving.cfg's 1024 MB shared memory pool
@@ -203,17 +210,19 @@ cscf:
 
   emergency:
     enabled: true
-    # The PSAP table, <service>[@<cell prefix>]=<uri> each: the service URN
-    # less "urn:service:" (sos, sos.fire), an optional prefix of the
-    # utran-cell-id-3gpp the UE is in (MCC MNC TAC cell, hex), and a sip: URI
-    # for a PSAP over IP or a tel: URI for one in the PSTN. Templated. Nothing
-    # answers at the default: point it at a PSAP.
-    psap:
-    - sos=sip:psap.{{ include "ims.realm.ims" . }}
-    # The next hop for a tel: PSAP. Empty with cscf.border on: the IBCF, which
-    # routes it by its peers' `routes`. Empty without it, those requests are
-    # refused.
-    trunk: ""
+    env:
+      # The PSAP table, required, space-separated
+      # <service>[@<cell prefix>]=<uri> entries: the service URN less
+      # "urn:service:" (sos, sos.fire), an optional prefix of the
+      # utran-cell-id-3gpp the UE is in (MCC MNC TAC cell, hex), and a sip: URI
+      # for a PSAP over IP or a tel: URI for one in the PSTN. Nothing answers
+      # at the default: point it at a PSAP.
+      PSAP: >-
+        sos=sip:psap.{{ include "ims.realm.ims" . }}
+      # The next hop for a tel: PSAP. By default the IBCF with cscf.border on,
+      # which routes it by its peers' `routes`; without one, those requests
+      # are refused.
+      TRUNK: '{{ include "ims.ibcf" . }}'
     # Emergency numbers, <number>=<service URN>, for the P-CSCF and the
     # E-CSCF. Empty keeps 112 and 911, both urn:service:sos.
     numbers: []
@@ -231,11 +240,12 @@ cscf:
 
   # IBCF (cscf/border.cfg): the entry and exit point on Ici, with rtpengine
   # as its TrGW, and the S-CSCF's next hop for other networks' domains and,
-  # unless `trunk` says otherwise, off-net numbers. Off by default, as there
-  # is nothing for it to do without an interconnect agreement. On, it needs
-  # a peer, the `ici` attachment, and the TrGW's `external` interface where
-  # the peers can reach it -- on Ici, through an attachment of its own (the
-  # `trgw.media.interfaces`, the rtpengine chart's values).
+  # unless cscf.serving.env.TRUNK says otherwise, off-net numbers. Off by
+  # default, as there is nothing for it to do without an interconnect
+  # agreement. On, it needs a peer, the `ici` attachment, and the TrGW's
+  # `external` interface where the peers can reach it -- on Ici, through an
+  # attachment of its own (the `trgw.media.interfaces`, the rtpengine chart's
+  # values).
   border:
     enabled: false
     # The peer networks, one dispatcher set each in this order; the IBCF is
@@ -259,6 +269,7 @@ cscf:
     # The topology hiding key, which every IBCF has to share. Empty: one is
     # generated at install and kept in a Secret across upgrades.
     thkey: ""
+    env: {}
     resources:
       requests: {cpu: 50m, memory: 64Mi}
       limits: {cpu: 1, memory: 256Mi}
