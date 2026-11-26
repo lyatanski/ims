@@ -20,10 +20,10 @@ after an ASR) was never sent, and ims_qos waits for the STA to tear down.
   DIAMETER_NO_COMMON_APPLICATION.
 
 diff --git a/src/modules/cdp/peerstatemachine.c b/src/modules/cdp/peerstatemachine.c
-index 37302d6f87..98c16ee810 100644
+index 32d26db6c8..e7c3885858 100644
 --- a/src/modules/cdp/peerstatemachine.c
 +++ b/src/modules/cdp/peerstatemachine.c
-@@ -1050,6 +1050,21 @@ void R_Reject(peer *p, int sock)
+@@ -1063,6 +1063,21 @@ void R_Reject(peer *p, int sock)
  	close(sock);
  }
  
@@ -45,7 +45,7 @@ index 37302d6f87..98c16ee810 100644
  /**
   * Process a Capabilities Exchange Request.
   * Checks whether there are common applications.
-@@ -1061,55 +1076,30 @@ void R_Reject(peer *p, int sock)
+@@ -1074,63 +1089,32 @@ void R_Reject(peer *p, int sock)
  int Process_CER(peer *p, AAAMessage *cer)
  {
  	int common_app = 0;
@@ -56,24 +56,32 @@ index 37302d6f87..98c16ee810 100644
  	for(avp = cer->avpList.head; avp; avp = avp->next) {
  		switch(avp->code) {
  			case AVP_Auth_Application_Id:
--				id = get_4bytes(avp->data.s);
--				for(i = 0; i < config->applications_cnt; i++)
--					if(id == config->applications[i].id
--							&& config->applications[i].vendor == 0
--							&& config->applications[i].type == DP_AUTHORIZATION)
--						common_app++;
-+				common_app += count_config_applications(
-+						get_4bytes(avp->data.s), DP_AUTHORIZATION);
+-				if(avp->data.len >= 4) {
+-					id = get_4bytes(avp->data.s);
+-					for(i = 0; i < config->applications_cnt; i++)
+-						if(id == config->applications[i].id
+-								&& config->applications[i].vendor == 0
+-								&& config->applications[i].type
+-										   == DP_AUTHORIZATION)
+-							common_app++;
+-				}
++				if(avp->data.len >= 4)
++					common_app += count_config_applications(
++							get_4bytes(avp->data.s), DP_AUTHORIZATION);
  				break;
  			case AVP_Acct_Application_Id:
--				id = get_4bytes(avp->data.s);
--				for(i = 0; i < config->applications_cnt; i++)
--					if(id == config->applications[i].id
--							&& config->applications[i].vendor == 0
--							&& config->applications[i].type == DP_ACCOUNTING)
--						common_app++;
-+				common_app += count_config_applications(
-+						get_4bytes(avp->data.s), DP_ACCOUNTING);
+-				if(avp->data.len >= 4) {
+-					id = get_4bytes(avp->data.s);
+-					for(i = 0; i < config->applications_cnt; i++)
+-						if(id == config->applications[i].id
+-								&& config->applications[i].vendor == 0
+-								&& config->applications[i].type
+-										   == DP_ACCOUNTING)
+-							common_app++;
+-				}
++				if(avp->data.len >= 4)
++					common_app += count_config_applications(
++							get_4bytes(avp->data.s), DP_ACCOUNTING);
  				break;
  			case AVP_Vendor_Specific_Application_Id:
  				group = AAAUngroupAVPS(avp->data);
@@ -81,7 +89,8 @@ index 37302d6f87..98c16ee810 100644
 -						group, group.head, AVP_Vendor_Id, 0, 0);
  				avp2 = AAAFindMatchingAVPList(
  						group, group.head, AVP_Auth_Application_Id, 0, 0);
--				if(avp_vendor && avp2) {
+-				if(avp_vendor && avp_vendor->data.len >= 4 && avp2
+-						&& avp2->data.len >= 4) {
 -					vendor = get_4bytes(avp_vendor->data.s);
 -					id = get_4bytes(avp2->data.s);
 -					for(i = 0; i < config->applications_cnt; i++)
@@ -91,12 +100,13 @@ index 37302d6f87..98c16ee810 100644
 -										   == DP_AUTHORIZATION)
 -							common_app++;
 -				}
-+				if(avp2)
++				if(avp2 && avp2->data.len >= 4)
 +					common_app += count_config_applications(
 +							get_4bytes(avp2->data.s), DP_AUTHORIZATION);
  				avp2 = AAAFindMatchingAVPList(
  						group, group.head, AVP_Acct_Application_Id, 0, 0);
--				if(avp_vendor && avp2) {
+-				if(avp_vendor && avp_vendor->data.len >= 4 && avp2
+-						&& avp2->data.len >= 4) {
 -					vendor = get_4bytes(avp_vendor->data.s);
 -					id = get_4bytes(avp2->data.s);
 -					for(i = 0; i < config->applications_cnt; i++)
@@ -106,14 +116,14 @@ index 37302d6f87..98c16ee810 100644
 -										   == DP_ACCOUNTING)
 -							common_app++;
 -				}
-+				if(avp2)
++				if(avp2 && avp2->data.len >= 4)
 +					common_app += count_config_applications(
 +							get_4bytes(avp2->data.s), DP_ACCOUNTING);
  				AAAFreeAVPList(&group);
  				break;
  		}
 diff --git a/src/modules/cdp/routing.c b/src/modules/cdp/routing.c
-index 09d8217db2..24ffd98dff 100644
+index d1dab13f3d..03bc6431e6 100644
 --- a/src/modules/cdp/routing.c
 +++ b/src/modules/cdp/routing.c
 @@ -50,22 +50,21 @@ int gcount = 0;
@@ -253,13 +263,13 @@ index 09d8217db2..24ffd98dff 100644
  		group = AAAUngroupAVPS(avp->data);
 -		avp_vendor =
 -				AAAFindMatchingAVPList(group, group.head, AVP_Vendor_Id, 0, 0);
--		if(avp_vendor) {
+-		if(avp_vendor && avp_vendor->data.len >= 4) {
 -			vendor_id = get_4bytes(avp_vendor->data.s);
 -		}
  		// 2.1. Authorization Application-Id
  		avp2 = AAAFindMatchingAVPList(
  				group, group.head, AVP_Auth_Application_Id, 0, 0);
- 		if(avp2) {
+ 		if(avp2 && avp2->data.len >= 4) {
  			app_id = get_4bytes(avp2->data.s);
  			p = get_routing_peer_by_app_id(
 -					cdp_session, destination_realm, app_id, vendor_id);
@@ -268,7 +278,7 @@ index 09d8217db2..24ffd98dff 100644
  				AAAFreeAVPList(&group);
  				return p;
 @@ -312,7 +303,7 @@ peer *get_routing_peer(cdp_session_t *cdp_session, AAAMessage *m)
- 		if(avp2) {
+ 		if(avp2 && avp2->data.len >= 4) {
  			app_id = get_4bytes(avp2->data.s);
  			p = get_routing_peer_by_app_id(
 -					cdp_session, destination_realm, app_id, vendor_id);
@@ -282,14 +292,14 @@ index 09d8217db2..24ffd98dff 100644
  
 -	// 3. Try with Vendor-Id (opt) and Auth/Acct Application-Id at top level
 -	avp_vendor = AAAFindMatchingAVP(m, 0, AVP_Vendor_Id, 0, AAA_FORWARD_SEARCH);
--	if(avp_vendor) {
+-	if(avp_vendor && avp_vendor->data.len >= 4) {
 -		vendor_id = get_4bytes(avp_vendor->data.s);
 -	}
 +	// 3. Try with Auth/Acct Application-Id at top level
  	// 3.1. Authorization Application-Id
  	avp = AAAFindMatchingAVP(
  			m, 0, AVP_Auth_Application_Id, 0, AAA_FORWARD_SEARCH);
- 	if(avp) {
+ 	if(avp && avp->data.len >= 4) {
  		app_id = get_4bytes(avp->data.s);
 -		p = get_routing_peer_by_app_id(
 -				cdp_session, destination_realm, app_id, vendor_id);
@@ -299,7 +309,7 @@ index 09d8217db2..24ffd98dff 100644
  	}
 @@ -341,8 +327,7 @@ peer *get_routing_peer(cdp_session_t *cdp_session, AAAMessage *m)
  			m, 0, AVP_Acct_Application_Id, 0, AAA_FORWARD_SEARCH);
- 	if(avp) {
+ 	if(avp && avp->data.len >= 4) {
  		app_id = get_4bytes(avp->data.s);
 -		p = get_routing_peer_by_app_id(
 -				cdp_session, destination_realm, app_id, vendor_id);
