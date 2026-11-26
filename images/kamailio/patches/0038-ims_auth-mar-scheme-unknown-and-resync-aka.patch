@@ -1,0 +1,39 @@
+Fix the authentication scheme sent in the MAR by ims_auth.
+
+TS 29.229 6.3.9 defines the SIP-Auth-Data-Item scheme value "Unknown"
+with a capital U; ims_auth sent "unknown". The local comparison is case
+insensitive, so only the MAR changes. A strict HSS may still reject
+Unknown for an IMS-AKA subscriber (TS 29.228 6.3.1 step 4).
+
+The synchronisation MAR always used registration_default_algorithm.
+TS 29.228 Table 6.3.2 allows only the IMS-AKA schemes there, so a
+default of MD5 or Unknown could never resync. Use the scheme of the
+challenge being resynchronised (Digest-AKAv1-MD5 or Digest-AKAv2-MD5),
+falling back to Digest-AKAv1-MD5.
+
+diff --git a/src/modules/ims_auth/authorize.c b/src/modules/ims_auth/authorize.c
+index 6fa9937cb6..17c8c82845 100644
+--- a/src/modules/ims_auth/authorize.c
++++ b/src/modules/ims_auth/authorize.c
+@@ -132,7 +132,7 @@ str algorithm_types[] = {{"unknown", 7}, {"AKAv1-MD5", 9}, {"AKAv2-MD5", 9},
+ 		{"3GPP-Digest", 11}, {"TISPAN-HTTP_DIGEST_MD5", 22},
+ 		{"NASS-Bundled", 12}, {0, 0}};
+ 
+-str auth_scheme_types[] = {{"unknown", 7}, {"Digest-AKAv1-MD5", 16},
++str auth_scheme_types[] = {{"Unknown", 7}, {"Digest-AKAv1-MD5", 16},
+ 		{"Digest-AKAv2-MD5", 16}, {"Early-IMS-Security", 18},
+ 		{"Digest-MD5", 10}, {"Digest", 6}, {"SIP Digest", 10},
+ 		{"HTTP_DIGEST_MD5", 15}, {"NASS-Bundled", 12}, {0, 0}};
+@@ -693,6 +693,12 @@ int ims_resync_auth(struct sip_msg *msg, str *proute_name, str *prealm)
+ 			auts.len = 0;
+ 			auts.s = 0;
+ 		} else {
++			/* a resync MAR may only use an IMS-AKA scheme (TS 29.228,
++			 * Table 6.3.2): keep the scheme of the original challenge */
++			if(av->type == AUTH_AKAV1_MD5 || av->type == AUTH_AKAV2_MD5)
++				algo_type = av->type;
++			else
++				algo_type = AUTH_AKAV1_MD5;
+ 			if(av->is_locally_generated && ims_auth_av_mode == 1) {
+ 				// Locally generated AV --> do local resync
+ 				// auts is 14 bytes, or 112 bits --> in base64 it will be >18.(6) bytes, so 20 bytes

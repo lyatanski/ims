@@ -12,6 +12,62 @@ valkey:
   # subscribes, is never told anything, and has no copy to take over from.
   notifyKeyspaceEvents: K$g
 
+# The media addresses of a replica pair, one per replica: replica `i` is the
+# primary for `addresses[i]` and the secondary for the other. Static, so a
+# failure moves no address -- only the route to it: every replica has both on
+# its lo, and its `bgp.interface` binds both, its own as the one it answers
+# offers with. `v4` and `v6` are each optional, but a BGP peer of one family
+# needs it on every entry, and only the families peered are bound.
+addresses: []
+# - v4: 198.51.100.10
+#   v6: 2001:db8:100::10
+# - v4: 198.51.100.11
+#   v6: 2001:db8:100::11
+
+# The BGP speaker beside rtpengine. Every replica announces both addresses
+# over BGP as /32 (/128) routes, the primary route for its own and the
+# secondary route for the other's, and withdraws them when rtpengine stops
+# answering /ping. The router must prefer the shorter AS path and not balance
+# over both; its side -- a listen range for the media subnet, /32-only prefix
+# filters, BFD, max-prefix -- is not configured here.
+bgp:
+  enabled: false
+  # The entry of media.interfaces whose address the pair's addresses replace;
+  # empty for the first. Its `network` still attaches the media network, which
+  # the BGP sessions and the media both run over.
+  interface: ""
+  localAs: 65001
+  peerAs: 65000
+  # The router's addresses on the media network. The session runs over it, so
+  # its address is the source and the next hop of every route announced.
+  peers: []
+  # How many times the secondary route repeats the local AS
+  prepend: 2
+  # Sub-second withdrawal when a pod or its node dies. BFD runs in userspace:
+  # the sidecar needs its CPU request and no tight limit, or it misses
+  # intervals and flaps.
+  bfd:
+    enabled: true
+    interval: 100   # ms
+    multiplier: 3
+  # A rtpengine that hangs beside a healthy bird keeps announcing, so
+  # the announcement follows /ping instead: withdrawn after `misses` failed
+  # probes in a row, announced again after `holdDown` seconds of answers.
+  probe:
+    interval: 1     # s
+    misses: 3
+    holdDown: 10
+  # How long a terminating pod keeps relaying after its routes are withdrawn,
+  # for the router to move to the other replica. Under terminationGracePeriod.
+  drain: 5
+  image:
+    repository: ghcr.io/lyatanski/bird
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests: {cpu: 100m, memory: 32Mi}
+    limits: {memory: 64Mi}
+
 # rtpengine log level: 7 is debug, 6 info
 logLevel: 6
 

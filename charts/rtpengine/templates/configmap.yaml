@@ -60,11 +60,51 @@ data:
     them (`interfaces-config`, `templates`), and the first interface rtpengine
     reads is its default.
     */}}
+    {{- $bgpif := "" }}
+    {{- $fams := list }}
+    {{- if $.Values.bgp.enabled }}
+    {{- $bgpif = include "rtpengine.bgp.interface" $ }}
+    {{- $fams = include "rtpengine.bgp.families" $ | fromJsonArray }}
+    {{- end }}
     {{- range $i := until $n }}
     {{- range $if := $.Values.media.interfaces }}
+    {{- if eq $if.name $bgpif }}
+    {{- /*
+    The BGP interface binds the pair's addresses instead of its own: one
+    logical interface per address, `<name>-<k>`, the same on both replicas,
+    and `<name>` an alias of this replica's own. A call is stored under the
+    logical interface and the position of its address in it, and the replica
+    that restores it looks both up in its own config -- so the other's address
+    has to sit under the same name and at the same position here too. Own
+    first, so a default interface is this replica's own address.
+    */}}
+    {{- $order := list $i }}
+    {{- range $k := until $n }}{{- if ne $k $i }}{{- $order = append $order $k }}{{- end }}{{- end }}
+    {{- range $k := $order }}
+    {{- range $fam := $fams }}
+    {{- $f := int $fam }}
+    [interface-{{ $i }}-{{ $if.name }}-{{ $k }}-v{{ $f }}]
+    name = {{ $if.name }}-{{ $k }}
+    address = {{ index (index $.Values.addresses $k) (printf "v%d" $f) }}
+    {{- with $if.advertised }}
+    advertised = {{ . }}
+    {{- end }}
+    {{- with $if.portMin }}
+    port-min = {{ . }}
+    {{- end }}
+    {{- with $if.portMax }}
+    port-max = {{ . }}
+    {{- end }}
+    {{ end }}
+    {{- end }}
+    [interface-{{ $i }}-{{ $if.name }}]
+    alias = {{ $if.name }}-{{ $i }}
+    {{ continue }}
+    {{- end }}
     [interface-{{ $i }}-{{ $if.name }}]
     {{- with $if.alias }}
-    alias = {{ . }}
+    {{- /* straight to the address, not through the BGP interface's alias */}}
+    alias = {{ . }}{{ if eq . $bgpif }}-{{ $i }}{{ end }}
     {{- end }}
     {{- with $if.address }}
     address = {{ . }}

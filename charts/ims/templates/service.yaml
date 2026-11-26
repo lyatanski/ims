@@ -1,12 +1,13 @@
 {{- $dot := . -}}
-{{- range tuple "p" "i" "s" }}
-{{- $cscf := . -}}
+{{- $on := dict "pcscf" true "icscf" true "scscf" true "ecscf" .Values.cscf.emergency.enabled "ibcf" .Values.cscf.border.enabled }}
+{{- range $cscf, $enabled := $on }}
 {{- with $dot }}
+{{- if $enabled }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Release.Name }}-{{ $cscf }}cscf
+  name: {{ .Release.Name }}-{{ $cscf }}
   labels: {{- include "ims.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
@@ -22,6 +23,7 @@ spec:
     name: udp
   publishNotReadyAddresses: true
   selector: {{- include "ims.selectorLabels" . | nindent 4 }}
-    role: {{ $cscf }}cscf
+    role: {{ $cscf }}
+{{- end }}
 {{- end }}
 {{- end }}

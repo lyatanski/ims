@@ -159,7 +159,9 @@ configs:
                 downlink : { value: NumberInt(1000000000), unit: NumberInt(0)},
                 uplink : { value: NumberInt(1000000000), unit: NumberInt(0)}
             },
-            ifc: [
+            // AS=off provisions no iFC: calls skip the TAS, which every
+            // INVITE otherwise passes twice (originating and terminating)
+            ifc: '${AS:-on}' === 'off' ? [] : [
             {
                 priority: NumberInt(0),
                 application_server: {

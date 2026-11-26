@@ -280,7 +280,8 @@ entry and exit point on Ici, with rtpengine as its TrGW:
 - **Mx** is the pod network: the Service `<release>-ibcf` is what
   `ibcf.ims.<realm>` resolves to (the CoreDNS SRV template has to list
   `ibcf`, or the name falls through to the I-CSCF). With the IBCF on, the
-  S-CSCF gets `IBCF`, and `TRUNK` too unless `trunk` names another.
+  S-CSCF gets `IBCF`, and `TRUNK` too unless `cscf.serving.env.TRUNK`
+  names another.
 - **Peers** are `cscf.border.peers`, rendered as dispatcher's `peers.list`
   (one set each, `entry` order as priority) and `ROUTES`. Ready means the
   first set loaded. The topology hiding key is a Secret, generated once and

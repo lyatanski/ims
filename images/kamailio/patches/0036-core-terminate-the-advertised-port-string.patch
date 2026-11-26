@@ -1,0 +1,23 @@
+NUL-terminate the advertised port string of a socket.
+
+new_sock_info() copies the advertised port into a buffer of len + 1 with
+strncpy(.., len), which writes no terminator, and never sets the last
+byte - unlike the advertised address just above it. main_loop() prints
+useinfo.port_no_str.s with %s into each receiver's process description,
+so the description of every socket with an advertise port ends in
+whatever followed in the heap. Seen under valgrind memcheck on all six
+nodes at startup ("Conditional jump or move depends on uninitialised
+value(s)" in printf_core, origin the malloc in new_sock_info).
+
+diff --git a/src/core/socket_info.c b/src/core/socket_info.c
+index 6eacc447f5..645cdc0869 100644
+--- a/src/core/socket_info.c
++++ b/src/core/socket_info.c
+@@ -367,6 +367,7 @@ static inline struct socket_info *new_sock_info(char *name,
+ 		if(si->useinfo.port_no_str.s == NULL)
+ 			goto error;
+ 		strncpy(si->useinfo.port_no_str.s, p, si->useinfo.port_no_str.len);
++		si->useinfo.port_no_str.s[si->useinfo.port_no_str.len] = '\0';
+ 		si->useinfo.port_no = useport;
+ 
+ 		he = resolvehost(si->useinfo.name.s);

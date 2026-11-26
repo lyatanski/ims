@@ -1,0 +1,199 @@
+Keep one Call-ID and an increasing CSeq for the third-party REGISTERs.
+
+Every third-party REGISTER of ims_isc got a new Call-ID and CSeq 10 from
+tm, so an AS saw each re-registration and de-registration of an IMPU as
+an unrelated registration. RFC 3261 10.2 says a UA SHOULD use the same
+Call-ID for all its registrations to a registrar, with CSeq increasing
+by one.
+
+Keep a Call-ID and a CSeq counter per public identity and AS, in shared
+memory, and give them to t_request(). The slot of the entry stays
+locked until the request is sent, so the CSeqs of a Call-ID leave in
+order. A de-registration ends the sequence, so the next registration
+starts a new Call-ID; the state is also lost on a restart, which does
+the same.
+
+diff --git a/src/modules/ims_isc/ims_isc_mod.c b/src/modules/ims_isc/ims_isc_mod.c
+index 260a63f8cf..02194d0b01 100644
+--- a/src/modules/ims_isc/ims_isc_mod.c
++++ b/src/modules/ims_isc/ims_isc_mod.c
+@@ -197,6 +197,9 @@ static int mod_init(void)
+ 	memcpy(isc_my_uri_sip.s + 4, isc_my_uri.s, isc_my_uri.len);
+ 	isc_my_uri_sip.s[isc_my_uri_sip.len] = 0;
+ 
++	if(isc_third_party_reg_init() < 0)
++		goto error;
++
+ 	LM_DBG("ISC module successfully initialised\n");
+ 
+ 	return 0;
+diff --git a/src/modules/ims_isc/third_party_reg.c b/src/modules/ims_isc/third_party_reg.c
+index 2bb8d9daff..4ed4516d7b 100644
+--- a/src/modules/ims_isc/third_party_reg.c
++++ b/src/modules/ims_isc/third_party_reg.c
+@@ -47,6 +47,8 @@
+ 
+ #include "third_party_reg.h"
+ #include "../../core/msg_translator.h"
++#include "../../core/hashes.h"
++#include "../../core/rand/kam_rand.h"
+ 
+ extern usrloc_api_t
+ 		isc_ulb; /*!< Structure containing pointers to usrloc functions*/
+@@ -442,6 +444,105 @@ static str ct_register_resp = {"message/sip", 11};
+ static str body_s = {"<ims-3gpp version=\"1\"><service-info>", 36};
+ static str body_e = {"</service-info></ims-3gpp>", 26};
+ 
++
++/**
++ * Call-ID and CSeq of the third-party REGISTERs, one dialog-less sequence
++ * per public identity and AS (RFC 3261 10.2: the same Call-ID with an
++ * increasing CSeq for the registrations of a UA to a registrar).
++ */
++#define ISC_REG_CID_SLOTS 1024
++
++typedef struct isc_reg_cid
++{
++	struct isc_reg_cid *next;
++	str to;
++	str req_uri;
++	str callid;
++	unsigned int cseq;
++} isc_reg_cid_t;
++
++static isc_reg_cid_t **isc_reg_cids = 0;
++static gen_lock_set_t *isc_reg_cid_locks = 0;
++
++int isc_third_party_reg_init(void)
++{
++	isc_reg_cids = shm_malloc(ISC_REG_CID_SLOTS * sizeof(isc_reg_cid_t *));
++	if(!isc_reg_cids) {
++		SHM_MEM_ERROR;
++		return -1;
++	}
++	memset(isc_reg_cids, 0, ISC_REG_CID_SLOTS * sizeof(isc_reg_cid_t *));
++	isc_reg_cid_locks = lock_set_alloc(ISC_REG_CID_SLOTS);
++	if(!isc_reg_cid_locks || !lock_set_init(isc_reg_cid_locks)) {
++		LM_ERR("failed to create the third-party REGISTER locks\n");
++		return -1;
++	}
++	return 0;
++}
++
++static unsigned int isc_reg_cid_slot(str *to, str *req_uri)
++{
++	unsigned int h = get_hash1_raw(to->s, to->len);
++
++	h ^= get_hash1_raw(req_uri->s, req_uri->len);
++	return h & (ISC_REG_CID_SLOTS - 1);
++}
++
++/* with the slot locked; the entry is created when missing */
++static isc_reg_cid_t *isc_reg_cid_get(unsigned int slot, str *to, str *req_uri)
++{
++	static unsigned int counter = 0;
++	isc_reg_cid_t *e;
++	char *p;
++	int len;
++
++	for(e = isc_reg_cids[slot]; e; e = e->next)
++		if(e->to.len == to->len && e->req_uri.len == req_uri->len
++				&& memcmp(e->to.s, to->s, to->len) == 0
++				&& memcmp(e->req_uri.s, req_uri->s, req_uri->len) == 0)
++			return e;
++
++	/* sized for the strings and a Call-ID of "%x-%x-%x@<host>" */
++	len = sizeof(isc_reg_cid_t) + to->len + req_uri->len + 3 * 8 + 3
++		  + isc_my_uri.len + 1;
++	e = shm_malloc(len);
++	if(!e) {
++		SHM_MEM_ERROR;
++		return 0;
++	}
++	memset(e, 0, sizeof(isc_reg_cid_t));
++	p = (char *)(e + 1);
++	e->to.s = p;
++	e->to.len = to->len;
++	memcpy(p, to->s, to->len);
++	p += to->len;
++	e->req_uri.s = p;
++	e->req_uri.len = req_uri->len;
++	memcpy(p, req_uri->s, req_uri->len);
++	p += req_uri->len;
++	e->callid.s = p;
++	e->callid.len = snprintf(p, 3 * 8 + 3 + isc_my_uri.len + 1, "%x-%x-%x@%.*s",
++			(unsigned int)kam_rand(), (unsigned int)time(0),
++			__sync_fetch_and_add(&counter, 1), isc_my_uri.len, isc_my_uri.s);
++	e->cseq = 0;
++	e->next = isc_reg_cids[slot];
++	isc_reg_cids[slot] = e;
++	return e;
++}
++
++/* with the slot locked */
++static void isc_reg_cid_free(unsigned int slot, isc_reg_cid_t *e)
++{
++	isc_reg_cid_t **pp;
++
++	for(pp = &isc_reg_cids[slot]; *pp; pp = &(*pp)->next)
++		if(*pp == e) {
++			*pp = e->next;
++			shm_free(e);
++			return;
++		}
++}
++
+ /**
+  * Send a third party registration
+  * @param r - the register to send for
+@@ -454,6 +555,8 @@ int r_send_third_party_reg(r_third_party_registration *r, int expires)
+ 	str h = {0, 0};
+ 	str b = {0, 0};
+ 	uac_req_t req;
++	unsigned int slot;
++	isc_reg_cid_t *cid;
+ 
+ 	LM_DBG("REGISTER to <%.*s>\n", r->req_uri.len, r->req_uri.s);
+ 
+@@ -607,10 +710,28 @@ int r_send_third_party_reg(r_third_party_registration *r, int expires)
+ 	set_uac_req(&req, &method, &h, &b, 0,
+ 			TMCB_RESPONSE_IN | TMCB_ON_FAILURE | TMCB_LOCAL_COMPLETED,
+ 			r_third_party_reg_response, &(r->req_uri));
++
++	/* The slot stays locked until the request is sent, so the CSeqs of
++	 * one Call-ID go out in order. */
++	slot = isc_reg_cid_slot(&r->to, &r->req_uri);
++	lock_set_get(isc_reg_cid_locks, slot);
++	cid = isc_reg_cid_get(slot, &r->to, &r->req_uri);
++	if(cid) {
++		req.callid = &cid->callid;
++		req.cseqno = ++cid->cseq;
++	}
++	/* without an entry tm picks a new Call-ID */
+ 	if(isc_tmb.t_request(&req, &(r->req_uri), &(r->to), &(r->from), 0) < 0) {
+ 		LM_ERR("Error sending in transaction\n");
++		if(cid && cid->cseq == 1)
++			isc_reg_cid_free(slot, cid);
++		lock_set_release(isc_reg_cid_locks, slot);
+ 		goto error;
+ 	}
++	/* a de-registration ends the sequence */
++	if(cid && expires <= 0)
++		isc_reg_cid_free(slot, cid);
++	lock_set_release(isc_reg_cid_locks, slot);
+ 	if(h.s)
+ 		pkg_free(h.s);
+ 	if(b.s)
+diff --git a/src/modules/ims_isc/third_party_reg.h b/src/modules/ims_isc/third_party_reg.h
+index d85365e57f..4c51a51f3d 100644
+--- a/src/modules/ims_isc/third_party_reg.h
++++ b/src/modules/ims_isc/third_party_reg.h
+@@ -96,6 +96,8 @@ typedef struct _r_third_party_reg
+ 	str path;	 /* Path header  */
+ } r_third_party_registration;
+ 
++int isc_third_party_reg_init(void);
++
+ int isc_third_party_reg(
+ 		struct sip_msg *msg, isc_match *m, isc_mark *mark, udomain_t *d);
+ 

@@ -1,7 +1,8 @@
 # Monitoring — IMS KPIs (3GPP TS 32.454)
 
 The `IMS KPI (3GPP TS 32.454)` Grafana dashboard (`ims.jsonnet` in `monitor.yml`)
-presents the IMS Key Performance Indicators defined by **3GPP TS 32.454**. It
+presents IMS Key Performance Indicators **aligned with 3GPP TS 32.454**; what it
+covers, and where it deviates, is listed under [Conformance](#conformance-to-ts-32454). It
 reuses native Kamailio `xhttp_prom` statistics wherever possible and adds a small
 set of custom S-CSCF counters for the session KPIs that cannot be derived from
 the built-in statistics.
@@ -20,17 +21,21 @@ export transaction counters through the statistics framework (only via the
 Prometheus metrics. The `sl` reply counters exist but, on a stateful proxy, they
 only see locally generated stateless replies — not the relayed INVITE responses.
 
-We therefore add four custom metrics, declared in `monitor.cfg` and incremented
+We therefore add custom metrics, declared in `monitor.cfg` and incremented
 in `serving.cfg`. They are side-effect-free counter/histogram updates guarded so
 that a missing dialog variable can never disturb call processing (a KPI sample is
 just skipped or labelled `dir="na"`):
 
 | Metric | Type | Labels | Incremented on |
 |--------|------|--------|----------------|
-| `kamailio_ims_session_setup_attempts_total` | counter | `dir` | initial INVITE (orig in `MORIG`, term in `MTERM`) |
-| `kamailio_ims_session_setup_success_total`  | counter | `dir` | first `2xx` final response to the INVITE |
-| `kamailio_ims_session_setup_failure_total`  | counter | `dir`,`code` | `>=300` final response to the INVITE |
-| `kamailio_ims_session_setup_duration`       | histogram (ms) | `dir` | INVITE→`2xx` elapsed time |
+| `kamailio_ims_session_setup_attempts_total` | counter | `dir` | initial INVITE (orig in `MORIG`, term in `MTERM`); a call whose both legs this S-CSCF serves is counted on both sides, once as `orig` and once as `term` |
+| `kamailio_ims_session_setup_success_total`  | counter | `dir` | first `180` or `2xx` to the INVITE, once per session (TS 32.409 4.1.2.2) |
+| `kamailio_ims_session_setup_failure_total`  | counter | `dir`,`code` | `>=300` final response with no `180` before it, including the 402 / 500 the S-CSCF answers itself when charging refuses the call |
+| `kamailio_ims_session_setup_duration`       | histogram (ms) | `dir` | INVITE→first `180` or `2xx` elapsed time |
+| `kamailio_ims_session_established_total` | counter | | the first `180` or `2xx` of a dialog, once: the success counters are per leg and a call between two users of this S-CSCF has two |
+| `kamailio_ims_registration_initial_attempts_total` | counter | | a challenge or a failed authentication for an identity that is not registered, `route[REGISTER]` |
+| `kamailio_ims_registration_initial_{success,failure}_total` | counter | | initial registration: SAA assigned / MAR or SAR failed or the credentials failed, `route[SAA]`, `route[MAA]`, `route[REGISTER]` |
+| `kamailio_ims_registration_re_{attempts,success,failure}_total` | counter | | the same for a REGISTER with Expires > 0 for an identity that is registered already |
 
 `dir` is `orig`/`term`; setup direction and start time are carried between the
 request and reply routes in dialog variables (`$dlg_var(kpi*)`).
@@ -39,50 +44,69 @@ request and reply routes in dialog variables (`$dlg_var(kpi*)`).
 
 ### Accessibility — Registration (Initial Registration Success Rate)
 
-Reused: `ims_registrar_scscf` counters on the S-CSCF.
+Custom counters on the S-CSCF, in `route[REGISTER]`, `route[MAA]` and `route[SAA]`
+(`serving.cfg`) for a REGISTER of an identity that is not registered yet.
 
 ```promql
-# Registration Success Rate (%)
-100 * sum(increase(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}[$__range]))
-    / ( sum(increase(kamailio_ims_registrar_scscf_accepted_regs{job="scscf"}[$__range]))
-      + sum(increase(kamailio_ims_registrar_scscf_rejected_regs{job="scscf"}[$__range])) )
+# Initial Registration Success Rate (%)
+100 * sum(increase(kamailio_ims_registration_initial_success_total{job="scscf"}[$__range]))
+    / sum(increase(kamailio_ims_registration_initial_attempts_total{job="scscf"}[$__range]))
 ```
 
-Approximation: `accepted_regs`/`rejected_regs` count all accepted/rejected
-registrations (initial, re-registration and de-registration), so this is a close
-proxy of the TS 32.454 *Initial* Registration Success Rate rather than an exact
-initial-only figure. The 401 auth-challenge leg is not counted as a rejection.
+A procedure starts when the S-CSCF challenges an identity that is not registered
+(or answers a failed authentication), so an attempt the UE abandons after the
+401 stays in the denominator, as TS 32.409 4.1.1.1.1 counts it. The answer to
+the challenge belongs to the same procedure and is not a second attempt. A
+failure is a Cx answer that does not assign the S-CSCF (SAA), a failed MAR, or
+credentials that do not authenticate; the challenge that follows a failed
+answer starts the next attempt. A re-registration and a de-registration are not
+counted: the `ims_registrar_scscf` counters (`accepted_regs`, `rejected_regs`)
+count them, so those read 2 for a UE that registers and leaves.
 
-### Accessibility — Session Establishment (SESR)
+Re-registration Success Rate (5.1.5) is the same ratio over
+`kamailio_ims_registration_re_{attempts,success}_total`. A REGISTER with
+`Expires: 0` is a de-registration and is in neither.
 
-Custom counters on the S-CSCF.
+### Accessibility — Session Establishment (SESR, SENSR)
+
+Custom counters on the S-CSCF. TS 32.454 computes both ratios for the
+originating and the terminating side **separately**, because a session summed
+over both sides counts twice (Annex A.3). The dashboard has one panel per
+`dir`; the `na` bucket (no dialog variable) stays out of both.
 
 ```promql
-# Session Establishment Success Rate (%)
-100 * sum(increase(kamailio_ims_session_setup_success_total{job="scscf"}[$__range]))
-    / sum(increase(kamailio_ims_session_setup_attempts_total{job="scscf"}[$__range]))
+# SESR (%), per side: first 180 or 2xx over attempts
+100 * sum(increase(kamailio_ims_session_setup_success_total{job="scscf", dir="orig"}[$__range]))
+    / sum(increase(kamailio_ims_session_setup_attempts_total{job="scscf", dir="orig"}[$__range]))
 
-# Session Establishment Network Success Rate (%) — excludes UE/user-caused failures
-100 * sum(increase(kamailio_ims_session_setup_success_total{job="scscf"}[$__range]))
-    / ( sum(increase(kamailio_ims_session_setup_attempts_total{job="scscf"}[$__range]))
-      - sum(increase(kamailio_ims_session_setup_failure_total{job="scscf", code=~"404|480|484|486|487|600|603"}[$__range])) )
+# SENSR (%), per side: the failures of the user are added to the numerator
+100 * ( sum(increase(kamailio_ims_session_setup_success_total{job="scscf", dir="orig"}[$__range]))
+      + sum(increase(kamailio_ims_session_setup_failure_total{job="scscf", dir="orig", code=~"404|484|486|487|600"}[$__range])) )
+    / sum(increase(kamailio_ims_session_setup_attempts_total{job="scscf", dir="orig"}[$__range]))
 ```
 
-The network success rate follows TS 32.454 by removing user-caused outcomes from
-the denominator: `404` (user not found), `484` (address incomplete),
-`480/486/600/603` (unavailable/busy/decline), `487` (released before answer).
+A session counts as established at its first `180` or `2xx` (TS 32.409 4.1.2.2:
+the two are disjoint, so each session counts once), so a call that rings and is
+then cancelled is a success; a `CANCEL` before the first `180` ends in `487` and
+is a failure. SENSR (5.1.9) adds to the numerator the failures the spec blames
+on the user: `486`, `600`, `404`, `484` and the release before ringing (`487`).
+`480` and `603` are network failures here, as in the spec.
 
 ### Accessibility — Session Setup Time (latency)
 
-Custom histogram (milliseconds).
+Custom histogram (milliseconds), INVITE to the first `180` or `2xx` (TS 32.409
+4.1.2.6), so it is the time to ring, not to answer. It is not split per media
+name.
+Both legs record a sample, and the originating one contains the terminating one
+(it is the caller's wait), so the panels read `dir="orig"` only.
 
 ```promql
 # mean setup time (ms)
-sum(increase(kamailio_ims_session_setup_duration_sum{job="scscf"}[$__range]))
-/ sum(increase(kamailio_ims_session_setup_duration_count{job="scscf"}[$__range]))
+sum(increase(kamailio_ims_session_setup_duration_sum{job="scscf", dir="orig"}[$__range]))
+/ sum(increase(kamailio_ims_session_setup_duration_count{job="scscf", dir="orig"}[$__range]))
 
 # p95 / p99 setup time (ms)
-histogram_quantile(0.95, sum by (le) (rate(kamailio_ims_session_setup_duration_bucket{job="scscf"}[$__rate_interval])))
+histogram_quantile(0.95, sum by (le) (rate(kamailio_ims_session_setup_duration_bucket{job="scscf", dir="orig"}[$__rate_interval])))
 ```
 
 The dashboard also shows the **Diameter control-plane latency** that contributes
@@ -94,34 +118,39 @@ to setup/registration time, reused from native stats:
 
 ### Retainability — IMS Session Drop Rate
 
-Reused: `ims_dialog` (`dialog_ng`) lifecycle counters on the S-CSCF.
+`dialog_ng` lifecycle counters and the `ims_charging` kill counter on the S-CSCF.
 
 ```promql
-# Session Drop Rate (%) — abnormally killed dialogs / processed dialogs
-100 * sum(increase(kamailio_dialog_ng_expired{job="scscf"}[$__range]))
-    / sum(increase(kamailio_dialog_ng_processed{job="scscf"}[$__range]))
+# Session Drop Rate (%) — sessions the network ended / sessions established
+100 * ( sum(increase(kamailio_ims_charging_killed_calls{job="scscf"}[$__range]))
+      + sum(increase(kamailio_dialog_ng_expired{job="scscf"}[$__range])) )
+    / sum(increase(kamailio_ims_session_established_total{job="scscf"}[$__range]))
 ```
 
-`dialog_ng_expired` counts dialogs forcibly killed by the dialog timer (i.e. no
-BYE seen — an abnormal release); `dialog_ng_processed` is the number of processed
-dialogs. `dialog_ng_active`/`dialog_ng_early` give the current confirmed/early
-session counts. A precise "abnormal release of *established* sessions only"
-figure would need a dialog end-event hook.
+A call the S-CSCF kills for lack of credit ends with a BYE, so `dialog_ng_expired`
+(dialogs the dialog timer ended, no BYE seen) never counts it; `killed_calls`
+does. The denominator is the established sessions (TS 32.454 5.2.1), counted once per
+dialog like the drops: `ims_session_setup_success_total` is per leg and would
+count a call between two users of this S-CSCF twice, and `dialog_ng_processed`
+also counts the setups that never got a `180`. Patch 0045
+keeps an early dialog that times out out of `dialog_ng_expired`, which would
+count a call that never rang as dropped. `dialog_ng_active`/`dialog_ng_early` give
+the current confirmed/early session counts.
 
 ### Utilization — Registered base
 
 Reused: `ims_usrloc_scscf` / `ims_usrloc_pcscf` gauges.
 
-- `kamailio_ims_usrloc_scscf_active_impus` — registered IMPUs (S-CSCF)
-- `kamailio_ims_usrloc_scscf_active_contacts` — registered contacts (S-CSCF)
-- `kamailio_ims_usrloc_scscf_active_subscriptions` — reg-event subscriptions
+- `kamailio_ims_usrloc_scscf_active_impus` — IMPU records held (S-CSCF); a de-registered IMPU stays, unregistered, so this is not the registered count
+- `kamailio_ims_usrloc_scscf_active_contacts` — registered contacts (S-CSCF), the registered base
+- `kamailio_ims_usrloc_scscf_active_subscriptions` — reg-event subscriptions held, until they expire
 - `kamailio_ims_usrloc_pcscf_registered_contacts` — registered contacts (P-CSCF)
 
 ### Charging — Ro (TS 32.299)
 
 Reused: `ims_charging` counters/gauges (populated when the Ro/Rf peer is up).
 
-- `kamailio_ims_charging_active_ro_sessions`
+- `kamailio_ims_charging_active_ro_sessions` — one per call leg that is up
 - `kamailio_ims_charging_initial_ccrs` / `…_successful_initial_ccrs`
 - `kamailio_ims_charging_killed_calls` (calls dropped for lack of credit)
 
@@ -143,8 +172,37 @@ Reused: I-CSCF and S-CSCF Diameter counters.
   single-value chip prints `NaN`, so the architecture canvas filters the
   denominator (`… / (rate(…_replies_received) > 0)`) to drop the sample and falls
   back with `or` to the module's own lifetime `…_avg_response_time`.
-- Session KPIs are measured at the **S-CSCF**, consistent with TS 32.454's
-  S-CSCF-centric session counters. Both originating and terminating directions
-  are captured (`dir` label).
+- Session KPIs are measured at the **S-CSCF**. The spec has the session
+  counters at the P-CSCF (`SC.AttSessionOrig`) and the P-/I-CSCF
+  (`SC.AttSessionTerm`) and computes the KPI "by I-CSCF" or "by P-CSCF", with
+  roamer scoping that follows from the node; only registration is S-CSCF
+  specific. Here `dir=orig` is the originating leg of a session and `dir=term`
+  the terminating leg, each with its own outcome and setup time (dialog
+  variables `_o` and `_t`); a call between two users of this S-CSCF is one
+  originating and one terminating session, as the spec counts it.
 - Setup-time samples are in **milliseconds** (Kamailio config integer math);
   the panels are configured with the `ms` unit.
+
+## Conformance to TS 32.454
+
+| § | KPI | State |
+|---|-----|-------|
+| 5.1.1 | Initial registration success rate | done (S-CSCF), attempts are the challenges sent, not every REGISTER received |
+| 5.1.2 | Session setup time (mean) | done, not per media name |
+| 5.1.3 | SESR | done, per side |
+| 5.1.4 | Third-party registration success rate | **not supported**: the REGISTER to the AS and its answer are in `ims_isc`, which exports no counter |
+| 5.1.5 | Re-registration success rate | done (S-CSCF) |
+| 5.1.6 / 5.1.7 | Setup time, IMS- / CS-originated | not applicable: counted at the MGCF, which this stack has none of |
+| 5.1.8 | Immediate messaging success rate | **not supported**: no MESSAGE counters |
+| 5.1.9 | SENSR | done, per side |
+| 5.2.1 | Session drop rate | done |
+| 5.3.1 | Mean session utilization | **not supported**: the spec leaves *Capacity* undefined (FFS) and TS 32.409 has no capacity counter |
+
+Deviations and local choices:
+
+- The measurement point is the S-CSCF (see Notes).
+- SENSR reads `dir`-split counters. TS 32.454 5.1.9 names
+  `SC.RelBeforeRingOrig/Term` and `SC.FailSessionOrig/Term`, which TS 32.409 only
+  defines without the side split; the `dir` label is our reading of it.
+- The 95/99 % and 2/5 % thresholds are ours. The p95/p99 setup time, the Diameter
+  latency, charging and registered-base panels are extras and not 32.454 KPIs.

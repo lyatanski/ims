@@ -1,0 +1,34 @@
+Log the IMPU in delete_impurecord() once it has found the record.
+
+delete_impurecord() logs _r->public_identity before it checks _r, and
+looks the record up by _aor only when _r is NULL. star() - a de-REGISTER
+with Contact: * - always passes NULL, so with debug logging on for
+ims_usrloc_scscf the log line dereferences NULL and the S-CSCF worker
+dies with SIGSEGV. LM_DBG evaluates its arguments only at debug level,
+which is why it does not show at the default level. Log after the
+lookup.
+
+diff --git a/src/modules/ims_usrloc_scscf/udomain.c b/src/modules/ims_usrloc_scscf/udomain.c
+index 0cf459ad85..38e540b9f0 100644
+--- a/src/modules/ims_usrloc_scscf/udomain.c
++++ b/src/modules/ims_usrloc_scscf/udomain.c
+@@ -760,9 +760,6 @@ void release_impurecord(udomain_t *_d, struct impurecord *_r)
+  */
+ int delete_impurecord(udomain_t *_d, str *_aor, struct impurecord *_r)
+ {
+-	LM_DBG("Deleting IMPURECORD [%.*s]\n", _r->public_identity.len,
+-			_r->public_identity.s);
+-
+ 	if(_r == 0) {
+ 		LM_DBG("no impurecord passed in - let's search\n");
+ 		if(get_impurecord(_d, _aor, &_r) != 0) {
+@@ -770,6 +767,9 @@ int delete_impurecord(udomain_t *_d, str *_aor, struct impurecord *_r)
+ 		}
+ 	}
+ 
++	LM_DBG("Deleting IMPURECORD [%.*s]\n", _r->public_identity.len,
++			_r->public_identity.s);
++
+ 	if(exists_ulcb_type(_r->cbs, UL_IMPU_DELETE)) {
+ 		run_ul_callbacks(_r->cbs, UL_IMPU_DELETE, _r, 0);
+ 	}

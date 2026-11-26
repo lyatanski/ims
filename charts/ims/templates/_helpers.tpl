@@ -83,6 +83,73 @@ Call with (dict "root" $ "cscf" <role>).
 {{- end }}
 
 {{/*
+The env a CSCF role's cfg gets from the chart itself, as a YAML list: what is
+derived from the rest of the values or the cluster, and so not for
+`cscf.<role>.env` to set. Call with (dict "root" $ "cscf" <role> "gm" $gm
+"gm6" $gm6 "border" <ims.border, or {}>).
+*/}}
+{{- define "ims.cscf.env" -}}
+{{- $cscf := .cscf }}
+{{- $gm := .gm }}
+{{- $border := .border }}
+{{- with .root }}
+- name: REALM
+  value: {{ tpl .Values.domain . | quote }}
+{{- if eq "proxy" $cscf }}
+{{- if $gm }}
+- name: GMDEV
+  value: {{ .Values.gm.interface | quote }}
+- name: IPSEC
+  value: {{ (split "/" $gm)._0 | quote }}
+{{- with $.gm6 }}
+- name: IPSEC6
+  value: {{ (split "/" .)._0 | quote }}
+{{- end }}
+{{- else }}
+- name: IPSEC
+  valueFrom:
+    fieldRef:
+      fieldPath: status.podIP
+{{- end }}
+{{- end }}
+{{- if and (has $cscf (list "proxy" "border")) .Values.cscf.emergency.enabled }}
+- name: ECSCF
+  value: {{ printf "sip:ecscf.%s" (include "ims.realm.ims" .) | quote }}
+{{- end }}
+{{- if or (eq "emergency" $cscf) (and (eq "proxy" $cscf) .Values.cscf.emergency.enabled) }}
+{{- include "ims.sosnum" . }}
+{{- end }}
+{{- if eq "border" $cscf }}
+{{- /* The Ici sources: the IBCF's own addresses with their prefixes, which
+is_in_subnet masks the same way as the source */}}
+- name: ICINET
+  value: {{ join "," $border.icinet | quote }}
+- name: RTPADR
+  value: {{ include "rtpengine.ng" .Subcharts.trgw | quote }}
+- name: ROUTES
+  value: {{ join " " $border.routes | quote }}
+- name: THKEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Release.Name }}-ibcf
+      key: thkey
+{{- end }}
+{{- if has $cscf (list "proxy" "interrogating" "serving") }}
+- name: DBURL
+  value: {{ printf "%s:%v/%v" (include "valkey.name" .Subcharts.trgw.Subcharts.valkey) .Values.trgw.valkey.ports.valkey (index .Values.db $cscf) | quote }}
+{{- end }}
+{{- if eq "serving" $cscf }}
+- name: REGSRV
+  value: {{ include "ims.regsrv" . | quote }}
+{{- with include "ims.ibcf" . }}
+- name: IBCF
+  value: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
 The emergency numbers the P-CSCF and the E-CSCF share (cscf/sos.cfg), left
 out when unset so the cfg's own default (112, 911) applies.
 */}}
@@ -231,6 +298,49 @@ The one IBCF is on every network, at every address listed for it.
 {{- $out = append $out (dict "name" $name "sfx" $sfx "nad" (printf "%s-ici%s" $.Release.Name $sfx) "interface" $net.interface "addresses" $net.addresses "config" $net.config) }}
 {{- end }}
 {{- toJson (dict "nets" $out) -}}
+{{- end }}
+
+{{/*
+The IBCF's peers, as JSON, failing on a misconfigured one:
+  nets     the Ici networks (ims.ici.networks)
+  peernet  each peer's Ici network, in cscf.border.peers order
+  routes   `<match>=<set>` per route, the set being the peer's position
+  attach   the networks annotation: all its addresses on each Ici network
+  icinet   those addresses, with their prefixes
+*/}}
+{{- define "ims.border" -}}
+{{- $peers := .Values.cscf.border.peers }}
+{{- if not $peers }}{{ fail "cscf.border.peers: at least one peer network" }}{{ end }}
+{{- $nets := (include "ims.ici.networks" . | fromJson).nets }}
+{{- /* Each peer's Ici network, in `peers` order */}}
+{{- $peernet := list }}
+{{- range $net := $nets }}
+{{- $t := $.Subcharts.trgw.Values.templates }}
+{{- range $dir := list "incoming" "outgoing" }}
+{{- if not (hasKey $t (printf "%s%s" $dir $net.sfx)) }}
+{{- fail (printf "trgw.templates: no %q for the Ici network %q" (printf "%s%s" $dir $net.sfx) $net.name) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* `<match>=<set>` per route, the set being the peer's position */}}
+{{- $routes := list }}
+{{- range $i, $p := $peers }}
+{{- if not $p.name }}{{ fail (printf "cscf.border.peers[%d] has no name" $i) }}{{ end }}
+{{- if not $p.entry }}{{ fail (printf "cscf.border.peers[%d] (%s) has no entry point" $i $p.name) }}{{ end }}
+{{- $net := "" }}
+{{- range $c := $nets }}{{ if eq $c.name ($p.network | default (first $nets).name | toString) }}{{ $net = $c }}{{ end }}{{ end }}
+{{- if not $net }}{{ fail (printf "cscf.border.peers[%d] (%s): network %q is none of ici.networks" $i $p.name $p.network) }}{{ end }}
+{{- if and (gt (len $nets) 1) (not $p.network) }}{{ fail (printf "cscf.border.peers[%d] (%s): a network is required with more than one Ici network" $i $p.name) }}{{ end }}
+{{- $peernet = append $peernet $net }}
+{{- range $r := $p.routes }}{{ $routes = append $routes (printf "%s=%d" $r (add1 $i)) }}{{ end }}
+{{- end }}
+{{- $attach := list }}
+{{- $icinet := list }}
+{{- range $net := $nets }}
+{{- $attach = append $attach (dict "name" $net.nad "interface" $net.interface "ips" $net.addresses) }}
+{{- $icinet = concat $icinet $net.addresses }}
+{{- end }}
+{{- toJson (dict "nets" $nets "peernet" $peernet "routes" $routes "attach" $attach "icinet" $icinet) -}}
 {{- end }}
 
 {{/*

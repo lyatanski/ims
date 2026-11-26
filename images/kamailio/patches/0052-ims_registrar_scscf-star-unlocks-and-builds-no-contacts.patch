@@ -1,0 +1,47 @@
+Unlock the udomain, and build no Contact list, when star() fails.
+
+star() handles a de-registration REGISTER with "Contact: *". When
+delete_impurecord() fails it means to reply with the record's remaining
+contacts, but builds them through a NULL pointer: contact_header is
+declared as a contact_for_header_t ** set to 0, and build_contact()
+starts with *contact_header = 0 - SIGSEGV, which takes kamailio down.
+The list it would have built is freed straight away and never reaches the
+reply either. And when the record cannot be fetched the function returns
+with the udomain still locked, so every later request hashing to that
+slot blocks for good.
+
+Unlock on the failure path and drop the contact building. Not reachable
+with the current ims_usrloc_scscf, whose delete_impurecord() always
+returns 0; found by gcc -fanalyzer.
+
+diff --git a/src/modules/ims_registrar_scscf/save.c b/src/modules/ims_registrar_scscf/save.c
+index 009ea96..d16766d 100644
+--- a/src/modules/ims_registrar_scscf/save.c
++++ b/src/modules/ims_registrar_scscf/save.c
+@@ -161,25 +161,12 @@ end:
+  */
+ static inline int star(udomain_t *_d, str *_a)
+ {
+-	impurecord_t *r;
+-
+ 	ul.lock_udomain(_d, _a);
+ 
+ 	if(ul.delete_impurecord(_d, _a, 0) != 0) {
+ 		LM_ERR("failed to remove record from usrloc\n");
+-
+-		/* Delete failed, try to get corresponding
+-         * record structure and send back all existing
+-         * contacts
+-         */
+ 		rerrno = R_UL_DEL_R;
+-
+-		if(ul.get_impurecord(_d, _a, &r) == 0) {
+-			contact_for_header_t **contact_header = 0;
+-			build_contact(r, contact_header, 0);
+-			free_contact_buf(*contact_header);
+-			ul.unlock_udomain(_d, _a);
+-		}
++		ul.unlock_udomain(_d, _a);
+ 		return -1;
+ 	}
+ 	ul.unlock_udomain(_d, _a);

@@ -1,0 +1,382 @@
+Handle the IPv4 peers of a dual-stack [::] socket as IPv4.
+
+Kamailio never sets IPV6_V6ONLY, so a socket on [::] also takes IPv4, but
+the core had no idea of it: an IPv4 peer arrived as ::ffff:a.b.c.d with af
+INET6, and nothing could be sent to an IPv4 address through that socket
+(get_send_socket() refuses a forced socket of the other family, and the
+first IPv4 socket is whatever else happens to listen on IPv4). Which is why
+a node that serves both families listens twice, on 0.0.0.0 and on [::],
+and the TCP pair only binds side by side with tcp_reuse_port.
+
+A [::] socket the kernel lets take IPv4 (IPV6_V6ONLY off, which is the
+default of net.ipv6.bindv6only) is marked SI_IS_DUALSTACK at startup, and:
+
+- an IPv4 peer it receives from, over UDP or accepted over TCP, is turned
+  back into the IPv4 address it is, with the IPv4 any as the local one, so
+  $si, $af, Via received, usrloc and the rest see an IPv4 message, as on a
+  0.0.0.0 socket;
+- udp_send() maps an IPv4 destination to ::ffff:a.b.c.d on it;
+- it serves IPv4 for get_send_socket(): a forced send socket, the socket
+  the request came in on, and sendipv4/sendipv4_tcp, the first socket that
+  takes IPv4 in listen order;
+- where a socket is looked up by the local IPv4 address the kernel picked
+  (mhomed get_out_socket(), the source of a new TCP connection) and none is
+  bound to that address, the dual-stack socket takes it, as a 0.0.0.0 one
+  would, rather than the first IPv4 socket bound to some other address;
+- a new TCP connection to an IPv4 server sourced from it binds the IPv4 any
+  with the same port instead of failing to bind [::].
+
+A socket bound to a specific IPv6 address, or one with IPV6_V6ONLY on, is
+left as it was.
+
+diff --git a/src/core/forward.c b/src/core/forward.c
+index 792640c1a4..195c4bd913 100644
+--- a/src/core/forward.c
++++ b/src/core/forward.c
+@@ -171,6 +171,10 @@ retry:
+ 	}
+ 	su2ip_addr(&ip, &from);
+ 	si = find_si(&ip, 0, proto);
++	if(si == 0 && ip.af == AF_INET) {
++		/* a dual-stack socket covers every IPv4 address of the host */
++		si = find_si_dualstack(0, proto);
++	}
+ 	if(si == 0) {
+ 		si = find_sock_info_by_address_family(proto, ip.af);
+ 	}
+@@ -238,7 +242,7 @@ struct socket_info *get_send_socket2(struct socket_info *force_send_socket,
+ 			if(likely(mismatch))
+ 				*mismatch = SS_MISMATCH_PROTO;
+ 		}
+-		if(unlikely(force_send_socket->address.af != to->s.sa_family)) {
++		if(unlikely(!si_serves_af(force_send_socket, to->s.sa_family))) {
+ 			LM_DBG("force_send_socket of different af"
+ 				   " (dst %d - %s:%s forced %d -%s:%s:%d)\n",
+ 					to->s.sa_family, proto2a(proto), su2a(to, sizeof(*to)),
+@@ -347,7 +351,7 @@ not_forced:
+ #endif /* USE_SCTP */
+ 		case PROTO_UDP:
+ 			if((bind_address == 0)
+-					|| (to->s.sa_family != bind_address->address.af)
++					|| !si_serves_af(bind_address, to->s.sa_family)
+ 					|| (bind_address->proto != PROTO_UDP)) {
+ 				switch(to->s.sa_family) {
+ 					case AF_INET:
+diff --git a/src/core/ip_addr.h b/src/core/ip_addr.h
+index 511724c7a4..284362767f 100644
+--- a/src/core/ip_addr.h
++++ b/src/core/ip_addr.h
+@@ -106,6 +106,7 @@ typedef enum si_flags
+ 	SI_IS_ANY = (1 << 3),
+ 	SI_IS_MHOMED = (1 << 4),
+ 	SI_IS_VIRTUAL = (1 << 5),
++	SI_IS_DUALSTACK = (1 << 6), /* [::] without IPV6_V6ONLY: takes IPv4 too */
+ } si_flags_t;
+ 
+ typedef struct addr_info
+@@ -556,6 +557,47 @@ static inline unsigned short su_getport(const union sockaddr_union *su)
+ }
+ 
+ 
++/* an IPv4 peer of a dual-stack socket arrives as ::ffff:a.b.c.d: turns su
++ * into the plain IPv4 address it stands for, keeping the port
++ * returns 1 if su was changed, 0 if it was not a v4-mapped address */
++static inline int su_v4unmap(union sockaddr_union *su)
++{
++	struct in_addr a4;
++	unsigned short port;
++
++	if(su->s.sa_family != AF_INET6
++			|| !IN6_IS_ADDR_V4MAPPED(&su->sin6.sin6_addr))
++		return 0;
++	memcpy(&a4, &su->sin6.sin6_addr.s6_addr[12], 4);
++	port = su->sin6.sin6_port;
++	memset(su, 0, sizeof(*su));
++	su->sin.sin_family = AF_INET;
++	su->sin.sin_port = port;
++	su->sin.sin_addr = a4;
++#ifdef HAVE_SOCKADDR_SA_LEN
++	su->sin.sin_len = sizeof(struct sockaddr_in);
++#endif
++	return 1;
++}
++
++
++/* the reverse of su_v4unmap(): an IPv4 su as the ::ffff:a.b.c.d a dual-stack
++ * (AF_INET6) socket sends to */
++static inline void su_v4map(
++		union sockaddr_union *dst, const union sockaddr_union *src)
++{
++	memset(dst, 0, sizeof(*dst));
++	dst->sin6.sin6_family = AF_INET6;
++	dst->sin6.sin6_port = src->sin.sin_port;
++	dst->sin6.sin6_addr.s6_addr[10] = 0xff;
++	dst->sin6.sin6_addr.s6_addr[11] = 0xff;
++	memcpy(&dst->sin6.sin6_addr.s6_addr[12], &src->sin.sin_addr, 4);
++#ifdef HAVE_SOCKADDR_SA_LEN
++	dst->sin6.sin6_len = sizeof(struct sockaddr_in6);
++#endif
++}
++
++
+ /* sets the port number (host byte order) */
+ static inline void su_setport(union sockaddr_union *su, unsigned short port)
+ {
+diff --git a/src/core/socket_info.c b/src/core/socket_info.c
+index 6eacc447f5..3edd7e8d10 100644
+--- a/src/core/socket_info.c
++++ b/src/core/socket_info.c
+@@ -2815,3 +2815,45 @@ struct socket_info *find_sock_info_by_address_family(
+ 
+ 	return si;
+ }
++
++
++/* marks si SI_IS_DUALSTACK when it is an IPv6 socket bound to [::] that the
++ * kernel lets take IPv4 too (IPV6_V6ONLY off, net.ipv6.bindv6only 0); to be
++ * called once the socket is bound, before the processes are forked */
++void ksr_si_set_dualstack(struct socket_info *si)
++{
++#ifdef IPV6_V6ONLY
++	int v6only = 1;
++	socklen_t len = sizeof(v6only);
++
++	if(si->address.af != AF_INET6 || !(si->flags & SI_IS_ANY)
++			|| si->socket < 0)
++		return;
++	if(getsockopt(si->socket, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, &len) != 0) {
++		LM_WARN("getsockopt IPV6_V6ONLY on %.*s: %s\n", si->sock_str.len,
++				si->sock_str.s, strerror(errno));
++		return;
++	}
++	if(v6only == 0) {
++		si->flags |= SI_IS_DUALSTACK;
++		LM_INFO("%.*s is dual-stack: IPv4 peers are handled as such\n",
++				si->sock_str.len, si->sock_str.s);
++	}
++#endif
++}
++
++/* the first dual-stack socket for proto (any port if port is 0), the one an
++ * IPv4 address of this host is reached on when no socket is bound to it */
++struct socket_info *find_si_dualstack(
++		unsigned short port, unsigned short proto)
++{
++	struct socket_info *si;
++	struct socket_info **list;
++
++	list = get_sock_info_list(proto);
++	for(si = list ? *list : NULL; si; si = si->next) {
++		if((si->flags & SI_IS_DUALSTACK) && (port == 0 || si->port_no == port))
++			return si;
++	}
++	return NULL;
++}
+diff --git a/src/core/socket_info.h b/src/core/socket_info.h
+index 19b3cfbe46..fe10533c06 100644
+--- a/src/core/socket_info.h
++++ b/src/core/socket_info.h
+@@ -180,4 +180,15 @@ void ksr_sockets_index(void);
+ struct socket_info *find_sock_info_by_address_family(
+ 		int proto, int address_family);
+ 
++void ksr_si_set_dualstack(struct socket_info *si);
++struct socket_info *find_si_dualstack(
++		unsigned short port, unsigned short proto);
++
++/* si can send to and receive from an address of family af */
++static inline int si_serves_af(struct socket_info *si, int af)
++{
++	return si->address.af == af
++		   || (af == AF_INET && (si->flags & SI_IS_DUALSTACK));
++}
++
+ #endif
+diff --git a/src/core/tcp_main.c b/src/core/tcp_main.c
+index b8482c1c80..411122c070 100644
+--- a/src/core/tcp_main.c
++++ b/src/core/tcp_main.c
+@@ -1116,6 +1116,11 @@ inline static int find_listening_sock_info(
+ 	su2ip_addr(&ip, *from);
+ 
+ 	si = find_si(&ip, 0, type);
++	if(unlikely(si == 0 && ip.af == AF_INET && find_si_dualstack(0, type))) {
++		/* a dual-stack socket covers every IPv4 address of the host, as a
++		 * 0.0.0.0 one does: nothing to bind */
++		return 0;
++	}
+ 
+ 	if(unlikely(si == 0)) {
+ 		si = find_sock_info_by_address_family(type, ip.af);
+@@ -1167,6 +1172,7 @@ inline static int tcp_do_connect(union sockaddr_union *server,
+ {
+ 	int s;
+ 	union sockaddr_union my_name;
++	union sockaddr_union from4;
+ 	socklen_t my_name_len;
+ 	struct ip_addr ip;
+ 	unsigned short port;
+@@ -1185,6 +1191,26 @@ inline static int tcp_do_connect(union sockaddr_union *server,
+ 		goto error;
+ 	}
+ 
++	if(unlikely(from != 0 && from->s.sa_family == AF_INET6
++				&& server->s.sa_family == AF_INET)) {
++		/* an IPv4 server from a dual-stack [::] socket: the IPv4 any with the
++		 * same port is the source it stands for; a specific IPv6 address
++		 * cannot be one */
++		su2ip_addr(&ip, from);
++		if(ip_addr_any(&ip)) {
++			port = su_getport(from);
++			memset(&from4, 0, sizeof(from4));
++			from4.sin.sin_family = AF_INET;
++			from4.sin.sin_port = htons(port);
++#ifdef HAVE_SOCKADDR_SA_LEN
++			from4.sin.sin_len = sizeof(struct sockaddr_in);
++#endif
++			from = &from4;
++		} else {
++			from = NULL;
++		}
++	}
++
+ 	if(unlikely(from != 0)) {
+ 		if(unlikely(bind(s, &from->s, sockaddru_len(*from)) != 0)) {
+ 			LM_WARN("binding to source address %s failed: %s [%d]\n",
+@@ -1289,6 +1315,15 @@ find_socket:
+ #else
+ 	*res_si = find_si(&ip, port, PROTO_TCP);
+ #endif
++	if(unlikely(*res_si == 0 && ip.af == AF_INET)) {
++		/* no socket bound to that IPv4 address: a dual-stack one takes it */
++#ifdef USE_TLS
++		*res_si = find_si_dualstack(
++				port, (type == PROTO_TLS) ? PROTO_TLS : PROTO_TCP);
++#else
++		*res_si = find_si_dualstack(port, PROTO_TCP);
++#endif
++	}
+ 
+ 	if(unlikely(*res_si == 0)) {
+ 		LM_WARN("%s: could not find corresponding"
+@@ -4832,6 +4867,9 @@ static inline int handle_new_connect(struct socket_info *si)
+ 		tcp_safe_close(new_sock);
+ 		return 1; /* success, because the accept was successful */
+ 	}
++	/* an IPv4 peer of a dual-stack socket is one, as on a 0.0.0.0 socket */
++	if(unlikely(si->flags & SI_IS_DUALSTACK))
++		su_v4unmap(&su);
+ 	if(unlikely(tcp_connection_limit_srcip(&su, ksr_tcp_accept_iplimit))) {
+ 		LM_CRIT("hit the limit of connections per source IP (%s) - rejecting\n",
+ 				su2a(&su, sizeof(su)));
+@@ -4859,6 +4897,8 @@ static inline int handle_new_connect(struct socket_info *si)
+ 			LM_ERR("getsockname failed: %s(%d)\n", strerror(errno), errno);
+ 			/* go on with the 0.0.0.0 dst from the sock_info */
+ 		} else {
++			if(unlikely(si->flags & SI_IS_DUALSTACK))
++				su_v4unmap(&sock_name);
+ 			dst_su = &sock_name;
+ 		}
+ 	}
+diff --git a/src/core/udp_server.c b/src/core/udp_server.c
+index d4c55f0ea4..3ca764dd2a 100644
+--- a/src/core/udp_server.c
++++ b/src/core/udp_server.c
+@@ -1423,6 +1423,21 @@ int udp_init(struct socket_info *sock_info)
+ #define UDP_RCV_PRINTBUF_SIZE 512
+ #define UDP_RCV_PRINT_LEN 100
+ 
++
++/* on a dual-stack socket an IPv4 peer is ::ffff:a.b.c.d: make it the IPv4
++ * address it is, and the local address the IPv4 any, so that the rest of the
++ * core and the script see an IPv4 message, as on a 0.0.0.0 socket */
++static inline void udp_rcv_v4unmap(struct socket_info *si,
++		union sockaddr_union *from, struct receive_info *ri)
++{
++	if(likely(!(si->flags & SI_IS_DUALSTACK)))
++		return;
++	if(su_v4unmap(from))
++		ip_addr_mk_any(AF_INET, &ri->dst_ip);
++	else
++		ri->dst_ip = si->address;
++}
++
+ /**
+  *
+  */
+@@ -1511,6 +1526,7 @@ int udp_rcv_loop()
+ 			LM_DBG("received on udp socket: (%d/%d/%d) [[%.*s]]\n", j, i, len,
+ 					j, printbuf);
+ 		}
++		udp_rcv_v4unmap(bind_address, fromaddr, &rcvi);
+ 		rcvi.src_su = *fromaddr;
+ 		su2ip_addr(&rcvi.src_ip, fromaddr);
+ 		rcvi.src_port = su_getport(fromaddr);
+@@ -1594,6 +1610,8 @@ int udp_send(struct dest_info *dst, char *buf, unsigned len)
+ 
+ 	int n;
+ 	int tolen;
++	union sockaddr_union *to = &dst->to;
++	union sockaddr_union to6;
+ 	struct ip_addr ip; /* used only on error, for debugging */
+ #ifdef USE_RAW_SOCKS
+ 	int mtu;
+@@ -1611,13 +1629,21 @@ int udp_send(struct dest_info *dst, char *buf, unsigned len)
+ 
+ 	resolve_proxy_dest(&dst->to, &tolen);
+ 
++	if(unlikely(dst->to.s.sa_family == AF_INET
++				&& dst->send_sock->address.af == AF_INET6)) {
++		/* an IPv4 peer over a dual-stack socket */
++		su_v4map(&to6, &dst->to);
++		to = &to6;
++		tolen = sockaddru_len(to6);
++	}
++
+ #ifdef USE_RAW_SOCKS
+ 	if(likely(!(raw_udp4_send_sock >= 0 && cfg_get(core, core_cfg, udp4_raw)
+ 				&& dst->send_sock->address.af == AF_INET))) {
+ #endif /* USE_RAW_SOCKS */
+ 		/* normal send over udp socket */
+ 	again:
+-		n = sendto(dst->send_sock->socket, buf, len, 0, &dst->to.s, tolen);
++		n = sendto(dst->send_sock->socket, buf, len, 0, &to->s, tolen);
+ #ifdef XL_DEBUG
+ 		LM_INFO("send status: %d\n", n);
+ #endif
+@@ -1873,6 +1899,7 @@ void *ksr_udp_mtworker(void *si)
+ 
+ 		buf = resolve_proxy_proto(raw_buf, &len, fromaddr);
+ 
++		udp_rcv_v4unmap(tsock, fromaddr, &rcvi);
+ 		rcvi.src_su = *fromaddr;
+ 		su2ip_addr(&rcvi.src_ip, fromaddr);
+ 		rcvi.src_port = su_getport(fromaddr);
+diff --git a/src/main.c b/src/main.c
+index e3970c183c..7a6f1ae3ad 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -1612,8 +1612,9 @@ int main_loop(void)
+ 			/* udp */
+ 			if(udp_init(si) == -1)
+ 				goto error;
+-			/* get first ipv4/ipv6 socket*/
+-			if((si->address.af == AF_INET)
++			ksr_si_set_dualstack(si);
++			/* get first ipv4/ipv6 socket (a dual-stack one serves ipv4) */
++			if(si_serves_af(si, AF_INET)
+ 					&& ((sendipv4 == 0)
+ 							|| (sendipv4->flags & (SI_IS_LO | SI_IS_MCAST))))
+ 				sendipv4 = si;
+@@ -1718,8 +1719,9 @@ int main_loop(void)
+ 				/* same thing for tcp */
+ 				if(tcp_init(si) == -1)
+ 					goto error;
+-				/* get first ipv4/ipv6 socket*/
+-				if((si->address.af == AF_INET)
++				ksr_si_set_dualstack(si);
++				/* get first ipv4/ipv6 socket (a dual-stack one serves ipv4) */
++				if(si_serves_af(si, AF_INET)
+ 						&& ((sendipv4_tcp == 0)
+ 								|| (sendipv4_tcp->flags
+ 										& (SI_IS_LO | SI_IS_MCAST))))

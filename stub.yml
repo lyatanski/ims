@@ -1,7 +1,5 @@
 include:
-- open5gs/pcrf.yml
 - open5gs/smf.yml
-- open5gs/upf.yml
 
 services:
   hss:
@@ -16,3 +14,44 @@ services:
     expose:
     - 3868/tcp
     restart: unless-stopped
+
+  # pro2call's Gx/Rx stub in place of the open5gs PCRF, which caps calls at
+  # about 90/s on its single event loop. PCRF_GX_PUSH=0 authorises every AAR
+  # without installing a rule, so the SMF does no per-call bearer work either
+  # and the CSCF chain is all that is measured.
+  pcrf:
+    image: ghcr.io/lyatanski/pro2call
+    command: pcrf_stub.lua
+    environment:
+      PCRF_REALM:    ${REALM}
+      PCRF_GX_PUSH:  ${PCRF_GX_PUSH:-1}
+      PCRF_STATS_MS: ${PCRF_STATS_MS:-5000}
+    expose:
+    - 3868/tcp
+    restart: unless-stopped
+
+  # pro2call's eBPF UPF in place of the open5gs UPF: PFCP in userspace,
+  # while GTP-U decap, encap and routing all happen in TC eBPF, so no packet
+  # crosses a tun device. Like the open5gs UPF it sets the association up
+  # itself (--smf), so the SMF config stays as it is. It has no metrics
+  # endpoint: its counters are the stats line it logs every 10 s.
+  upf:
+    image: ghcr.io/lyatanski/pro2call
+    entrypoint: upfd
+    command: --n3 eth0 --smf smf
+    expose:
+    - 8805/udp
+    - 2152/udp
+    cap_add:
+    - NET_ADMIN
+    - BPF
+    - PERFMON
+    sysctls:
+      # uplink is FIB-routed in the kernel as a router would; docker turns
+      # on IPv4 forwarding in a container, never IPv6
+      net.ipv4.ip_forward: 1
+      net.ipv6.conf.all.forwarding: 1
+    restart: unless-stopped
+    depends_on:
+      smf:
+        condition: service_started

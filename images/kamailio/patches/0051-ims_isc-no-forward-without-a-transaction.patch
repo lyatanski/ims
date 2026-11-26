@@ -1,0 +1,72 @@
+Return an error from isc_forward() when the request has no transaction.
+
+isc_forward() creates the request's transaction with t_newtran() when it has
+none, logs a failure at INFO, and then sets the transaction's timers through
+t_gett() whatever happened. When t_newtran() fails - shared memory exhausted:
+the S-CSCF at ~500 calls/s with an AS in every call - t_gett() is not a
+transaction and the worker dies with SIGSEGV (isc.c, fr_timeout =
+t->fr_timeout), taking kamailio with it. Return ISC_RETURN_ERROR instead, so
+the request fails on its own.
+
+It also found out whether there is a transaction with t_get_trans_ident(),
+which logs an error when there is none, so once for every request it
+forwarded to an AS. Read the transaction with t_gett() instead, the way
+ims_auth does.
+
+diff --git a/src/modules/ims_isc/isc.c b/src/modules/ims_isc/isc.c
+index a38b9cd962..6cdfaefa34 100644
+--- a/src/modules/ims_isc/isc.c
++++ b/src/modules/ims_isc/isc.c
+@@ -63,7 +63,6 @@ int isc_forward(struct sip_msg *msg, isc_match *m, isc_mark *mark,
+ 		enum isc_mark_status status)
+ {
+ 	struct cell *t;
+-	unsigned int hash, label;
+ 	ticks_t fr_timeout, fr_inv_timeout;
+ 	int ret;
+ 	LM_DBG("marking for AS <%.*s>\n", m->server_name.len, m->server_name.s);
+@@ -86,25 +85,32 @@ int isc_forward(struct sip_msg *msg, isc_match *m, isc_mark *mark,
+ 		append_branch(msg, &(msg->first_line.u.request.uri), &(msg->dst_uri), 0,
+ 				Q_UNSPECIFIED, 0, 0, 0, 0, 0, 0);
+ 
+-	// Determines the tm transaction identifiers.
+-	// If no transaction, then creates one
+-
+-	if(isc_tmb.t_get_trans_ident(msg, &hash, &label) < 0) {
++	// The request's transaction; if there is none yet, creates one. Not
++	// t_get_trans_ident() to find out: it logs an error for every request
++	// that has none, which is every first request.
++	t = isc_tmb.t_gett();
++	if(t == NULL || t == T_UNDEFINED) {
+ 		LM_DBG("SIP message without transaction. OK - first request\n");
+-		if(isc_tmb.t_newtran(msg) < 0)
+-			LM_INFO("Failed creating SIP transaction\n");
+-		if(isc_tmb.t_get_trans_ident(msg, &hash, &label) < 0) {
+-			LM_INFO("SIP message still without transaction\n");
+-		} else {
+-			LM_DBG("New SIP message transaction %u %u\n", hash, label);
++		if(isc_tmb.t_newtran(msg) < 0) {
++			LM_ERR("failed creating SIP transaction\n");
++			return ISC_RETURN_ERROR;
+ 		}
++		// No transaction after all (shared memory exhausted): the timers
++		// below are the transaction's, there is nothing to forward with
++		t = isc_tmb.t_gett();
++		if(t == NULL || t == T_UNDEFINED) {
++			LM_ERR("SIP message still without transaction\n");
++			return ISC_RETURN_ERROR;
++		}
++		LM_DBG("New SIP message transaction %u %u\n", t->hash_index,
++				t->label);
+ 	} else {
+-		LM_INFO("Transaction %u %u exists. Retransmission?\n", hash, label);
++		LM_INFO("Transaction %u %u exists. Retransmission?\n", t->hash_index,
++				t->label);
+ 	}
+ 
+ 	/* set the timeout timers to a lower value */
+ 
+-	t = isc_tmb.t_gett();
+ 	fr_timeout = t->fr_timeout;
+ 	fr_inv_timeout = t->fr_inv_timeout;
+ 	t->fr_timeout = S_TO_TICKS(isc_fr_timeout) / 1000;

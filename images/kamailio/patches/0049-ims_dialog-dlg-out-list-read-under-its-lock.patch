@@ -1,0 +1,88 @@
+Read a dialog's dlg_out list in next_state_dlg() under the list's own lock.
+
+next_state_dlg() takes the head of dlg->dlg_entry_out before its switch,
+holding only the dialog's hash entry lock, and dereferences it when a 2xx
+arrives for a dialog already confirmed (the retransmission check against the
+to-tag) or concurrently confirmed. The list is changed and its cells freed
+under dlg->dlg_out_entries_lock (link_dlg_out(), dlg_remove_dlg_out(),
+dlg_remove_dlg_out_tag()), by other SIP workers handling the same call's
+other replies, so the cell can be gone by the time it is read. With a callee
+that answers at once, 180 and 200 reach the S-CSCF together and are relayed
+by different workers; at 300-400 calls/s the S-CSCF died within 20-120 s,
+SIGSEGV in a UDP worker:
+
+  next_state_dlg (event=DLG_EVENT_RPL2xx) dlg_hash.c, dlg_out->to_tag.len
+  dlg_onreply dlg_handlers.c
+  run_trans_callbacks_with_buf / relay_reply / reply_received
+
+and the main process then shut kamailio down. Both comparisons now read
+the head, and walk the list, inside dlg_out_entries_lock (taken after the
+entry lock, the order destroy_dlg() already uses), and an empty list counts
+as nothing to compare. The lock is not held across the whole function:
+unref_dlg_unsafe() there can destroy the dialog, which takes it too.
+
+diff --git a/src/modules/ims_dialog/dlg_hash.c b/src/modules/ims_dialog/dlg_hash.c
+index 92d1101..b5e80c8 100644
+--- a/src/modules/ims_dialog/dlg_hash.c
++++ b/src/modules/ims_dialog/dlg_hash.c
+@@ -1157,9 +1157,13 @@ void next_state_dlg(struct dlg_cell *dlg, int event, int *old_state,
+ 
+ 	*old_state = dlg->state;
+ 
++	/* The dlg_out list is changed, and its cells freed, under
++	 * dlg_out_entries_lock (link_dlg_out(), dlg_remove_dlg_out*()), not under
++	 * the hash entry's lock held here: it is read only inside that lock below,
++	 * never from a head taken before. Not held across the whole function:
++	 * the unref_dlg_unsafe() calls can destroy the dialog, which takes it. */
+ 	struct dlg_entry_out *d_entry_out = &(dlg->dlg_entry_out);
+ 	struct dlg_cell_out *dlg_out;
+-	dlg_out = d_entry_out->first;
+ 	int found = -1;
+ 	int delete = 1;
+ 
+@@ -1227,12 +1231,15 @@ void next_state_dlg(struct dlg_cell *dlg, int event, int *old_state,
+ 				case DLG_STATE_CONFIRMED:
+ 					if(to_tag) {
+ 						//compare the to_tag passed parameter to the dlg_out to_tag entry of the dlg parameter  (There should be only 1 dlg_out entry)
+-
+-						if(dlg_out->to_tag.len == to_tag->len
+-								&& memcmp(dlg_out->to_tag.s, to_tag->s,
+-										   dlg_out->to_tag.len)
+-										   == 0) {
++						lock_get(dlg->dlg_out_entries_lock);
++						dlg_out = d_entry_out->first;
++						if(dlg_out == NULL
++								|| (dlg_out->to_tag.len == to_tag->len
++										&& memcmp(dlg_out->to_tag.s, to_tag->s,
++												   dlg_out->to_tag.len)
++												   == 0)) {
+ 							//this parameter matches the existing dlg_out and is therefore a retransmission, so break
++							lock_release(dlg->dlg_out_entries_lock);
+ 							break;
+ 						} else {
+ 
+@@ -1256,6 +1263,7 @@ void next_state_dlg(struct dlg_cell *dlg, int event, int *old_state,
+ 										dlg_out->to_tag.len, dlg_out->to_tag.s);
+ 								dlg_out = dlg_out->next;
+ 							}
++							lock_release(dlg->dlg_out_entries_lock);
+ 
+ 							//The parameter does not match so this is a concurrently confirmed call
+ 							//dlg->state = DLG_STATE_CONCURRENTLY_CONFIRMED;
+@@ -1266,6 +1274,8 @@ void next_state_dlg(struct dlg_cell *dlg, int event, int *old_state,
+ 					//check the to_tag passed parameter exists
+ 					if(to_tag) {
+ 						//compare the to_tag passed parameter to all the dlg_out to_tag entry of the dlg parameter  (There could be multiple)
++						lock_get(dlg->dlg_out_entries_lock);
++						dlg_out = d_entry_out->first;
+ 						while(dlg_out) {
+ 							if(dlg_out->to_tag.len == to_tag->len
+ 									&& memcmp(dlg_out->to_tag.s, to_tag->s,
+@@ -1276,6 +1286,7 @@ void next_state_dlg(struct dlg_cell *dlg, int event, int *old_state,
+ 							}
+ 							dlg_out = dlg_out->next;
+ 						}
++						lock_release(dlg->dlg_out_entries_lock);
+ 						if(found == -1) {
+ 							//The parameter does not match so this is another concurrently confirmed call (we would have breaked by now if it matched)
+ 							dlg->state = DLG_STATE_CONCURRENTLY_CONFIRMED;

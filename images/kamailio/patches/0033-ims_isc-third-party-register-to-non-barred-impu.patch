@@ -1,0 +1,135 @@
+Send the third-party REGISTER To a non-barred IMPU in ims_isc.
+
+TS 24.229 5.4.1.7 c): the To header field of the third-party REGISTER
+"shall contain a non-barred public user identity belonging to the service
+profile of the processed Filter Criteria", either the one in the REGISTER
+or one of the implicitly registered ones of that profile. ims_isc copied
+the To of the REGISTER as it was. A UE without an ISIM registers with a
+temporary IMPU derived from the IMSI, which the HSS provisions as barred,
+so the ASs were told about an identity that can never be used.
+
+Keep the registered IMPU when it is not barred; otherwise use the first
+non-barred IMPU of the service profile the matched filter criteria belongs
+to. When that profile has none, send no third-party REGISTER.
+
+diff --git a/src/modules/ims_isc/third_party_reg.c b/src/modules/ims_isc/third_party_reg.c
+index 9cbb0d5111..2bb8d9daff 100644
+--- a/src/modules/ims_isc/third_party_reg.c
++++ b/src/modules/ims_isc/third_party_reg.c
+@@ -222,6 +222,45 @@ int build_p_associated_uri(ims_subscription *s)
+ 
+ static str reg_resp_200OK = {"OK", 2};
+ 
++/**
++ * The To of a third-party REGISTER, TS 24.229 5.4.1.7 c): "a non-barred
++ * public user identity belonging to the service profile of the processed
++ * Filter Criteria" - the registered one when it is not barred, else the
++ * first non-barred one of that profile.
++ * @param s - the subscription
++ * @param fc_index - index of the filter criteria among those of all profiles
++ * @param impu - the registered public identity
++ * @returns the identity, NULL if the profile has no non-barred one
++ */
++static ims_public_identity *third_party_reg_to(
++		ims_subscription *s, int fc_index, str *impu)
++{
++	ims_service_profile *sp = 0;
++	ims_public_identity *id, *first = 0;
++	int i, cnt = 0;
++
++	for(i = 0; i < s->service_profiles_cnt; i++) {
++		cnt += s->service_profiles[i].filter_criteria_cnt;
++		if(fc_index < cnt) {
++			sp = &s->service_profiles[i];
++			break;
++		}
++	}
++	if(!sp)
++		return 0;
++	for(i = 0; i < sp->public_identities_cnt; i++) {
++		id = &sp->public_identities[i];
++		if(id->barring)
++			continue;
++		if(id->public_identity.len == impu->len
++				&& strncasecmp(id->public_identity.s, impu->s, impu->len) == 0)
++			return id;
++		if(!first)
++			first = id;
++	}
++	return first;
++}
++
+ /**
+  * Handle third party registration
+  * @param msg - the SIP REGISTER message
+@@ -241,8 +280,11 @@ int isc_third_party_reg(
+ 	str pani = {0, 0};
+ 	str cv = {0, 0};
+ 	str s = {0, 0};
++	str to_copy = {0, 0};
++	int ret = ISC_RETURN_FALSE;
+ 
+ 	impurecord_t *p;
++	ims_public_identity *id;
+ 
+ 	struct hdr_field *hdr;
+ 
+@@ -263,6 +305,32 @@ int isc_third_party_reg(
+ 			LM_ERR("Failed to get IMPU domain from usrloc\n");
+ 			goto no_pai;
+ 		}
++		if(p->s) {
++			id = third_party_reg_to(p->s, m->index, &to);
++			if(!id) {
++				isc_ulb.unlock_udomain(d, &s);
++				LM_ERR("No non-barred public identity in the service profile "
++					   "of [%.*s], no third-party REGISTER\n",
++						to.len, to.s);
++				return ISC_RETURN_FALSE;
++			}
++			if(id->public_identity.len != to.len
++					|| strncmp(id->public_identity.s, to.s, to.len) != 0) {
++				/* the subscription may change once unlocked */
++				to_copy.s = pkg_malloc(id->public_identity.len);
++				if(!to_copy.s) {
++					isc_ulb.unlock_udomain(d, &s);
++					PKG_MEM_ERROR;
++					return ISC_RETURN_FALSE;
++				}
++				memcpy(to_copy.s, id->public_identity.s,
++						id->public_identity.len);
++				to_copy.len = id->public_identity.len;
++				LM_DBG("[%.*s] is barred, third-party REGISTER To [%.*s]\n",
++						to.len, to.s, to_copy.len, to_copy.s);
++				to = to_copy;
++			}
++		}
+ 		if(build_p_associated_uri(p->s) != 0) {
+ 			isc_ulb.unlock_udomain(d, &s);
+ 			LM_ERR("Failed to build P-Associated URI for 3rd party reg\n");
+@@ -285,7 +353,7 @@ no_pai:
+ 
+ 	if(build_path_vector(msg, &path, &path_received) < 0) {
+ 		LM_ERR("Failed to parse PATH header for third-party reg\n");
+-		return ISC_RETURN_FALSE;
++		goto done;
+ 	}
+ 	LM_DBG("PATH header in REGISTER is [%.*s]\n", path.len, path.s);
+ 
+@@ -330,10 +398,13 @@ no_pai:
+ 			r_send_third_party_reg(&r, 0);
+ 		else
+ 			r_send_third_party_reg(&r, expires + isc_expires_grace);
+-		return ISC_RETURN_TRUE;
+-	} else {
+-		return ISC_RETURN_FALSE;
++		ret = ISC_RETURN_TRUE;
+ 	}
++
++done:
++	if(to_copy.s)
++		pkg_free(to_copy.s);
++	return ret;
+ }
+ 
+ static str method = {"REGISTER", 8};

@@ -1,0 +1,209 @@
+Check for no contacts and flush the tunnels with the SPI list locked.
+
+ims_registrar_pcscf's save_pending() calls ipsec_reconfig() before it inserts
+a new contact. When usrloc holds no contacts, ipsec_reconfig() rebuilds the
+SPI list (clean_spi_list()) and then flushes every SA and policy in the
+kernel (ipsec_cleanall()). Only an atomic flag guards this, and it only
+stops a second caller from running the cleanup too. Nothing stops another
+process from installing a tunnel while the cleanup runs.
+
+That happens whenever two UEs send their first REGISTER at once to a P-CSCF
+with no contacts:
+
+  worker A (UE 1)                  worker B (UE 2)
+  no contacts, sets the flag
+  clean_spi_list() (holds the      "reconfig already called"
+    SPI lock; slow with a large    inserts its contact, relays the
+    ipsec_spi_id_range)              REGISTER, gets the 401
+                                   acquire_spi() waits for the lock
+  releases the SPI lock            acquires a pair, installs its SAs
+  ipsec_cleanall() flushes them      and policies
+                                   relays the 401
+
+UE 2 then sends its protected REGISTER over SAs that are gone, and the
+kernel drops it without a trace in the SIP log. In the logs, the flush shows
+up as fewer "already installed" answers for that tunnel's redundant SAs and
+policies (3 instead of 8 when port_uc == port_us).
+
+Run the check and the whole cleanup with the SPI list locked. A tunnel is
+installed with a pair acquired after its contact was inserted. So either
+that contact is counted and nothing is flushed, or acquire_spi() waits until
+the flush is over. The flag has nothing left to guard and goes away. The
+lock order is unchanged: callers already take a usrloc slot lock and then
+the SPI lock, and the cleanup takes no usrloc lock.
+
+diff --git a/src/modules/ims_ipsec_pcscf/cmd.c b/src/modules/ims_ipsec_pcscf/cmd.c
+index bb6f9a33d7..50042f20f2 100644
+--- a/src/modules/ims_ipsec_pcscf/cmd.c
++++ b/src/modules/ims_ipsec_pcscf/cmd.c
+@@ -76,7 +76,6 @@ extern int ipsec_client_port;
+ extern int ipsec_server_port;
+ extern int ipsec_max_connections;
+ 
+-extern atomic_t *ipsec_reconfig_flag;
+ extern unsigned int ipsec_init_flag;
+ 
+ // check http://www.asipto.com/pub/kamailio-devel-guide/#c16return_values
+@@ -2466,27 +2465,24 @@ cleanup:
+ 	return ret;
+ }
+ 
+-int ipsec_reconfig()
++static int no_contacts(void)
+ {
+-	int ret;
+-
+-	if(ul.get_number_of_contacts() != 0) {
+-		return 0;
+-	}
++	return ul.get_number_of_contacts() == 0;
++}
+ 
+-	if(atomic_get(ipsec_reconfig_flag) != 0) {
+-		LM_DBG("reconfig already called\n");
++// Flush the tunnels and free every SPI pair when there are no contacts left.
++// The check and the flush both run with the SPI list locked: a tunnel is
++// installed with a pair acquired after its contact was inserted, so either
++// that contact is counted and nothing is flushed, or the pair is acquired, and
++// the tunnel installed, only after the flush.
++int ipsec_reconfig()
++{
++	// the usual case, without taking the lock
++	if(!no_contacts()) {
+ 		return 0;
+ 	}
+-	atomic_set(ipsec_reconfig_flag, 1);
+-
+-	if(clean_spi_list() != 0) {
+-		return 1;
+-	}
+ 
+-	ret = ipsec_cleanall();
+-	atomic_set(ipsec_reconfig_flag, 0);
+-	return ret;
++	return clean_spi_list_if(no_contacts, ipsec_cleanall);
+ }
+ 
+ typedef struct restore_ctx
+diff --git a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
+index 35da71972d..201d791717 100644
+--- a/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
++++ b/src/modules/ims_ipsec_pcscf/ims_ipsec_pcscf_mod.c
+@@ -24,7 +24,6 @@
+  *
+  */
+ 
+-#include "../../core/atomic_ops.h"
+ #include "../../core/sr_module.h"
+ #include "../../core/mod_fix.h"
+ #include "../../core/globals.h"
+@@ -78,7 +77,6 @@ static int unregister_fixup_free(void **param, int param_no);
+ extern int bind_ipsec_pcscf(usrloc_api_t *api);
+ 
+ unsigned int ipsec_init_flag = 0;
+-atomic_t *ipsec_reconfig_flag = NULL;
+ 
+ /* clang-format off */
+ 
+@@ -436,12 +434,6 @@ static int mod_init(void)
+ 				ipsec_client_port, ipsec_server_port, ipsec_max_connections);
+ 	}
+ 
+-	if((ipsec_reconfig_flag = shm_malloc(sizeof(atomic_t))) == NULL) {
+-		SHM_MEM_ERROR;
+-		return -1;
+-	}
+-	atomic_set(ipsec_reconfig_flag, 0);
+-
+ 	// The tunnels are restored in the first SIP worker (see child_init()).
+ 	// The others must not create tunnels or hand out SPI pairs until it is
+ 	// done, or it could flush their tunnels or find the pairs it reserves
+@@ -476,10 +468,6 @@ static void mod_destroy(void)
+ 	if(destroy_spi_gen() != 0) {
+ 		LM_ERR("Error destroying spi generator\n");
+ 	}
+-
+-	if(ipsec_reconfig_flag) {
+-		shm_free(ipsec_reconfig_flag);
+-	}
+ }
+ 
+ static int child_init(int rank)
+diff --git a/src/modules/ims_ipsec_pcscf/spi_gen.c b/src/modules/ims_ipsec_pcscf/spi_gen.c
+index fabf042c21..a739e660df 100644
+--- a/src/modules/ims_ipsec_pcscf/spi_gen.c
++++ b/src/modules/ims_ipsec_pcscf/spi_gen.c
+@@ -327,16 +327,11 @@ uint16_t spi_get_owner(uint32_t spi_cid, uint32_t spi_sid)
+ 	return owner;
+ }
+ 
+-int clean_spi_list()
++// Make every pair free again. The caller holds spis_lock.
++static void reset_spi_list(void)
+ {
+ 	uint32_t j;
+ 
+-	if(!spi_data) {
+-		return 1;
+-	}
+-
+-	lock_get(&spi_data->spis_lock);
+-
+ 	for(j = 0; j < MAX_HASH_SPI; j++) {
+ 		destroy_list(&spi_data->used_spis[j]);
+ 	}
+@@ -346,12 +341,39 @@ int clean_spi_list()
+ 	spi_data->cport_next = spi_data->sport_next = 0;
+ 
+ 	spi_data->spi_val = spi_data->min_spi;
++}
++
++int clean_spi_list()
++{
++	if(!spi_data) {
++		return 1;
++	}
+ 
++	lock_get(&spi_data->spis_lock);
++	reset_spi_list();
+ 	lock_release(&spi_data->spis_lock);
+ 
+ 	return 0;
+ }
+ 
++int clean_spi_list_if(int (*unused)(void), int (*cleanup)(void))
++{
++	int ret = 0;
++
++	if(!spi_data) {
++		return -1;
++	}
++
++	lock_get(&spi_data->spis_lock);
++	if(unused()) {
++		reset_spi_list();
++		ret = cleanup();
++	}
++	lock_release(&spi_data->spis_lock);
++
++	return ret;
++}
++
+ int destroy_spi_gen()
+ {
+ 	if(!spi_data) {
+diff --git a/src/modules/ims_ipsec_pcscf/spi_gen.h b/src/modules/ims_ipsec_pcscf/spi_gen.h
+index 5aa0e05084..2add60d2bc 100644
+--- a/src/modules/ims_ipsec_pcscf/spi_gen.h
++++ b/src/modules/ims_ipsec_pcscf/spi_gen.h
+@@ -37,6 +37,10 @@ int init_spi_gen(uint32_t spi_start_val, uint32_t spi_range,
+ 		uint32_t sport_start_val, uint32_t cport_start_val,
+ 		uint32_t port_range);
+ int clean_spi_list();
++// With the list locked, so that no pair can be acquired meanwhile: when
++// unused() says no pair is in use, make every pair free again and run
++// cleanup(). Returns cleanup()'s result, 0 when it did not run.
++int clean_spi_list_if(int (*unused)(void), int (*cleanup)(void));
+ int destroy_spi_gen();
+ uint32_t acquire_spi(uint32_t *spi_cid, uint32_t *spi_sid, uint16_t *cport,
+ 		uint16_t *sport, uint16_t avoid_a, uint16_t avoid_b);

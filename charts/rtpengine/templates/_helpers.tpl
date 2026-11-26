@@ -177,3 +177,104 @@ Call with (dict "root" $ "i" <ordinal>).
 {{- define "rtpengine.ng.listen" -}}
 {{- printf "%s-%d:%v" (include "rtpengine.name" .root) (int .i) .root.Values.service.port -}}
 {{- end }}
+
+{{/*
+The address families the BGP sessions carry: "4" for an IPv4 peer, "6" for an
+IPv6 one, as a JSON list (`fromJsonArray`). A session carries the one family
+its own address is in, so the families announced are the families peered.
+
+Call with the root context.
+*/}}
+{{- define "rtpengine.bgp.families" -}}
+{{- $f := list -}}
+{{- range $peer := .Values.bgp.peers -}}
+{{- $f = append $f (ternary 6 4 (contains ":" (toString $peer))) -}}
+{{- end -}}
+{{- toJson (uniq $f) -}}
+{{- end }}
+
+{{/*
+The names of the BIRD protocols that announce the media addresses, one per
+address and family, separated by spaces: what the probe loop and `preStop`
+enable and disable. The configuration (bird.yaml) defines them under the same
+names.
+
+Call with the root context.
+*/}}
+{{- define "rtpengine.bgp.protocols" -}}
+{{- $names := list -}}
+{{- range $k, $_ := .Values.addresses -}}
+{{- range $fam := include "rtpengine.bgp.families" $ | fromJsonArray -}}
+{{- $names = append $names (printf "addr%d_v%d" $k (int $fam)) -}}
+{{- end -}}
+{{- end -}}
+{{- join " " $names -}}
+{{- end }}
+
+{{/*
+The name of the media interface the BGP addresses belong to: `bgp.interface`,
+or the first entry of `media.interfaces`.
+
+Call with the root context.
+*/}}
+{{- define "rtpengine.bgp.interface" -}}
+{{- .Values.bgp.interface | default (first .Values.media.interfaces).name -}}
+{{- end }}
+
+{{/*
+Check `bgp` against `addresses` and `replicaCount`, and fail the render rather
+than announce something that cannot work: a pair has one address per replica
+and no more than two replicas, a session needs a router and an AS to be
+external to, and a peer of one family announces nothing unless every address has
+that family.
+
+Call with the root context. Renders nothing.
+*/}}
+{{- define "rtpengine.bgp.validate" -}}
+{{- if .Values.bgp.enabled -}}
+{{- $n := int .Values.replicaCount -}}
+{{- if gt $n 2 }}
+{{- fail (printf "rtpengine: bgp.enabled with replicaCount %d; a pair is two replicas, more capacity is another release" $n) }}
+{{- end -}}
+{{- if ne (len .Values.addresses) $n }}
+{{- fail (printf "rtpengine: bgp.enabled needs one address per replica; replicaCount is %d and addresses has %d" $n (len .Values.addresses)) }}
+{{- end -}}
+{{- if not .Values.bgp.peers }}{{- fail "rtpengine: bgp.enabled needs bgp.peers, the router addresses on the media network" }}{{- end -}}
+{{- if or (not .Values.bgp.localAs) (not .Values.bgp.peerAs) }}
+{{- fail "rtpengine: bgp.localAs and bgp.peerAs are both required" }}
+{{- end -}}
+{{- if eq (int .Values.bgp.localAs) (int .Values.bgp.peerAs) }}
+{{- fail "rtpengine: bgp.localAs equals bgp.peerAs; the secondary route is told apart by AS path prepending, which an internal session does not do" }}
+{{- end -}}
+{{- $want := include "rtpengine.bgp.interface" . -}}
+{{- $found := false -}}
+{{- $names := list -}}
+{{- range $if := .Values.media.interfaces -}}
+{{- $names = append $names $if.name -}}
+{{- if eq $if.name $want -}}
+{{- $found = true -}}
+{{- if $if.alias }}
+{{- fail (printf "rtpengine: bgp.interface %q is an alias; name the interface it stands for" $want) }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $found }}
+{{- fail (printf "rtpengine: bgp.interface %q is not in media.interfaces" $want) }}
+{{- end -}}
+{{- if contains ":" $want }}
+{{- fail (printf "rtpengine: bgp.interface %q is in a round-robin group; the pair's addresses are not" $want) }}
+{{- end -}}
+{{- range $k := until $n -}}
+{{- if has (printf "%s-%d" $want $k) $names }}
+{{- fail (printf "rtpengine: media.interfaces has %s-%d, the name bgp.interface %q takes for addresses[%d]" $want $k $want $k) }}
+{{- end -}}
+{{- end -}}
+{{- range $fam := include "rtpengine.bgp.families" . | fromJsonArray -}}
+{{- range $k, $a := $.Values.addresses -}}
+{{- if not (index $a (printf "v%d" (int $fam))) }}
+{{- fail (printf "rtpengine: bgp.peers has an IPv%d peer, so addresses[%d] needs v%d" (int $fam) $k (int $fam)) }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

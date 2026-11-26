@@ -1,0 +1,62 @@
+Cancel an early ims_dialog with 500 and a CANCEL with Reason 503.
+
+When a module asks ims_dialog to end a dialog that is still being set up
+(ims_qos when the PCRF reports the media bearer lost, ims_charging, a
+deregistration), dlg_terminate() answered the caller with 488 (Not
+Acceptable Here) and let tm CANCEL the forwarded INVITE with that code as
+its Reason. TS 24.229 5.2.8.1.1 has the P-CSCF answer the original INVITE
+with 500 (Server Internal Error) and CANCEL towards the callee with a Reason
+header carrying 503 (Service Unavailable) when no cause is known; 5.4.5.1.1
+has the S-CSCF CANCEL and send "an appropriate response", which 500 is.
+
+CANCEL the branches first with Reason cause 503 (the local reply would
+otherwise CANCEL them with its own code), then reply 500.
+
+Outside a SIP worker (ims_qos, ims_charging and usrloc timers) it also
+called t_release() on the INVITE right after the reply, so tm dropped the
+transaction: the final reply was sent once, never retransmitted, and the
+caller's ACK had nothing to match. Reply with t_reply_trans() on the dialog's
+transaction and leave it to tm.
+
+diff --git a/src/modules/ims_dialog/dlg_req_within.c b/src/modules/ims_dialog/dlg_req_within.c
+index 8117eba5c3..6bf94ee3f2 100644
+--- a/src/modules/ims_dialog/dlg_req_within.c
++++ b/src/modules/ims_dialog/dlg_req_within.c
+@@ -326,6 +326,7 @@ int dlg_terminate(struct dlg_cell *dlg, struct sip_msg *msg, str *reason,
+ {
+ 
+ 	struct cell *t;
++	struct cancel_info cancel_data;
+ 	str default_reason = {"call failed", 11};
+ 	int cfg_cmd = 0;
+ 	str default_extra_headers = {0, 0};
+@@ -373,16 +374,25 @@ int dlg_terminate(struct dlg_cell *dlg, struct sip_msg *msg, str *reason,
+ 
+ 				//TODO: here we are assuming none of the CALLEE's have sent a 200, in
+ 				//which case we would have to send an ACK, BYE
+-				//so right now - we are sending 488 to caller and CANCEL's to all CALLEEs
+ 
++				/* TS 24.229 5.2.8.1.1 (P-CSCF) and 5.4.5.1.1 (S-CSCF):
++				 * CANCEL the forwarded INVITE, with a Reason 503 (Service
++				 * Unavailable) as no cause is known, and answer the caller
++				 * with 500 (Server Internal Error). CANCEL first: the reply
++				 * would CANCEL with its own code as the cause. */
+ 				LM_DBG("tearing down dialog in EARLY state - no clients "
+ 					   "responded > 199\n");
++				init_cancel_info(&cancel_data);
++				d_tmb.prepare_to_cancel(t, &cancel_data.cancel_bitmap, 0);
++				cancel_data.reason.cause = 503;
++				d_tmb.cancel_uacs(t, &cancel_data, F_CANCEL_B_KILL);
+ 				if(cfg_cmd) {
+-					d_tmb.t_reply(msg, 488, reason->s);
++					d_tmb.t_reply(msg, 500, reason->s);
+ 					d_tmb.t_release(msg);
+ 				} else {
+-					d_tmb.t_reply(t->uas.request, 488, reason->s);
+-					d_tmb.t_release(t->uas.request);
++					/* outside the transaction's processing; tm keeps it
++					 * to retransmit the reply until the ACK */
++					d_tmb.t_reply_trans(t, t->uas.request, 500, reason->s);
+ 				}
+ 			}
+ 		} else {
