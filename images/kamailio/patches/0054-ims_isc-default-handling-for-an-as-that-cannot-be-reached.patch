@@ -1,0 +1,148 @@
+Apply the iFC's default handling to an AS that cannot be reached at all.
+
+dc1554cf35 made isc_forward() return ISC_RETURN_TERMINATE or
+ISC_RETURN_ERROR when the relay to the AS fails, but it tests the
+result of t_relay() with if(ret): tm's t_relay() returns < 0 when it
+fails, so a relay that failed was "forwarded" and those return codes
+were never seen. An AS whose name does not resolve - stopped, scaled to
+zero, or misspelled - then got no default handling (TS 24.229 5.4.3.2,
+5.4.3.3): in a request route tm sent its own delayed 5xx/478 at the end
+of the script, whatever the iFC said, and the session failed even with
+SESSION_CONTINUED. Returning the error codes alone would not have helped
+either: the script carries on to the callee while tm's delayed error
+reply is still pending, so the caller gets both.
+
+Test ret > 0, and apply the default handling in the module, the way
+isc_match_filter() already does for an AS that fails to answer:
+
+- tm's internal reply is disabled for the relay to the AS
+  (T_DISABLE_INTERNAL_REPLY, restored afterwards), so a failure is
+  answered by the default handling only;
+- SESSION_TERMINATED answers 500 "Server Internal Error (AS Failure)"
+  and returns ISC_RETURN_BREAK, which ends the script;
+- SESSION_CONTINUED sends the request back to the S-CSCF with only the
+  ISC mark, the Route an AS returns a request with, so triggering
+  resumes at the next iFC. It goes to my_uri, where the mark sends an
+  AS too, not to the address the request came in on: a wildcard or
+  dual-stack socket does not know that one. If that fails too, 500 as
+  above.
+
+isc_mark_set() no longer adds a second P-Served-User when it marks a
+request for ourselves (no match): the one added for the AS is there.
+
+diff --git a/src/modules/ims_isc/isc.c b/src/modules/ims_isc/isc.c
+index 6cdfaefa34..6e5409dc21 100644
+--- a/src/modules/ims_isc/isc.c
++++ b/src/modules/ims_isc/isc.c
+@@ -48,6 +48,29 @@
+ 
+ #include "isc.h"
+ 
++/**
++ * Sends the request back to this S-CSCF, marked to resume triggering after
++ * the AS that could not be reached - what that AS does with a request it lets
++ * through, and what the default handling IFC_SESSION_CONTINUED asks for.
++ * @param msg - the SIP message
++ * @param mark - the mark of the AS that could not be reached
++ * @returns > 0 if the request was sent, <= 0 if not
++ */
++static int isc_forward_to_self(struct sip_msg *msg, isc_mark *mark)
++{
++	/* only "Route: <mark>", without the AS */
++	isc_mark_set(msg, NULL, mark);
++
++	/* my_uri, where the mark sends an AS with the request; not the address
++	 * the request came in on, which a wildcard socket does not know */
++	if(set_dst_uri(msg, &isc_my_uri_sip) < 0)
++		return -1;
++	/* the failure route appended a branch to the AS */
++	clear_branches();
++
++	return isc_tmb.t_relay(msg, 0, 0);
++}
++
+ /**
+  *	Forwards the message to the application server.
+  * - Marks the message
+@@ -57,13 +80,15 @@
+  * @param m  - the isc_match that matched with info about where to forward it
+  * @param mark  - the isc_mark that should be used to mark the message
+  * @param status - the state of the isc_mark
+- * @returns #ISC_RETURN_TRUE if OK, #ISC_RETURN_ERROR if not
++ * @returns #ISC_RETURN_TRUE if OK, #ISC_RETURN_BREAK if the request was
++ * answered, #ISC_RETURN_ERROR if not
+  */
+ int isc_forward(struct sip_msg *msg, isc_match *m, isc_mark *mark,
+ 		enum isc_mark_status status)
+ {
+ 	struct cell *t;
+ 	ticks_t fr_timeout, fr_inv_timeout;
++	unsigned short no_internal_reply;
+ 	int ret;
+ 	LM_DBG("marking for AS <%.*s>\n", m->server_name.len, m->server_name.s);
+ 
+@@ -116,22 +141,40 @@ int isc_forward(struct sip_msg *msg, isc_match *m, isc_mark *mark,
+ 	t->fr_timeout = S_TO_TICKS(isc_fr_timeout) / 1000;
+ 	t->fr_inv_timeout = S_TO_TICKS(isc_fr_inv_timeout) / 1000;
+ 
+-	/* send it */
++	/* send it - if it cannot be sent, the default handling below answers
++	 * it, not tm's internal reply (in a request route a delayed one, sent
++	 * at the end of the script whatever became of the request) */
++	no_internal_reply = t->flags & T_DISABLE_INTERNAL_REPLY;
++	t->flags |= T_DISABLE_INTERNAL_REPLY;
+ 	ret = isc_tmb.t_relay(msg, 0, 0);
+ 
+ 	/* recover the timeouts */
+ 	t->fr_timeout = fr_timeout;
+ 	t->fr_inv_timeout = fr_inv_timeout;
+-	if(ret) {
++	if(ret > 0) {
++		if(!no_internal_reply)
++			t->flags &= ~T_DISABLE_INTERNAL_REPLY;
+ 		LM_INFO("Message forwarded to AS (%.*s)\n", STR_FMT(&m->server_name));
+ 		return ISC_RETURN_TRUE;
+-	} else {
+-		LM_ERR("Error forwarding message to AS (%.*s)\n",
++	}
++
++	/* t_relay() fails with < 0: an AS that cannot be reached at all - its
++	 * name does not resolve, or there is nothing to send to it with - gets
++	 * the default handling of the iFC that named it, like one that does not
++	 * answer (TS 24.229 5.4.3.2, 5.4.3.3) */
++	LM_ERR("Error forwarding message to AS (%.*s): %d\n",
++			STR_FMT(&m->server_name), ret);
++	if(m->default_handling != IFC_SESSION_TERMINATED
++			&& isc_forward_to_self(msg, mark) > 0) {
++		if(!no_internal_reply)
++			t->flags &= ~T_DISABLE_INTERNAL_REPLY;
++		LM_INFO("AS (%.*s) skipped, default handling session continued\n",
+ 				STR_FMT(&m->server_name));
+-		/* Depending on the default handling, return a different RC */
+-		if(m->default_handling == IFC_SESSION_TERMINATED)
+-			return ISC_RETURN_TERMINATE;
+-		else
+-			return ISC_RETURN_ERROR;
++		return ISC_RETURN_TRUE;
+ 	}
++	if(!no_internal_reply)
++		t->flags &= ~T_DISABLE_INTERNAL_REPLY;
++	isc_tmb.t_reply(msg, IFC_AS_UNAVAILABLE_STATUS_CODE,
++			"Server Internal Error (AS Failure)");
++	return ISC_RETURN_BREAK;
+ }
+diff --git a/src/modules/ims_isc/mark.c b/src/modules/ims_isc/mark.c
+index a1a95300cf..23d01a90db 100644
+--- a/src/modules/ims_isc/mark.c
++++ b/src/modules/ims_isc/mark.c
+@@ -315,7 +315,9 @@ int isc_mark_set(struct sip_msg *msg, isc_match *match, isc_mark *mark)
+ 	if(match)
+ 		as = match->server_name;
+ 	isc_mark_write_route(msg, &as, &route);
+-	if(add_p_served_user) {
++	/* The mark alone sends the request back to us, not to an AS: the
++	 * P-Served-User added for the AS is still there */
++	if(match && add_p_served_user) {
+ 		isc_mark_write_psu(msg, mark);
+ 	}
+ 	LM_DBG("NEW mark <%s>\n", chr_mark);
