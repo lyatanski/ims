@@ -1,0 +1,2658 @@
+x2: new module, the LI_X2 interface of an IRI-POI.
+
+x2_ims_message(dests, xid, correlation, pdir, sdir, matched) reports the SIP
+message at hand - as received, or in onsend_route as sent - as an IMSMessage
+xIRI (3GPP TS 33.128 7.12.4.2.1) to the Destinations (MDF2s) of an X1 Task.
+Which messages, for which Tasks, to which Destinations, stays with the
+config, which holds what LI_X1 provisioned.
+
+A request reported from a request route also has the replies the node makes
+for it reported, the other way, through a TMCB_RESPONSE_OUT callback: tm runs
+no route for a local reply (onsend_route only sees relayed ones), and a
+REGISTER's 401 and 200 or a local error are the node's own.
+
+The payload is a BER XIRIPayload of TS33128Payloads r19 version8 (Payload
+Format 2), in an X2 PDU of ETSI TS 103 221-2 V1.10.1 (version 6), with the
+conditional attributes TS 33.128 5.3.1/5.3.2 ask for: Sequence Number,
+Timestamp, NFID and IPID (modparams), the source and destination address and
+port of the SIP message, and the Matched Target Identifier. The Correlation
+ID is the Task's, or one hashed from the Call-ID, which every IRI-POI the
+dialog crosses comes to alike.
+
+A worker only builds the PDU, in shared memory, and writes its address to a
+pipe. A process of its own delivers it: it numbers it in its context (XID,
+Correlation ID), keeps one connection per Destination, over TCP with the
+Keepalives of TS 103 221-2 6.2.4 both ways, or UDP, and queues a Destination's
+PDUs while it is down, up to dest_queue_size. A full queue, or a full pipe,
+drops the xIRI and counts it; nothing blocks a SIP worker. RPC x2.list and
+x2.stats show the Destinations and the drops.
+
+Not done: the TLS profile of TS 103 221-2 6.2 (the connections are plain
+TCP), the other IMS records (StartOfInterceptionForActiveIMSSession,
+IMSCCUnavailable), and reporting a Destination's faults over X1.
+
+The doc/x2.xml is not optional: src/modules/CMakeLists.txt returns from the
+loop over INCLUDE_MODULES at the first module without one, and every module
+after it is left out of the build without an error. Nor is the README made
+from it (the x2_readme target): the install step fails without one.
+
+diff --git a/src/modules/x2/CMakeLists.txt b/src/modules/x2/CMakeLists.txt
+new file mode 100644
+index 0000000000..9c8de96396
+--- /dev/null
++++ b/src/modules/x2/CMakeLists.txt
+@@ -0,0 +1,3 @@
++file(GLOB MODULE_SOURCES "*.c")
++
++add_library(${module_name} SHARED ${MODULE_SOURCES})
+diff --git a/src/modules/x2/Makefile b/src/modules/x2/Makefile
+new file mode 100644
+index 0000000000..51502f9249
+--- /dev/null
++++ b/src/modules/x2/Makefile
+@@ -0,0 +1,12 @@
++#
++# x2 module makefile
++#
++#
++# WARNING: do not run this directly, it should be run by the main Makefile
++
++include ../../Makefile.defs
++auto_gen=
++NAME=x2.so
++LIBS=
++
++include ../../Makefile.modules
+diff --git a/src/modules/x2/README b/src/modules/x2/README
+new file mode 100644
+index 0000000000..891ff4e4d9
+--- /dev/null
++++ b/src/modules/x2/README
+@@ -0,0 +1,345 @@
++X2 Module
++
++   Copyright © 2026 kamailio.org
++     __________________________________________________________________
++
++   Table of Contents
++
++   1. Admin Guide
++
++        1. Overview
++        2. Dependencies
++
++              2.1. Kamailio Modules
++              2.2. External Libraries or Applications
++
++        3. Parameters
++
++              3.1. nfid (str)
++              3.2. ipid (str)
++              3.3. keepalive_interval (int)
++              3.4. keepalive_timeout (int)
++              3.5. connect_timeout (int)
++              3.6. reconnect_interval (int)
++              3.7. idle_timeout (int)
++              3.8. queue_size (int)
++              3.9. dest_queue_size (int)
++              3.10. max_destinations (int)
++              3.11. seq_lifetime (int)
++
++        4. Functions
++
++              4.1. x2_ims_message(dests, xid, correlation, pdir, sdir,
++                      matched)
++
++        5. RPC Commands
++
++              5.1. x2.list
++              5.2. x2.stats
++
++   List of Examples
++
++   1.1. Set nfid parameter
++   1.2. Set ipid parameter
++   1.3. Set keepalive_interval parameter
++   1.4. Set keepalive_timeout parameter
++   1.5. Set connect_timeout parameter
++   1.6. Set reconnect_interval parameter
++   1.7. Set idle_timeout parameter
++   1.8. Set queue_size parameter
++   1.9. Set dest_queue_size parameter
++   1.10. Set max_destinations parameter
++   1.11. Set seq_lifetime parameter
++   1.12. x2_ims_message usage
++   1.13. x2.list usage
++   1.14. x2.stats usage
++
++Chapter 1. Admin Guide
++
++   Table of Contents
++
++   1. Overview
++   2. Dependencies
++
++        2.1. Kamailio Modules
++        2.2. External Libraries or Applications
++
++   3. Parameters
++
++        3.1. nfid (str)
++        3.2. ipid (str)
++        3.3. keepalive_interval (int)
++        3.4. keepalive_timeout (int)
++        3.5. connect_timeout (int)
++        3.6. reconnect_interval (int)
++        3.7. idle_timeout (int)
++        3.8. queue_size (int)
++        3.9. dest_queue_size (int)
++        3.10. max_destinations (int)
++        3.11. seq_lifetime (int)
++
++   4. Functions
++
++        4.1. x2_ims_message(dests, xid, correlation, pdir, sdir, matched)
++
++   5. RPC Commands
++
++        5.1. x2.list
++        5.2. x2.stats
++
++1. Overview
++
++   This module is the LI_X2 interface of an IRI-POI in a SIP node: it
++   reports SIP messages as IMSMessage xIRI records (3GPP TS 33.128
++   7.12.4.2.1) to the MDF2, in X2 PDUs (ETSI TS 103 221-2).
++
++   The configuration decides which messages are intercepted, for which
++   Tasks (XIDs) and to which Destinations, from what LI_X1 provisioned.
++   The module encodes the xIRI, a BER XIRIPayload of the TS33128Payloads
++   ASN.1 (r19 version 8), with the Timestamp, Sequence Number, NFID, IPID,
++   address, port and Matched Target Identifier attributes, and delivers
++   it.
++
++   Delivery is done by a process of its own: a worker hands it the PDU and
++   goes on. It keeps a connection to each Destination, over TCP, sends the
++   Keepalives of ETSI TS 103 221-2 6.2.4 and answers those of the MDF, and
++   queues the PDUs of a Destination that is down until it is back, up to
++   dest_queue_size. A Destination may also be UDP, with a datagram per PDU
++   and no Keepalives.
++
++   The TLS profile of ETSI TS 103 221-2 6.2 is not implemented: the X2
++   connections are plain TCP, and must only cross the LI network.
++
++2. Dependencies
++
++   2.1. Kamailio Modules
++   2.2. External Libraries or Applications
++
++2.1. Kamailio Modules
++
++   The following modules must be loaded before this module:
++     * none.
++
++2.2. External Libraries or Applications
++
++   The following libraries or applications must be installed before
++   running Kamailio with this module loaded:
++     * none.
++
++3. Parameters
++
++   3.1. nfid (str)
++   3.2. ipid (str)
++   3.3. keepalive_interval (int)
++   3.4. keepalive_timeout (int)
++   3.5. connect_timeout (int)
++   3.6. reconnect_interval (int)
++   3.7. idle_timeout (int)
++   3.8. queue_size (int)
++   3.9. dest_queue_size (int)
++   3.10. max_destinations (int)
++   3.11. seq_lifetime (int)
++
++3.1. nfid (str)
++
++   Network Function ID (NFID) conditional attribute of every X2 PDU, which
++   3GPP TS 33.128 5.3.1 has identify the NF: its FQDN, for example. Not
++   sent when empty.
++
++   Default value is empty.
++
++   Example 1.1. Set nfid parameter
++...
++modparam("x2", "nfid", "scscf.ims.example.org")
++...
++
++3.2. ipid (str)
++
++   Interception Point ID (IPID) conditional attribute of every X2 PDU: the
++   POI within the NF. Not sent when empty.
++
++   Default value is empty.
++
++   Example 1.2. Set ipid parameter
++...
++modparam("x2", "ipid", "scscf-1")
++...
++
++3.3. keepalive_interval (int)
++
++   Seconds between the Keepalives sent on a TCP connection to a
++   Destination, TIME_P1 of ETSI TS 103 221-2 6.2.4. 0 sends none.
++
++   Default value is 60.
++
++   Example 1.3. Set keepalive_interval parameter
++...
++modparam("x2", "keepalive_interval", 30)
++...
++
++3.4. keepalive_timeout (int)
++
++   Seconds a Keepalive may go unacknowledged before the connection is
++   closed and opened again, TIME_P2 of ETSI TS 103 221-2 6.2.4. Longer
++   than keepalive_interval.
++
++   Default value is 180.
++
++   Example 1.4. Set keepalive_timeout parameter
++...
++modparam("x2", "keepalive_timeout", 90)
++...
++
++3.5. connect_timeout (int)
++
++   Seconds a TCP connection to a Destination may take to open.
++
++   Default value is 5.
++
++   Example 1.5. Set connect_timeout parameter
++...
++modparam("x2", "connect_timeout", 2)
++...
++
++3.6. reconnect_interval (int)
++
++   Seconds between attempts to connect to a Destination that has PDUs
++   queued.
++
++   Default value is 5.
++
++   Example 1.6. Set reconnect_interval parameter
++...
++modparam("x2", "reconnect_interval", 1)
++...
++
++3.7. idle_timeout (int)
++
++   Seconds after the last xIRI for a Destination after which its
++   connection is closed and its entry freed. 0 keeps it for good.
++
++   Default value is 600.
++
++   Example 1.7. Set idle_timeout parameter
++...
++modparam("x2", "idle_timeout", 3600)
++...
++
++3.8. queue_size (int)
++
++   Octets of PDUs not sent yet, all Destinations together, above which an
++   xIRI is dropped instead of queued.
++
++   Default value is 16777216.
++
++   Example 1.8. Set queue_size parameter
++...
++modparam("x2", "queue_size", 67108864)
++...
++
++3.9. dest_queue_size (int)
++
++   Octets of PDUs a Destination may have queued, while it is down or slow,
++   above which its PDUs are dropped.
++
++   Default value is 4194304.
++
++   Example 1.9. Set dest_queue_size parameter
++...
++modparam("x2", "dest_queue_size", 16777216)
++...
++
++3.10. max_destinations (int)
++
++   Destinations delivered to at once.
++
++   Default value is 32.
++
++   Example 1.10. Set max_destinations parameter
++...
++modparam("x2", "max_destinations", 8)
++...
++
++3.11. seq_lifetime (int)
++
++   Seconds a Sequence Number context (an XID and a Correlation ID) is kept
++   after its last PDU. One unused for longer starts again at 0.
++
++   Default value is 3600.
++
++   Example 1.11. Set seq_lifetime parameter
++...
++modparam("x2", "seq_lifetime", 86400)
++...
++
++4. Functions
++
++   4.1. x2_ims_message(dests, xid, correlation, pdir, sdir, matched)
++
++4.1.  x2_ims_message(dests, xid, correlation, pdir, sdir, matched)
++
++   Reports the SIP message at hand as an IMSMessage xIRI. In onsend_route
++   it is the message as it is sent, between the local socket and the next
++   hop; elsewhere the message as it was received.
++
++   Called from a request route with tm loaded, it also reports the replies
++   Kamailio itself makes for the request - a local reply, or the 408 of a
++   timeout - with the Payload Direction the other way (2 and 3 swapped).
++   No route sees those. Replies relayed from the next hop are left to the
++   config, which reports them as they come in.
++
++   On a socket bound to the wildcard address (0.0.0.0 or [::]) the local
++   end of the message is the address the kernel takes towards the peer.
++
++   The parameters, all strings that may hold variables:
++     * dests - the Destinations, up to 8, separated by spaces or commas,
++       each [tcp:|udp:]address:port, an IPv6 address in brackets. TCP when
++       no protocol is given.
++     * xid - the XID of the Task, or its ProductID when it has one, as a
++       UUID.
++     * correlation - the Correlation ID, decimal. Empty for one made from
++       the Call-ID, the same for every message of a dialog at every node
++       that reports it.
++     * pdir - the Payload Direction of ETSI TS 103 221-2 5.2.6: 1 unknown,
++       2 to the target, 3 from the target, 4 both, 5 not applicable.
++     * sdir - the SessionDirection of the record: 1 fromTarget, 2
++       toTarget, 3 combined, 4 indeterminate.
++     * matched - the Matched Target Identifier, as ETSI TS 103 221-2
++       5.3.18 has it, e.g. <sipUri>sip:alice@example.org</sipUri>. Not
++       sent when empty.
++
++   Returns 1 when the PDU is queued for delivery, -1 when it is not.
++
++   This function can be used from REQUEST_ROUTE, FAILURE_ROUTE,
++   ONREPLY_ROUTE, BRANCH_ROUTE and ONSEND_ROUTE.
++
++   Example 1.12. x2_ims_message usage
++...
++x2_ims_message("tcp:192.0.2.10:6000", "2b36a78b-b628-416d-bd22-404e68a0cd36",
++        "", "3", "1", "<sipUri>sip:alice@example.org</sipUri>");
++...
++
++5. RPC Commands
++
++   5.1. x2.list
++   5.2. x2.stats
++
++5.1.  x2.list
++
++   Lists the Destinations: state, PDUs queued, sent and dropped, and
++   connections made.
++
++   Example 1.13. x2.list usage
++...
++kamcmd x2.list
++...
++
++5.2.  x2.stats
++
++   The octets of PDUs not sent yet, and the PDUs dropped before they
++   reached a Destination's queue.
++
++   Example 1.14. x2.stats usage
++...
++kamcmd x2.stats
++...
+diff --git a/src/modules/x2/doc/Makefile b/src/modules/x2/doc/Makefile
+new file mode 100644
+index 0000000000..49484c5a62
+--- /dev/null
++++ b/src/modules/x2/doc/Makefile
+@@ -0,0 +1,4 @@
++docs = x2.xml
++
++docbook_dir = ../../../../doc/docbook
++include $(docbook_dir)/Makefile.module
+diff --git a/src/modules/x2/doc/x2.xml b/src/modules/x2/doc/x2.xml
+new file mode 100644
+index 0000000000..bcc8128c1e
+--- /dev/null
++++ b/src/modules/x2/doc/x2.xml
+@@ -0,0 +1,24 @@
++<?xml version="1.0" encoding='ISO-8859-1'?>
++<!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN"
++"http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd" [
++
++<!-- Include general documentation entities -->
++<!ENTITY % docentities SYSTEM "../../../../doc/docbook/entities.xml">
++%docentities;
++
++]>
++
++<book>
++	<bookinfo>
++	<title>X2 Module</title>
++	<productname class="trade">kamailio.org</productname>
++	<copyright>
++		<year>2026</year>
++		<holder>kamailio.org</holder>
++	</copyright>
++	</bookinfo>
++	<toc></toc>
++
++	<xi:include  xmlns:xi="http://www.w3.org/2001/XInclude" href="x2_admin.xml"/>
++
++</book>
+diff --git a/src/modules/x2/doc/x2_admin.xml b/src/modules/x2/doc/x2_admin.xml
+new file mode 100644
+index 0000000000..d23b19a1b6
+--- /dev/null
++++ b/src/modules/x2/doc/x2_admin.xml
+@@ -0,0 +1,401 @@
++<?xml version="1.0" encoding='ISO-8859-1'?>
++<!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN"
++"http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd" [
++
++<!-- Include general documentation entities -->
++<!ENTITY % docentities SYSTEM "../../../../doc/docbook/entities.xml">
++%docentities;
++
++]>
++<!-- Module User's Guide -->
++
++<chapter>
++
++	<title>&adminguide;</title>
++
++	<section>
++	<title>Overview</title>
++	<para>
++		This module is the LI_X2 interface of an IRI-POI in a SIP node: it
++		reports SIP messages as IMSMessage xIRI records (3GPP TS 33.128
++		7.12.4.2.1) to the MDF2, in X2 PDUs (ETSI TS 103 221-2).
++	</para>
++	<para>
++		The configuration decides which messages are intercepted, for which
++		Tasks (XIDs) and to which Destinations, from what LI_X1 provisioned.
++		The module encodes the xIRI, a BER XIRIPayload of the TS33128Payloads
++		ASN.1 (r19 version 8), with the Timestamp, Sequence Number, NFID,
++		IPID, address, port and Matched Target Identifier attributes, and
++		delivers it.
++	</para>
++	<para>
++		Delivery is done by a process of its own: a worker hands it the PDU and
++		goes on. It keeps a connection to each Destination, over TCP, sends the
++		Keepalives of ETSI TS 103 221-2 6.2.4 and answers those of the MDF,
++		and queues the PDUs of a Destination that is down until it is back, up
++		to <varname>dest_queue_size</varname>. A Destination may also be UDP,
++		with a datagram per PDU and no Keepalives.
++	</para>
++	<para>
++		The TLS profile of ETSI TS 103 221-2 6.2 is not implemented: the X2
++		connections are plain TCP, and must only cross the LI network.
++	</para>
++	</section>
++
++	<section>
++	<title>Dependencies</title>
++	<section>
++		<title>&kamailio; Modules</title>
++		<para>
++		The following modules must be loaded before this module:
++			<itemizedlist>
++			<listitem>
++			<para>
++				<emphasis>none</emphasis>.
++			</para>
++			</listitem>
++			</itemizedlist>
++		</para>
++	</section>
++	<section>
++		<title>External Libraries or Applications</title>
++		<para>
++		The following libraries or applications must be installed before running
++		&kamailio; with this module loaded:
++			<itemizedlist>
++			<listitem>
++			<para>
++				<emphasis>none</emphasis>.
++			</para>
++			</listitem>
++			</itemizedlist>
++		</para>
++	</section>
++	</section>
++
++	<section>
++	<title>Parameters</title>
++	<section id="x2.p.nfid">
++		<title><varname>nfid</varname> (str)</title>
++		<para>
++		Network Function ID (NFID) conditional attribute of every X2 PDU, which 3GPP TS 33.128 5.3.1 has identify the NF: its FQDN, for example. Not sent when empty.
++		</para>
++		<para>
++		<emphasis>
++			Default value is empty.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>nfid</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "nfid", "scscf.ims.example.org")
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.ipid">
++		<title><varname>ipid</varname> (str)</title>
++		<para>
++		Interception Point ID (IPID) conditional attribute of every X2 PDU: the POI within the NF. Not sent when empty.
++		</para>
++		<para>
++		<emphasis>
++			Default value is empty.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>ipid</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "ipid", "scscf-1")
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.keepalive_interval">
++		<title><varname>keepalive_interval</varname> (int)</title>
++		<para>
++		Seconds between the Keepalives sent on a TCP connection to a Destination, TIME_P1 of ETSI TS 103 221-2 6.2.4. 0 sends none.
++		</para>
++		<para>
++		<emphasis>
++			Default value is 60.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>keepalive_interval</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "keepalive_interval", 30)
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.keepalive_timeout">
++		<title><varname>keepalive_timeout</varname> (int)</title>
++		<para>
++		Seconds a Keepalive may go unacknowledged before the connection is closed and opened again, TIME_P2 of ETSI TS 103 221-2 6.2.4. Longer than keepalive_interval.
++		</para>
++		<para>
++		<emphasis>
++			Default value is 180.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>keepalive_timeout</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "keepalive_timeout", 90)
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.connect_timeout">
++		<title><varname>connect_timeout</varname> (int)</title>
++		<para>
++		Seconds a TCP connection to a Destination may take to open.
++		</para>
++		<para>
++		<emphasis>
++			Default value is 5.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>connect_timeout</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "connect_timeout", 2)
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.reconnect_interval">
++		<title><varname>reconnect_interval</varname> (int)</title>
++		<para>
++		Seconds between attempts to connect to a Destination that has PDUs queued.
++		</para>
++		<para>
++		<emphasis>
++			Default value is 5.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>reconnect_interval</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "reconnect_interval", 1)
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.idle_timeout">
++		<title><varname>idle_timeout</varname> (int)</title>
++		<para>
++		Seconds after the last xIRI for a Destination after which its connection is closed and its entry freed. 0 keeps it for good.
++		</para>
++		<para>
++		<emphasis>
++			Default value is 600.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>idle_timeout</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "idle_timeout", 3600)
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.queue_size">
++		<title><varname>queue_size</varname> (int)</title>
++		<para>
++		Octets of PDUs not sent yet, all Destinations together, above which an xIRI is dropped instead of queued.
++		</para>
++		<para>
++		<emphasis>
++			Default value is 16777216.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>queue_size</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "queue_size", 67108864)
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.dest_queue_size">
++		<title><varname>dest_queue_size</varname> (int)</title>
++		<para>
++		Octets of PDUs a Destination may have queued, while it is down or slow, above which its PDUs are dropped.
++		</para>
++		<para>
++		<emphasis>
++			Default value is 4194304.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>dest_queue_size</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "dest_queue_size", 16777216)
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.max_destinations">
++		<title><varname>max_destinations</varname> (int)</title>
++		<para>
++		Destinations delivered to at once.
++		</para>
++		<para>
++		<emphasis>
++			Default value is 32.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>max_destinations</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "max_destinations", 8)
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.p.seq_lifetime">
++		<title><varname>seq_lifetime</varname> (int)</title>
++		<para>
++		Seconds a Sequence Number context (an XID and a Correlation ID) is kept after its last PDU. One unused for longer starts again at 0.
++		</para>
++		<para>
++		<emphasis>
++			Default value is 3600.
++		</emphasis>
++		</para>
++		<example>
++		<title>Set <varname>seq_lifetime</varname> parameter</title>
++		<programlisting format="linespecific">
++...
++modparam("x2", "seq_lifetime", 86400)
++...
++</programlisting>
++		</example>
++	</section>
++	</section>
++
++	<section>
++	<title>Functions</title>
++	<section id="x2.f.x2_ims_message">
++		<title>
++		<function moreinfo="none">x2_ims_message(dests, xid, correlation, pdir, sdir, matched)</function>
++		</title>
++		<para>
++		Reports the SIP message at hand as an IMSMessage xIRI. In
++		onsend_route it is the message as it is sent, between the local socket
++		and the next hop; elsewhere the message as it was received.
++		</para>
++		<para>
++		Called from a request route with tm loaded, it also reports the
++		replies &kamailio; itself makes for the request - a local reply, or
++		the 408 of a timeout - with the Payload Direction the other way (2
++		and 3 swapped). No route sees those. Replies relayed from the next hop
++		are left to the config, which reports them as they come in.
++		</para>
++		<para>
++		On a socket bound to the wildcard address (0.0.0.0 or [::]) the local
++		end of the message is the address the kernel takes towards the peer.
++		</para>
++		<para>
++		The parameters, all strings that may hold variables:
++		</para>
++		<itemizedlist>
++		<listitem><para>
++			<emphasis>dests</emphasis> - the Destinations, up to 8, separated
++			by spaces or commas, each [tcp:|udp:]address:port, an IPv6 address
++			in brackets. TCP when no protocol is given.
++		</para></listitem>
++		<listitem><para>
++			<emphasis>xid</emphasis> - the XID of the Task, or its ProductID
++			when it has one, as a UUID.
++		</para></listitem>
++		<listitem><para>
++			<emphasis>correlation</emphasis> - the Correlation ID, decimal.
++			Empty for one made from the Call-ID, the same for every message of
++			a dialog at every node that reports it.
++		</para></listitem>
++		<listitem><para>
++			<emphasis>pdir</emphasis> - the Payload Direction of ETSI TS 103
++			221-2 5.2.6: 1 unknown, 2 to the target, 3 from the target, 4 both,
++			5 not applicable.
++		</para></listitem>
++		<listitem><para>
++			<emphasis>sdir</emphasis> - the SessionDirection of the record: 1
++			fromTarget, 2 toTarget, 3 combined, 4 indeterminate.
++		</para></listitem>
++		<listitem><para>
++			<emphasis>matched</emphasis> - the Matched Target Identifier, as
++			ETSI TS 103 221-2 5.3.18 has it, e.g. &lt;sipUri&gt;sip:alice@example.org&lt;/sipUri&gt;.
++			Not sent when empty.
++		</para></listitem>
++		</itemizedlist>
++		<para>
++		Returns 1 when the PDU is queued for delivery, -1 when it is not.
++		</para>
++		<para>
++		This function can be used from REQUEST_ROUTE, FAILURE_ROUTE,
++		ONREPLY_ROUTE, BRANCH_ROUTE and ONSEND_ROUTE.
++		</para>
++		<example>
++		<title><function>x2_ims_message</function> usage</title>
++		<programlisting format="linespecific">
++...
++x2_ims_message("tcp:192.0.2.10:6000", "2b36a78b-b628-416d-bd22-404e68a0cd36",
++	"", "3", "1", "&lt;sipUri&gt;sip:alice@example.org&lt;/sipUri&gt;");
++...
++</programlisting>
++		</example>
++	</section>
++	</section>
++
++	<section>
++	<title>RPC Commands</title>
++	<section id="x2.rpc.list">
++		<title>
++		<function moreinfo="none">x2.list</function>
++		</title>
++		<para>
++		Lists the Destinations: state, PDUs queued, sent and dropped, and
++		connections made.
++		</para>
++		<example>
++		<title><function>x2.list</function> usage</title>
++		<programlisting format="linespecific">
++...
++&kamcmd; x2.list
++...
++</programlisting>
++		</example>
++	</section>
++	<section id="x2.rpc.stats">
++		<title>
++		<function moreinfo="none">x2.stats</function>
++		</title>
++		<para>
++		The octets of PDUs not sent yet, and the PDUs dropped before they
++		reached a Destination's queue.
++		</para>
++		<example>
++		<title><function>x2.stats</function> usage</title>
++		<programlisting format="linespecific">
++...
++&kamcmd; x2.stats
++...
++</programlisting>
++		</example>
++	</section>
++	</section>
++
++</chapter>
+diff --git a/src/modules/x2/x2_mod.c b/src/modules/x2/x2_mod.c
+new file mode 100644
+index 0000000000..638a88b228
+--- /dev/null
++++ b/src/modules/x2/x2_mod.c
+@@ -0,0 +1,640 @@
++/*
++ * Copyright (C) 2026 kamailio.org
++ *
++ * This file is part of Kamailio, a free SIP server.
++ *
++ * Kamailio is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version
++ *
++ * Kamailio is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ */
++
++/*
++ * x2: LI_X2 for an IRI-POI in a SIP node. x2_ims_message() reports the SIP
++ * message at hand as an IMSMessage xIRI (3GPP TS 33.128 7.12.4.2.1) in an
++ * X2 PDU (ETSI TS 103 221-2) to the Destinations (MDF2s) of a Task. Which
++ * messages, of which Tasks, to which Destinations is the config's to
++ * decide: the module only encodes and delivers.
++ *
++ * A request reported from a request route also has the replies this node
++ * generates for it reported, through tm: no route sees those.
++ */
++
++#ifndef _GNU_SOURCE
++#define _GNU_SOURCE /* F_SETPIPE_SZ */
++#endif
++#include <errno.h>
++#include <fcntl.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <netinet/in.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++
++#include "../../core/sr_module.h"
++#include "../../core/dprint.h"
++#include "../../core/mod_fix.h"
++#include "../../core/pt.h"
++#include "../../core/ut.h"
++#include "../../core/resolve.h"
++#include "../../core/route.h"
++#include "../../core/onsend.h"
++#include "../../core/rpc.h"
++#include "../../core/rpc_lookup.h"
++#include "../../core/kemi.h"
++#include "../../core/mem/shm_mem.h"
++#include "../../core/cfg/cfg_struct.h"
++#include "../../core/parser/msg_parser.h"
++#include "../../core/parser/parse_hname2.h"
++#include "../../modules/tm/tm_load.h"
++
++#include "x2_pdu.h"
++#include "x2_send.h"
++
++MODULE_VERSION
++
++static str x2_nfid = STR_NULL;
++static str x2_ipid = STR_NULL;
++int x2_keepalive_interval = 60;
++int x2_keepalive_timeout = 180;
++int x2_connect_timeout = 5;
++int x2_reconnect_interval = 5;
++int x2_idle_timeout = 600;
++int x2_dest_queue_size = 4 << 20;
++int x2_seq_lifetime = 3600;
++static int x2_queue_size = 16 << 20;
++static int x2_max_destinations = 32;
++
++x2_shared_t *x2_sh = NULL;
++int x2_pipe[2] = {-1, -1};
++
++static struct tm_binds x2_tmb;
++static int x2_have_tm = 0;
++
++/* What the local replies to a reported request are reported with */
++typedef struct x2_watch
++{
++	x2_iri_t iri;
++	int ndst;
++	x2_addr_t dst[X2_JOB_DST_MAX];
++	char matched[]; /* iri.matched points here */
++} x2_watch_t;
++
++static int mod_init(void);
++static int child_init(int rank);
++static void mod_destroy(void);
++static int w_x2_ims_message(sip_msg_t *msg, char *pdst, char *pxid, char *pcorr,
++		char *ppdir, char *psdir, char *pmatched);
++
++static rpc_export_t x2_rpc[];
++
++/* clang-format off */
++static cmd_export_t cmds[] = {
++	{"x2_ims_message", (cmd_function)w_x2_ims_message, 6, fixup_spve_all,
++		fixup_free_spve_all,
++		REQUEST_ROUTE | FAILURE_ROUTE | ONREPLY_ROUTE | BRANCH_ROUTE
++			| ONSEND_ROUTE},
++	{0, 0, 0, 0, 0, 0}
++};
++
++static param_export_t params[] = {
++	{"nfid", PARAM_STR, &x2_nfid},
++	{"ipid", PARAM_STR, &x2_ipid},
++	{"keepalive_interval", PARAM_INT, &x2_keepalive_interval},
++	{"keepalive_timeout", PARAM_INT, &x2_keepalive_timeout},
++	{"connect_timeout", PARAM_INT, &x2_connect_timeout},
++	{"reconnect_interval", PARAM_INT, &x2_reconnect_interval},
++	{"idle_timeout", PARAM_INT, &x2_idle_timeout},
++	{"queue_size", PARAM_INT, &x2_queue_size},
++	{"dest_queue_size", PARAM_INT, &x2_dest_queue_size},
++	{"max_destinations", PARAM_INT, &x2_max_destinations},
++	{"seq_lifetime", PARAM_INT, &x2_seq_lifetime},
++	{0, 0, 0}
++};
++
++struct module_exports exports = {
++	"x2",			 /* module name */
++	DEFAULT_DLFLAGS, /* dlopen flags */
++	cmds,			 /* exported functions */
++	params,			 /* exported parameters */
++	0,				 /* RPC method exports */
++	0,				 /* exported pseudo-variables */
++	0,				 /* response handling function */
++	mod_init,		 /* module initialization function */
++	child_init,		 /* per-child init function */
++	mod_destroy		 /* module destroy function */
++};
++/* clang-format on */
++
++static int mod_init(void)
++{
++	if(x2_max_destinations < 1 || x2_connect_timeout < 1
++			|| x2_reconnect_interval < 1 || x2_queue_size < 1
++			|| x2_dest_queue_size < 1 || x2_seq_lifetime < 1) {
++		LM_ERR("max_destinations, connect_timeout, reconnect_interval, "
++			   "queue_size, dest_queue_size and seq_lifetime are positive\n");
++		return -1;
++	}
++	if(x2_keepalive_interval > 0
++			&& x2_keepalive_timeout <= x2_keepalive_interval) {
++		LM_ERR("keepalive_timeout (%d) is to be longer than "
++			   "keepalive_interval (%d)\n",
++				x2_keepalive_timeout, x2_keepalive_interval);
++		return -1;
++	}
++
++	x2_sh = shm_mallocxz(
++			sizeof(x2_shared_t) + x2_max_destinations * sizeof(x2_dest_t));
++	if(x2_sh == NULL) {
++		SHM_MEM_ERROR;
++		return -1;
++	}
++	x2_sh->ndest = x2_max_destinations;
++
++	/* Each worker writes a job's address in one write(), atomic below
++	 * PIPE_BUF. Non-blocking: a worker drops an xIRI rather than wait */
++	if(pipe2(x2_pipe, O_NONBLOCK | O_CLOEXEC) < 0) {
++		LM_ERR("pipe: %s\n", strerror(errno));
++		return -1;
++	}
++	if(fcntl(x2_pipe[1], F_SETPIPE_SZ, 1 << 20) < 0)
++		LM_DBG("F_SETPIPE_SZ: %s\n", strerror(errno));
++
++	if(rpc_register_array(x2_rpc) != 0) {
++		LM_ERR("failed to register RPC commands\n");
++		return -1;
++	}
++
++	/* Without tm, only the messages the config sees are reported */
++	if(module_loaded("tm")) {
++		if(load_tm_api(&x2_tmb) < 0) {
++			LM_ERR("cannot load the tm API\n");
++			return -1;
++		}
++		x2_have_tm = 1;
++	}
++
++	register_procs(1);
++	cfg_register_child(1);
++	return 0;
++}
++
++static int child_init(int rank)
++{
++	int pid;
++
++	if(rank != PROC_MAIN)
++		return 0;
++
++	pid = fork_process(PROC_NOCHLDINIT, "X2 sender", 1);
++	if(pid < 0)
++		return -1;
++	if(pid == 0) {
++		if(cfg_child_init())
++			return -1;
++		x2_sender_loop();
++		exit(-1);
++	}
++	return 0;
++}
++
++static void mod_destroy(void)
++{
++	if(x2_sh) {
++		shm_free(x2_sh);
++		x2_sh = NULL;
++	}
++}
++
++/* [tcp:|udp:]host:port, the host an IPv4 address or a bracketed IPv6 one */
++static int x2_parse_addr(str *s, x2_addr_t *a)
++{
++	str host, port;
++	unsigned int p;
++	struct ip_addr *ip;
++	char *c;
++
++	host = *s;
++	a->proto = PROTO_TCP;
++	if(host.len > 4 && strncasecmp(host.s, "tcp:", 4) == 0) {
++		host.s += 4;
++		host.len -= 4;
++	} else if(host.len > 4 && strncasecmp(host.s, "udp:", 4) == 0) {
++		a->proto = PROTO_UDP;
++		host.s += 4;
++		host.len -= 4;
++	}
++	if(host.len > 0 && host.s[0] == '[') {
++		c = memchr(host.s, ']', host.len);
++		if(c == NULL || c + 1 >= host.s + host.len || c[1] != ':')
++			goto error;
++		port.s = c + 2;
++		host.s++;
++		host.len = c - host.s;
++	} else {
++		for(c = host.s + host.len - 1; c >= host.s && *c != ':'; c--)
++			;
++		if(c < host.s)
++			goto error;
++		port.s = c + 1;
++		host.len = c - host.s;
++	}
++	port.len = s->s + s->len - port.s;
++	if(port.len <= 0 || str2int(&port, &p) < 0 || p == 0 || p > 65535)
++		goto error;
++	ip = str2ip(&host);
++	if(ip == NULL)
++		ip = str2ip6(&host);
++	if(ip == NULL)
++		goto error;
++	if(init_su(&a->su, ip, (unsigned short)p) < 0)
++		goto error;
++	return 0;
++error:
++	LM_ERR("not a Destination: [%.*s]\n", s->len, s->s);
++	return -1;
++}
++
++/* The Destinations, separated by spaces or commas */
++static int x2_parse_dests(str *s, x2_addr_t *dst)
++{
++	str a;
++	char *p, *end;
++	int n = 0;
++
++	p = s->s;
++	end = s->s + s->len;
++	while(p < end) {
++		while(p < end && (*p == ' ' || *p == ',' || *p == '\t'))
++			p++;
++		if(p == end)
++			break;
++		a.s = p;
++		while(p < end && *p != ' ' && *p != ',' && *p != '\t')
++			p++;
++		a.len = p - a.s;
++		if(n == X2_JOB_DST_MAX) {
++			LM_ERR("more than %d Destinations, the rest left out\n",
++					X2_JOB_DST_MAX);
++			break;
++		}
++		if(x2_parse_addr(&a, &dst[n]) == 0)
++			n++;
++	}
++	return n;
++}
++
++/* A UUID (RFC 4122 text form), as the 128-bit XID (5.2.7) */
++static int x2_parse_uuid(str *s, unsigned char *out)
++{
++	int i, j = 0, h, l;
++
++	if(s->len != 36)
++		return -1;
++	for(i = 0; i < 36;) {
++		if(i == 8 || i == 13 || i == 18 || i == 23) {
++			if(s->s[i] != '-')
++				return -1;
++			i++;
++			continue;
++		}
++		h = hex2int(s->s[i]);
++		l = hex2int(s->s[i + 1]);
++		if(h < 0 || l < 0)
++			return -1;
++		out[j++] = (h << 4) | l;
++		i += 2;
++	}
++	return 0;
++}
++
++/* The Correlation ID: the decimal one given, or one from the Call-ID, the
++ * same for every message of the dialog at every IRI-POI it passes */
++static int x2_correlation(sip_msg_t *msg, str *s, uint64_t *corr)
++{
++	uint64_t h = 14695981039346656037ull;
++	char *end;
++	int i;
++
++	if(s->len > 0) {
++		for(i = 0; i < s->len; i++)
++			if(s->s[i] < '0' || s->s[i] > '9' || i == 20)
++				goto error;
++		errno = 0;
++		*corr = strtoull(s->s, &end, 10);
++		if(errno || end != s->s + s->len)
++			goto error;
++		return 0;
++	}
++	if(parse_headers(msg, HDR_CALLID_F, 0) < 0 || msg->callid == NULL) {
++		LM_ERR("no Call-ID to correlate by\n");
++		return -1;
++	}
++	for(i = 0; i < msg->callid->body.len; i++)
++		h = (h ^ (unsigned char)msg->callid->body.s[i]) * 1099511628211ull;
++	/* 0 is "not correlated" (5.2.8) */
++	*corr = h ? h : 1;
++	return 0;
++error:
++	LM_ERR("not a Correlation ID: [%.*s]\n", s->len, s->s);
++	return -1;
++}
++
++static int x2_ipproto(int proto)
++{
++	switch(proto) {
++		case PROTO_UDP:
++			return IPPROTO_UDP;
++		case PROTO_SCTP:
++			return IPPROTO_SCTP;
++		default:
++			return IPPROTO_TCP;
++	}
++}
++
++/* A socket bound to the wildcard address has no address of its own: the
++ * local end of a message it carried is the address the kernel takes towards
++ * the peer, which a connect() of a UDP socket finds without sending */
++static void x2_local_addr(struct ip_addr *local, struct ip_addr *peer)
++{
++	union sockaddr_union su, me;
++	socklen_t len = sizeof(me);
++	int fd;
++
++	if(!ip_addr_any(local) || peer->af == 0 || ip_addr_any(peer))
++		return;
++	if(init_su(&su, peer, 9) < 0)
++		return;
++	fd = socket(peer->af, SOCK_DGRAM | SOCK_CLOEXEC, 0);
++	if(fd < 0)
++		return;
++	if(connect(fd, &su.s, sockaddru_len(su)) == 0
++			&& getsockname(fd, &me.s, &len) == 0)
++		su2ip_addr(local, &me);
++	close(fd);
++}
++
++static int x2_queue(x2_job_t *job)
++{
++	ssize_t n;
++
++	if(atomic_add_int(&x2_sh->qbytes.val, job->len) > x2_queue_size) {
++		LM_ERR("X2 queue full, xIRI dropped\n");
++		goto drop;
++	}
++	n = write(x2_pipe[1], &job, sizeof(job));
++	if(n == sizeof(job))
++		return 1;
++	LM_ERR("X2 sender not keeping up (%s), xIRI dropped\n",
++			n < 0 ? strerror(errno) : "short write");
++drop:
++	atomic_add_int(&x2_sh->dropped.val, 1);
++	x2_job_free(job);
++	return -1;
++}
++
++/* A reply going out on a watched transaction: reported when this node made
++ * it, locally or as the 408 of a timeout. A relayed one was reported, as it
++ * came in, by the config */
++static void x2_reply_out(struct cell *t, int type, struct tmcb_params *ps)
++{
++	x2_watch_t *w;
++	x2_iri_t iri;
++	x2_job_t *job;
++
++	if(ps->param == NULL || *ps->param == NULL)
++		return;
++	if(!(ps->flags & TMCB_LOCAL_F) && ps->rpl != FAKED_REPLY)
++		return;
++	if(ps->dst == NULL || ps->dst->send_sock == NULL || ps->send_buf.s == NULL
++			|| ps->send_buf.len <= 0)
++		return;
++	w = (x2_watch_t *)*ps->param;
++	iri = w->iri;
++	iri.sip = ps->send_buf;
++	iri.src = ps->dst->send_sock->address;
++	iri.sport = ps->dst->send_sock->port_no;
++	su2ip_addr(&iri.dst, &ps->dst->to);
++	iri.dport = su_getport(&ps->dst->to);
++	iri.ipproto = x2_ipproto(ps->dst->proto);
++	x2_local_addr(&iri.src, &iri.dst);
++	gettimeofday(&iri.ts, NULL);
++	job = x2_ims_message_job(&iri, &x2_nfid, &x2_ipid, w->dst, w->ndst);
++	if(job)
++		x2_queue(job);
++}
++
++static void x2_watch_free(void *p)
++{
++	shm_free(p);
++}
++
++/* Has the replies this node generates for the request reported too, the
++ * other way: a reply to a request from the target goes to it */
++static void x2_watch(sip_msg_t *msg, x2_iri_t *iri, x2_addr_t *dst, int ndst)
++{
++	x2_watch_t *w;
++
++	if(msg->first_line.type != SIP_REQUEST
++			|| msg->first_line.u.request.method_value == METHOD_ACK)
++		return;
++	w = shm_malloc(sizeof(x2_watch_t) + iri->matched.len);
++	if(w == NULL) {
++		SHM_MEM_ERROR;
++		return;
++	}
++	memset(w, 0, sizeof(x2_watch_t));
++	w->iri = *iri;
++	w->iri.sip.s = NULL;
++	w->iri.sip.len = 0;
++	if(iri->pdir == X2_DIR_TO_TARGET)
++		w->iri.pdir = X2_DIR_FROM_TARGET;
++	else if(iri->pdir == X2_DIR_FROM_TARGET)
++		w->iri.pdir = X2_DIR_TO_TARGET;
++	memcpy(w->matched, iri->matched.s, iri->matched.len);
++	w->iri.matched.s = w->matched;
++	w->ndst = ndst;
++	memcpy(w->dst, dst, ndst * sizeof(x2_addr_t));
++	/* before the transaction exists, tm keeps it for when it does */
++	if(x2_tmb.register_tmcb(
++			   msg, 0, TMCB_RESPONSE_OUT, x2_reply_out, w, x2_watch_free)
++			< 0) {
++		LM_ERR("cannot watch the transaction for its replies\n");
++		shm_free(w);
++	}
++}
++
++static int ki_x2_ims_message(sip_msg_t *msg, str *dests, str *xid, str *corr,
++		str *pdir, str *sdir, str *matched)
++{
++	x2_addr_t dst[X2_JOB_DST_MAX];
++	x2_iri_t iri;
++	struct onsend_info *snd;
++	x2_job_t *job;
++	unsigned int v;
++	int ndst;
++
++	memset(&iri, 0, sizeof(iri));
++	ndst = x2_parse_dests(dests, dst);
++	if(ndst == 0) {
++		LM_ERR("no Destination\n");
++		return -1;
++	}
++	if(x2_parse_uuid(xid, iri.xid) < 0) {
++		LM_ERR("XID is not a UUID: [%.*s]\n", xid->len, xid->s);
++		return -1;
++	}
++	if(x2_correlation(msg, corr, &iri.corr) < 0)
++		return -1;
++	if(str2int(pdir, &v) < 0 || v < X2_DIR_UNKNOWN || v > X2_DIR_NA) {
++		LM_ERR("Payload Direction is 1 to 5: [%.*s]\n", pdir->len, pdir->s);
++		return -1;
++	}
++	iri.pdir = v;
++	if(str2int(sdir, &v) < 0 || v < X2_SESS_FROM_TARGET
++			|| v > X2_SESS_INDETERMINATE) {
++		LM_ERR("SessionDirection is 1 to 4: [%.*s]\n", sdir->len, sdir->s);
++		return -1;
++	}
++	iri.sdir = v;
++	if(matched)
++		iri.matched = *matched;
++
++	if(is_route_type(ONSEND_ROUTE)) {
++		/* the message as it goes out */
++		snd = get_onsend_info();
++		if(snd == NULL || snd->send_sock == NULL || snd->to == NULL) {
++			LM_ERR("no message being sent\n");
++			return -1;
++		}
++		iri.sip.s = snd->buf;
++		iri.sip.len = snd->len;
++		iri.src = snd->send_sock->address;
++		iri.sport = snd->send_sock->port_no;
++		su2ip_addr(&iri.dst, snd->to);
++		iri.dport = su_getport(snd->to);
++		iri.ipproto = x2_ipproto(snd->send_sock->proto);
++		x2_local_addr(&iri.src, &iri.dst);
++		gettimeofday(&iri.ts, NULL);
++	} else {
++		/* the message as it came in */
++		iri.sip.s = msg->buf;
++		iri.sip.len = msg->len;
++		iri.src = msg->rcv.src_ip;
++		iri.sport = msg->rcv.src_port;
++		iri.dst = msg->rcv.dst_ip;
++		iri.dport = msg->rcv.dst_port;
++		iri.ipproto = x2_ipproto(msg->rcv.proto);
++		x2_local_addr(&iri.dst, &iri.src);
++		iri.ts = msg->tval;
++		if(iri.ts.tv_sec == 0)
++			gettimeofday(&iri.ts, NULL);
++	}
++	if(iri.sip.s == NULL || iri.sip.len <= 0) {
++		LM_ERR("no SIP message\n");
++		return -1;
++	}
++
++	job = x2_ims_message_job(&iri, &x2_nfid, &x2_ipid, dst, ndst);
++	if(job == NULL)
++		return -1;
++	if(x2_have_tm && is_route_type(REQUEST_ROUTE))
++		x2_watch(msg, &iri, dst, ndst);
++	return x2_queue(job);
++}
++
++static int w_x2_ims_message(sip_msg_t *msg, char *pdst, char *pxid, char *pcorr,
++		char *ppdir, char *psdir, char *pmatched)
++{
++	str dests, xid, corr, pdir, sdir, matched;
++
++	if(fixup_get_svalue(msg, (gparam_t *)pdst, &dests) < 0
++			|| fixup_get_svalue(msg, (gparam_t *)pxid, &xid) < 0
++			|| fixup_get_svalue(msg, (gparam_t *)pcorr, &corr) < 0
++			|| fixup_get_svalue(msg, (gparam_t *)ppdir, &pdir) < 0
++			|| fixup_get_svalue(msg, (gparam_t *)psdir, &sdir) < 0
++			|| fixup_get_svalue(msg, (gparam_t *)pmatched, &matched) < 0) {
++		LM_ERR("cannot get the parameters\n");
++		return -1;
++	}
++	return ki_x2_ims_message(msg, &dests, &xid, &corr, &pdir, &sdir, &matched);
++}
++
++static const char *x2_state_name(int state)
++{
++	switch(state) {
++		case X2_UP:
++			return "up";
++		case X2_CONNECTING:
++			return "connecting";
++		default:
++			return "down";
++	}
++}
++
++static const char *x2_rpc_list_doc[2] = {
++		"List the X2 Destinations and their state", 0};
++
++static void x2_rpc_list(rpc_t *rpc, void *ctx)
++{
++	x2_dest_t *d;
++	void *th;
++	int i;
++
++	for(i = 0; i < x2_sh->ndest; i++) {
++		d = &x2_sh->dest[i];
++		if(!d->used)
++			continue;
++		if(rpc->add(ctx, "{", &th) < 0)
++			return;
++		rpc->struct_add(th, "ssjuujjj", "destination", x2_dest_name(d), "state",
++				x2_state_name(d->state), "since", (unsigned long)d->since,
++				"queued", d->qlen, "queued_bytes", d->qbytes, "sent", d->sent,
++				"dropped", d->dropped, "connects", d->connects);
++	}
++}
++
++static const char *x2_rpc_stats_doc[2] = {
++		"The PDUs in flight and those dropped before reaching a queue", 0};
++
++static void x2_rpc_stats(rpc_t *rpc, void *ctx)
++{
++	void *th;
++
++	if(rpc->add(ctx, "{", &th) < 0)
++		return;
++	rpc->struct_add(th, "dd", "queued_bytes", atomic_get(&x2_sh->qbytes),
++			"dropped", atomic_get(&x2_sh->dropped));
++}
++
++static rpc_export_t x2_rpc[] = {
++		{"x2.list", x2_rpc_list, x2_rpc_list_doc, RET_ARRAY},
++		{"x2.stats", x2_rpc_stats, x2_rpc_stats_doc, 0}, {0, 0, 0, 0}};
++
++/* clang-format off */
++static sr_kemi_t sr_kemi_x2_exports[] = {
++	{ str_init("x2"), str_init("ims_message"),
++		SR_KEMIP_INT, ki_x2_ims_message,
++		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR,
++			SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR }
++	},
++
++	{ {0, 0}, {0, 0}, 0, NULL, { 0, 0, 0, 0, 0, 0 } }
++};
++/* clang-format on */
++
++int mod_register(char *path, int *dlflags, void *p1, void *p2)
++{
++	sr_kemi_modules_add(sr_kemi_x2_exports);
++	return 0;
++}
+diff --git a/src/modules/x2/x2_pdu.c b/src/modules/x2/x2_pdu.c
+new file mode 100644
+index 0000000000..5de7641820
+--- /dev/null
++++ b/src/modules/x2/x2_pdu.c
+@@ -0,0 +1,287 @@
++/*
++ * Copyright (C) 2026 kamailio.org
++ *
++ * This file is part of Kamailio, a free SIP server.
++ *
++ * Kamailio is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version
++ *
++ * Kamailio is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ */
++
++#include <string.h>
++#include <netinet/in.h>
++
++#include "../../core/dprint.h"
++#include "../../core/mem/shm_mem.h"
++
++#include "x2_pdu.h"
++
++/* xIRIPayloadOID of the ASN.1 the payload is encoded against: TS33128Payloads
++ * r19 version8, {threeGPP(4) ts33128(19) r19(19) version8(8) xIRI(1)}. An
++ * IMSMessage is the same from r17 on */
++static const unsigned char x2_xiri_oid[] = {4, 19, 19, 8, 1};
++
++/* XIRIEvent alternative iMSMessage [105], constructed: a high tag number */
++static const unsigned char tag_ims_message[] = {0xbf, 0x69};
++static const unsigned char tag_seq[] = {0x30};
++static const unsigned char tag_c1[] = {0xa1};
++static const unsigned char tag_c2[] = {0xa2};
++static const unsigned char tag_p1[] = {0x81};
++static const unsigned char tag_p2[] = {0x82};
++static const unsigned char tag_p3[] = {0x83};
++
++/* BER definite length: octets it takes */
++static unsigned int ber_len_size(unsigned int n)
++{
++	if(n < 0x80)
++		return 1;
++	if(n < 0x100)
++		return 2;
++	if(n < 0x10000)
++		return 3;
++	if(n < 0x1000000)
++		return 4;
++	return 5;
++}
++
++/* a whole TLV around n octets of contents, with a tag of tsize octets */
++static unsigned int ber_size(unsigned int tsize, unsigned int n)
++{
++	return tsize + ber_len_size(n) + n;
++}
++
++/* the tag and the length of a TLV; its contents go after */
++static unsigned char *ber_hdr(unsigned char *p, const unsigned char *tag,
++		unsigned int tsize, unsigned int n)
++{
++	unsigned int ls;
++
++	memcpy(p, tag, tsize);
++	p += tsize;
++	ls = ber_len_size(n);
++	if(ls == 1) {
++		*p++ = (unsigned char)n;
++		return p;
++	}
++	*p++ = 0x80 | (ls - 1);
++	for(ls = ls - 1; ls > 0; ls--)
++		*p++ = (n >> (8 * (ls - 1))) & 0xff;
++	return p;
++}
++
++/* IPAddress, a CHOICE and so explicitly tagged [n]: the tag of the field
++ * around [1] iPv4Address or [2] iPv6Address */
++static unsigned int ber_ipaddr_size(struct ip_addr *ip)
++{
++	return ber_size(1, ber_size(1, ip->len));
++}
++
++static unsigned char *ber_ipaddr(
++		unsigned char *p, const unsigned char *tag, struct ip_addr *ip)
++{
++	p = ber_hdr(p, tag, 1, ber_size(1, ip->len));
++	p = ber_hdr(p, ip->af == AF_INET ? tag_p1 : tag_p2, 1, ip->len);
++	memcpy(p, ip->u.addr, ip->len);
++	return p + ip->len;
++}
++
++static unsigned char *put16(unsigned char *p, unsigned int v)
++{
++	p[0] = (v >> 8) & 0xff;
++	p[1] = v & 0xff;
++	return p + 2;
++}
++
++static unsigned char *put32(unsigned char *p, uint32_t v)
++{
++	p[0] = (v >> 24) & 0xff;
++	p[1] = (v >> 16) & 0xff;
++	p[2] = (v >> 8) & 0xff;
++	p[3] = v & 0xff;
++	return p + 4;
++}
++
++static unsigned char *put64(unsigned char *p, uint64_t v)
++{
++	p = put32(p, (uint32_t)(v >> 32));
++	return put32(p, (uint32_t)v);
++}
++
++/* a conditional attribute (5.3.1) */
++static unsigned char *attr(
++		unsigned char *p, int type, const void *v, unsigned int len)
++{
++	p = put16(p, type);
++	p = put16(p, len);
++	memcpy(p, v, len);
++	return p + len;
++}
++
++static x2_job_t *job_new(unsigned int len, x2_addr_t *dst, int ndst)
++{
++	x2_job_t *job;
++
++	job = shm_malloc(sizeof(x2_job_t) + len);
++	if(job == NULL) {
++		SHM_MEM_ERROR;
++		return NULL;
++	}
++	memset(job, 0, sizeof(x2_job_t));
++	job->len = len;
++	job->ndst = ndst;
++	memcpy(job->dst, dst, ndst * sizeof(x2_addr_t));
++	return job;
++}
++
++/* The mandatory header fields (5.2) */
++static unsigned char *x2_hdr(unsigned char *p, int type, unsigned int hlen,
++		unsigned int plen, int fmt, int dir, const unsigned char *xid,
++		uint64_t corr)
++{
++	p = put16(p, X2_VERSION);
++	p = put16(p, type);
++	p = put32(p, hlen);
++	p = put32(p, plen);
++	p = put16(p, fmt);
++	p = put16(p, dir);
++	if(xid)
++		memcpy(p, xid, 16);
++	else
++		memset(p, 0, 16);
++	p += 16;
++	return put64(p, corr);
++}
++
++/* An X2 PDU carrying an IMSMessage xIRI (TS 33.128 7.12.4.2.1), with the
++ * conditional attributes of TS 33.128 5.3.1 and 5.3.2: the Sequence Number
++ * (left at zero for the sender to set), the Timestamp, the NFID and IPID
++ * when there are, the addresses and ports the SIP message went between,
++ * and the Matched Target Identifier when there is one */
++x2_job_t *x2_ims_message_job(
++		x2_iri_t *iri, str *nfid, str *ipid, x2_addr_t *dst, int ndst)
++{
++	unsigned int hlen, plen;
++	unsigned int sipmsg, payload, imsmsg, event, xiri;
++	unsigned char *p;
++	unsigned char v[4];
++	x2_job_t *job;
++
++	if(nfid->len > 0xffff || ipid->len > 0xffff || iri->matched.len > 0xffff) {
++		LM_ERR("conditional attribute longer than 65535 octets\n");
++		return NULL;
++	}
++
++	/* SIPMessage ::= SEQUENCE { iPSourceAddress [1] IPAddress,
++	 *   iPDestinationAddress [2] IPAddress, sIPContent [3] OCTET STRING } */
++	sipmsg = ber_ipaddr_size(&iri->src) + ber_ipaddr_size(&iri->dst)
++			 + ber_size(1, iri->sip.len);
++	/* IMSPayload ::= CHOICE { encapsulatedSIPMessage [1] SIPMessage }, in
++	 * IMSMessage.payload [1], explicit for a CHOICE */
++	payload = ber_size(1, sipmsg);
++	/* IMSMessage ::= SEQUENCE { payload [1] IMSPayload,
++	 *   sessionDirection [2] SessionDirection } */
++	imsmsg = ber_size(1, payload) + 3;
++	/* XIRIPayload.event [2] XIRIEvent, a CHOICE: iMSMessage [105] */
++	event = ber_size(2, imsmsg);
++	/* XIRIPayload ::= SEQUENCE { xIRIPayloadOID [1] RELATIVE-OID,
++	 *   event [2] XIRIEvent } */
++	xiri = ber_size(1, sizeof(x2_xiri_oid)) + ber_size(1, event);
++	plen = ber_size(1, xiri);
++
++	hlen = X2_HDR_LEN + 4 + 4					 /* Sequence Number */
++		   + 4 + 8								 /* Timestamp */
++		   + 4 + iri->src.len + 4 + iri->dst.len /* addresses */
++		   + 4 + 2 + 4 + 2						 /* ports */
++		   + 4 + 1;								 /* IP Protocol */
++	if(nfid->len > 0)
++		hlen += 4 + nfid->len;
++	if(ipid->len > 0)
++		hlen += 4 + ipid->len;
++	if(iri->matched.len > 0)
++		hlen += 4 + iri->matched.len;
++
++	job = job_new(hlen + plen, dst, ndst);
++	if(job == NULL)
++		return NULL;
++	job->seq = 1;
++
++	p = x2_hdr(job->pdu, X2_PDU_X2, hlen, plen, X2_FMT_33128, iri->pdir,
++			iri->xid, iri->corr);
++	/* first, at X2_SEQ_OFF */
++	memset(v, 0, 4);
++	p = attr(p, X2_ATTR_SEQ, v, 4);
++	p = put16(p, X2_ATTR_TIMESTAMP);
++	p = put16(p, 8);
++	p = put32(p, (uint32_t)iri->ts.tv_sec);
++	p = put32(p, (uint32_t)iri->ts.tv_usec * 1000);
++	if(nfid->len > 0)
++		p = attr(p, X2_ATTR_NFID, nfid->s, nfid->len);
++	if(ipid->len > 0)
++		p = attr(p, X2_ATTR_IPID, ipid->s, ipid->len);
++	p = attr(p, iri->src.af == AF_INET ? X2_ATTR_SRC_IPV4 : X2_ATTR_SRC_IPV6,
++			iri->src.u.addr, iri->src.len);
++	p = attr(p, iri->dst.af == AF_INET ? X2_ATTR_DST_IPV4 : X2_ATTR_DST_IPV6,
++			iri->dst.u.addr, iri->dst.len);
++	p = put16(p, X2_ATTR_SRC_PORT);
++	p = put16(p, 2);
++	p = put16(p, iri->sport);
++	p = put16(p, X2_ATTR_DST_PORT);
++	p = put16(p, 2);
++	p = put16(p, iri->dport);
++	p = put16(p, X2_ATTR_IP_PROTO);
++	p = put16(p, 1);
++	*p++ = (unsigned char)iri->ipproto;
++	if(iri->matched.len > 0)
++		p = attr(p, X2_ATTR_MATCHED_TARGET, iri->matched.s, iri->matched.len);
++
++	p = ber_hdr(p, tag_seq, 1, xiri);
++	p = ber_hdr(p, tag_p1, 1, sizeof(x2_xiri_oid));
++	memcpy(p, x2_xiri_oid, sizeof(x2_xiri_oid));
++	p += sizeof(x2_xiri_oid);
++	p = ber_hdr(p, tag_c2, 1, event);
++	p = ber_hdr(p, tag_ims_message, 2, imsmsg);
++	p = ber_hdr(p, tag_c1, 1, payload);
++	p = ber_hdr(p, tag_c1, 1, sipmsg);
++	p = ber_ipaddr(p, tag_c1, &iri->src);
++	p = ber_ipaddr(p, tag_c2, &iri->dst);
++	p = ber_hdr(p, tag_p3, 1, iri->sip.len);
++	memcpy(p, iri->sip.s, iri->sip.len);
++	p += iri->sip.len;
++	p = ber_hdr(p, tag_p2, 1, 1);
++	*p++ = (unsigned char)iri->sdir;
++
++	if(p != job->pdu + job->len) {
++		LM_BUG("PDU is %d octets, not %u\n", (int)(p - job->pdu), job->len);
++		shm_free(job);
++		return NULL;
++	}
++	return job;
++}
++
++/* A Keepalive or Keepalive Acknowledgement (5.1, 6.2.4): the mandatory
++ * fields, zero but for the Version, the PDU Type and the Header Length, and
++ * the Sequence Number */
++x2_job_t *x2_keepalive_job(int type, uint32_t seq, x2_addr_t *dst)
++{
++	unsigned char *p;
++	unsigned char v[4];
++	x2_job_t *job;
++
++	job = job_new(X2_HDR_LEN + 8, dst, 1);
++	if(job == NULL)
++		return NULL;
++	p = x2_hdr(job->pdu, type, X2_HDR_LEN + 8, 0, 0, 0, NULL, 0);
++	put32(v, seq);
++	attr(p, X2_ATTR_SEQ, v, 4);
++	return job;
++}
+diff --git a/src/modules/x2/x2_pdu.h b/src/modules/x2/x2_pdu.h
+new file mode 100644
+index 0000000000..0016f671e6
+--- /dev/null
++++ b/src/modules/x2/x2_pdu.h
+@@ -0,0 +1,134 @@
++/*
++ * Copyright (C) 2026 kamailio.org
++ *
++ * This file is part of Kamailio, a free SIP server.
++ *
++ * Kamailio is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version
++ *
++ * Kamailio is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ */
++
++#ifndef _X2_PDU_H_
++#define _X2_PDU_H_
++
++#include <stdint.h>
++#include <sys/time.h>
++
++#include "../../core/ip_addr.h"
++#include "../../core/str.h"
++
++/* ETSI TS 103 221-2 V1.10.1 5.2.1: major 0, minor 6 */
++#define X2_VERSION 6
++
++/* 5.2.2 PDU Type */
++#define X2_PDU_X2 1
++#define X2_PDU_X3 2
++#define X2_PDU_KEEPALIVE 3
++#define X2_PDU_KEEPALIVE_ACK 4
++
++/* 5.2.3: the mandatory fields alone */
++#define X2_HDR_LEN 40
++
++/* 5.4.1 Payload Format: a BER-encoded TS33128Payloads.XIRIPayload
++ * (TS 33.128 5.3.2) */
++#define X2_FMT_33128 2
++
++/* 5.2.6 Payload Direction */
++#define X2_DIR_UNKNOWN 1
++#define X2_DIR_TO_TARGET 2
++#define X2_DIR_FROM_TARGET 3
++#define X2_DIR_BOTH 4
++#define X2_DIR_NA 5
++
++/* 5.3.1 Conditional Attribute Types */
++#define X2_ATTR_NFID 6
++#define X2_ATTR_IPID 7
++#define X2_ATTR_SEQ 8
++#define X2_ATTR_TIMESTAMP 9
++#define X2_ATTR_SRC_IPV4 10
++#define X2_ATTR_DST_IPV4 11
++#define X2_ATTR_SRC_IPV6 12
++#define X2_ATTR_DST_IPV6 13
++#define X2_ATTR_SRC_PORT 14
++#define X2_ATTR_DST_PORT 15
++#define X2_ATTR_IP_PROTO 16
++#define X2_ATTR_MATCHED_TARGET 17
++
++/* The Sequence Number is the first conditional attribute of every PDU built
++ * here, so the sender can number a PDU without parsing it: this is the
++ * offset of its value */
++#define X2_SEQ_OFF (X2_HDR_LEN + 4)
++/* and of the XID and the Correlation ID, the context it numbers in */
++#define X2_XID_OFF 16
++#define X2_CORR_OFF 32
++
++/* TS 33.128 7.12.4.3.2 SessionDirection */
++#define X2_SESS_FROM_TARGET 1
++#define X2_SESS_TO_TARGET 2
++#define X2_SESS_COMBINED 3
++#define X2_SESS_INDETERMINATE 4
++
++/* Destinations one PDU goes to: the Destinations of one Task */
++#define X2_JOB_DST_MAX 8
++
++/* A Destination: an MDF2's address and port, over TCP or UDP */
++typedef struct x2_addr
++{
++	int proto; /* PROTO_TCP or PROTO_UDP */
++	union sockaddr_union su;
++} x2_addr_t;
++
++struct x2_job;
++/* A place in a Destination's queue: the job and which of its Destinations
++ * that queue belongs to */
++typedef struct x2_link
++{
++	struct x2_job *job;
++	int idx;
++} x2_link_t;
++
++/* One PDU on its way to its Destinations, in shared memory: a worker builds
++ * it, the sender process queues, sends and frees it */
++typedef struct x2_job
++{
++	unsigned int len; /* of pdu */
++	int seq;		  /* 1: the sender is to number it */
++	int ndst;		  /* entries of dst */
++	int refs;		  /* queues it is still in, sender only */
++	x2_addr_t dst[X2_JOB_DST_MAX];
++	x2_link_t next[X2_JOB_DST_MAX]; /* the next in each queue */
++	unsigned char pdu[];
++} x2_job_t;
++
++/* What an IMSMessage xIRI is built from */
++typedef struct x2_iri
++{
++	unsigned char xid[16];
++	uint64_t corr;
++	int pdir;		   /* Payload Direction */
++	int sdir;		   /* SessionDirection */
++	struct timeval ts; /* when the message was intercepted */
++	struct ip_addr src;
++	struct ip_addr dst;
++	unsigned short sport;
++	unsigned short dport;
++	int ipproto; /* IPPROTO_UDP, IPPROTO_TCP or IPPROTO_SCTP */
++	str sip;	 /* the SIP message */
++	str matched; /* Matched Target Identifier, may be empty */
++} x2_iri_t;
++
++x2_job_t *x2_ims_message_job(
++		x2_iri_t *iri, str *nfid, str *ipid, x2_addr_t *dst, int ndst);
++x2_job_t *x2_keepalive_job(int type, uint32_t seq, x2_addr_t *dst);
++
++#endif
+diff --git a/src/modules/x2/x2_send.c b/src/modules/x2/x2_send.c
+new file mode 100644
+index 0000000000..eab3f3168f
+--- /dev/null
++++ b/src/modules/x2/x2_send.c
+@@ -0,0 +1,612 @@
++/*
++ * Copyright (C) 2026 kamailio.org
++ *
++ * This file is part of Kamailio, a free SIP server.
++ *
++ * Kamailio is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version
++ *
++ * Kamailio is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ */
++
++/*
++ * The X2 sender process. Workers hand it PDUs through a pipe; it numbers
++ * them, keeps a connection to each Destination (MDF2) with the Keepalives
++ * of ETSI TS 103 221-2 6.2.4, and queues what a Destination cannot take
++ * yet, up to dest_queue_size octets.
++ */
++
++#include <errno.h>
++#include <poll.h>
++#include <stdio.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <netinet/tcp.h>
++
++#include "../../core/dprint.h"
++#include "../../core/ip_addr.h"
++#include "../../core/mem/mem.h"
++#include "../../core/mem/shm_mem.h"
++#include "../../core/cfg/cfg_struct.h"
++
++#include "x2_send.h"
++
++/* The Sequence Number contexts (5.3.9): one per XID and Correlation ID, the
++ * NFID and IPID being the same for every PDU from here. Dropped once unused
++ * for seq_lifetime seconds, after which the context starts at 0 again */
++#define X2_SEQ_HASH 1024
++typedef struct x2_seqctx
++{
++	struct x2_seqctx *next;
++	unsigned char key[24];
++	uint32_t seq;
++	time_t used;
++} x2_seqctx_t;
++
++static x2_seqctx_t *x2_seqtab[X2_SEQ_HASH];
++static struct pollfd *x2_pfd;
++static x2_dest_t **x2_pdest;
++
++void x2_job_free(x2_job_t *job)
++{
++	atomic_add_int(&x2_sh->qbytes.val, -(int)job->len);
++	shm_free(job);
++}
++
++static void job_unref(x2_job_t *job)
++{
++	if(--job->refs == 0)
++		x2_job_free(job);
++}
++
++static void put32(unsigned char *p, uint32_t v)
++{
++	p[0] = (v >> 24) & 0xff;
++	p[1] = (v >> 16) & 0xff;
++	p[2] = (v >> 8) & 0xff;
++	p[3] = v & 0xff;
++}
++
++static uint32_t get32(const unsigned char *p)
++{
++	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
++		   | ((uint32_t)p[2] << 8) | p[3];
++}
++
++char *x2_dest_name(x2_dest_t *d)
++{
++	static char name[IP_ADDR_MAX_STR_SIZE + 16];
++
++	snprintf(name, sizeof(name), "%s:%s",
++			d->addr.proto == PROTO_UDP ? "udp" : "tcp",
++			su2a(&d->addr.su, sizeof(d->addr.su)));
++	return name;
++}
++
++/* The first failure to connect is an error; the ones after it, until a
++ * connection is up again, are not news */
++#define X2_CONN_ERR(d, fmt, ...)        \
++	do {                                \
++		if((d)->failures++ == 0)        \
++			LM_ERR(fmt, ##__VA_ARGS__); \
++		else                            \
++			LM_DBG(fmt, ##__VA_ARGS__); \
++	} while(0)
++
++/* The next Sequence Number of the job's context */
++static void seq_assign(x2_job_t *job, time_t now)
++{
++	unsigned int h = 2166136261u;
++	unsigned char key[24];
++	x2_seqctx_t *c;
++	int i;
++
++	memcpy(key, job->pdu + X2_XID_OFF, 24);
++	for(i = 0; i < 24; i++)
++		h = (h ^ key[i]) * 16777619u;
++	h %= X2_SEQ_HASH;
++	for(c = x2_seqtab[h]; c; c = c->next)
++		if(memcmp(c->key, key, 24) == 0)
++			break;
++	if(c == NULL) {
++		c = pkg_malloc(sizeof(*c));
++		if(c == NULL) {
++			PKG_MEM_ERROR;
++			return; /* numbered 0 */
++		}
++		memcpy(c->key, key, 24);
++		c->seq = 0;
++		c->next = x2_seqtab[h];
++		x2_seqtab[h] = c;
++	}
++	c->used = now;
++	put32(job->pdu + X2_SEQ_OFF, c->seq++);
++}
++
++static void seq_sweep(time_t now)
++{
++	x2_seqctx_t **pc, *c;
++	int i;
++
++	for(i = 0; i < X2_SEQ_HASH; i++) {
++		pc = &x2_seqtab[i];
++		while((c = *pc) != NULL) {
++			if(now - c->used >= x2_seq_lifetime) {
++				*pc = c->next;
++				pkg_free(c);
++			} else {
++				pc = &c->next;
++			}
++		}
++	}
++}
++
++static void dq_push(x2_dest_t *d, x2_job_t *job, int idx)
++{
++	job->next[idx].job = NULL;
++	if(d->tail.job)
++		d->tail.job->next[d->tail.idx] = (x2_link_t){job, idx};
++	else
++		d->head = (x2_link_t){job, idx};
++	d->tail = (x2_link_t){job, idx};
++	job->refs++;
++	d->qlen++;
++	d->qbytes += job->len;
++}
++
++static void dq_pop(x2_dest_t *d)
++{
++	x2_job_t *job = d->head.job;
++
++	d->head = job->next[d->head.idx];
++	if(d->head.job == NULL)
++		d->tail.job = NULL;
++	d->qlen--;
++	d->qbytes -= job->len;
++	d->off = 0;
++	job_unref(job);
++}
++
++/* Drops the Keepalives and acknowledgements left in the queue: they were
++ * for the connection that is gone */
++static void dq_drop_keepalives(x2_dest_t *d)
++{
++	x2_link_t l = d->head, prev = {NULL, 0}, next;
++
++	while(l.job) {
++		next = l.job->next[l.idx];
++		if(l.job->pdu[3] != X2_PDU_X2) {
++			if(prev.job)
++				prev.job->next[prev.idx] = next;
++			else
++				d->head = next;
++			if(d->tail.job == l.job)
++				d->tail = prev;
++			d->qlen--;
++			d->qbytes -= l.job->len;
++			job_unref(l.job);
++		} else {
++			prev = l;
++		}
++		l = next;
++	}
++}
++
++static void dest_close(x2_dest_t *d, time_t now)
++{
++	if(d->fd >= 0)
++		close(d->fd);
++	d->fd = -1;
++	d->state = X2_DOWN;
++	d->since = now;
++	d->next_try = now + x2_reconnect_interval;
++	/* A PDU that went out in part is lost with the connection: send it
++	 * whole on the next one */
++	d->off = 0;
++	d->rhave = 0;
++	d->ka_out = 0;
++	dq_drop_keepalives(d);
++}
++
++static void dest_up(x2_dest_t *d, time_t now)
++{
++	d->state = X2_UP;
++	d->since = now;
++	d->connects++;
++	d->ka_next = now + x2_keepalive_interval;
++	d->ka_out = 0;
++	d->progress = now;
++	if(d->failures > 1)
++		LM_INFO("X2 Destination %s connected, after %u attempts\n",
++				x2_dest_name(d), d->failures + 1);
++	else
++		LM_INFO("X2 Destination %s connected\n", x2_dest_name(d));
++	d->failures = 0;
++}
++
++static void dest_connect(x2_dest_t *d, time_t now)
++{
++	int type = d->addr.proto == PROTO_UDP ? SOCK_DGRAM : SOCK_STREAM;
++	int on = 1;
++
++	d->fd = socket(
++			d->addr.su.s.sa_family, type | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
++	if(d->fd < 0) {
++		X2_CONN_ERR(d, "X2 Destination %s: socket: %s\n", x2_dest_name(d),
++				strerror(errno));
++		dest_close(d, now);
++		return;
++	}
++	if(type == SOCK_STREAM)
++		setsockopt(d->fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
++	if(connect(d->fd, &d->addr.su.s, sockaddru_len(d->addr.su)) == 0) {
++		dest_up(d, now);
++		return;
++	}
++	if(errno == EINPROGRESS) {
++		d->state = X2_CONNECTING;
++		d->since = now;
++		return;
++	}
++	X2_CONN_ERR(d, "X2 Destination %s: connect: %s\n", x2_dest_name(d),
++			strerror(errno));
++	dest_close(d, now);
++}
++
++static x2_dest_t *dest_get(x2_addr_t *a, time_t now)
++{
++	x2_dest_t *d, *free = NULL;
++	int i;
++
++	for(i = 0; i < x2_sh->ndest; i++) {
++		d = &x2_sh->dest[i];
++		if(!d->used) {
++			if(free == NULL)
++				free = d;
++			continue;
++		}
++		if(d->addr.proto == a->proto && su_cmp(&d->addr.su, &a->su))
++			return d;
++	}
++	if(free == NULL)
++		return NULL;
++	d = free;
++	memset(d, 0, sizeof(*d));
++	d->addr = *a;
++	d->fd = -1;
++	d->since = now;
++	d->used = 1;
++	return d;
++}
++
++/* A job from a worker: numbered, then queued to each of its Destinations */
++static void job_take(x2_job_t *job, time_t now)
++{
++	x2_dest_t *d;
++	int i;
++
++	if(job->seq)
++		seq_assign(job, now);
++	job->refs = 1; /* held until it is queued everywhere */
++	for(i = 0; i < job->ndst; i++) {
++		d = dest_get(&job->dst[i], now);
++		if(d == NULL) {
++			LM_ERR("X2: more Destinations than max_destinations, PDU for "
++				   "%s:%s dropped\n",
++					job->dst[i].proto == PROTO_UDP ? "udp" : "tcp",
++					su2a(&job->dst[i].su, sizeof(job->dst[i].su)));
++			atomic_add_int(&x2_sh->dropped.val, 1);
++			continue;
++		}
++		d->last_used = now;
++		if(d->qbytes + job->len > (unsigned int)x2_dest_queue_size) {
++			if(d->dropped++ % 1000 == 0)
++				LM_ERR("X2 Destination %s: queue full, PDU dropped (%lu so "
++					   "far)\n",
++						x2_dest_name(d), d->dropped);
++			continue;
++		}
++		dq_push(d, job, i);
++		if(d->state == X2_DOWN && d->fd < 0 && now >= d->next_try)
++			dest_connect(d, now);
++	}
++	job_unref(job);
++}
++
++static void ka_send(x2_dest_t *d, int type, uint32_t seq)
++{
++	x2_job_t *job;
++
++	job = x2_keepalive_job(type, seq, &d->addr);
++	if(job == NULL)
++		return;
++	atomic_add_int(&x2_sh->qbytes.val, job->len);
++	dq_push(d, job, 0);
++}
++
++/* A whole PDU from the MDF, of which rbuf holds the start */
++static void pdu_in(x2_dest_t *d)
++{
++	unsigned int type, hlen, i, alen;
++	uint32_t seq = 0;
++
++	type = (d->rbuf[2] << 8) | d->rbuf[3];
++	hlen = get32(d->rbuf + 4);
++	if(hlen > sizeof(d->rbuf))
++		hlen = sizeof(d->rbuf);
++	for(i = X2_HDR_LEN; i + 4 <= hlen; i += 4 + alen) {
++		alen = (d->rbuf[i + 2] << 8) | d->rbuf[i + 3];
++		if(((d->rbuf[i] << 8) | d->rbuf[i + 1]) == X2_ATTR_SEQ && alen == 4
++				&& i + 8 <= hlen) {
++			seq = get32(d->rbuf + i + 4);
++			break;
++		}
++	}
++	switch(type) {
++		case X2_PDU_KEEPALIVE:
++			ka_send(d, X2_PDU_KEEPALIVE_ACK, seq);
++			break;
++		case X2_PDU_KEEPALIVE_ACK:
++			d->ka_out = 0;
++			break;
++		default:
++			LM_DBG("X2 Destination %s sent PDU type %u, ignored\n",
++					x2_dest_name(d), type);
++	}
++}
++
++/* Reads what the MDF sent: only Keepalives and their acknowledgements are
++ * expected. Returns -1 when the connection is to be closed */
++static int dest_read(x2_dest_t *d)
++{
++	unsigned char buf[4096];
++	unsigned int take, plen, hlen;
++	ssize_t n;
++	unsigned char *p;
++
++	for(;;) {
++		n = recv(d->fd, buf, sizeof(buf), MSG_DONTWAIT);
++		if(d->addr.proto == PROTO_UDP) {
++			/* No Keepalives over UDP: what comes is a stray datagram, or
++			 * the error an ICMP message reported for an earlier one */
++			if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
++				return 0;
++			continue;
++		}
++		if(n == 0) {
++			LM_ERR("X2 Destination %s closed the connection\n",
++					x2_dest_name(d));
++			return -1;
++		}
++		if(n < 0) {
++			if(errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
++				return 0;
++			LM_ERR("X2 Destination %s: %s\n", x2_dest_name(d), strerror(errno));
++			return -1;
++		}
++		p = buf;
++		while(n > 0) {
++			if(d->rhave < 12) {
++				take = 12 - d->rhave;
++			} else {
++				take = d->rtotal - d->rhave;
++			}
++			if(take > n)
++				take = n;
++			if(d->rhave < sizeof(d->rbuf))
++				memcpy(d->rbuf + d->rhave, p,
++						take < sizeof(d->rbuf) - d->rhave
++								? take
++								: sizeof(d->rbuf) - d->rhave);
++			d->rhave += take;
++			p += take;
++			n -= take;
++			if(d->rhave == 12) {
++				hlen = get32(d->rbuf + 4);
++				plen = get32(d->rbuf + 8);
++				if(hlen < X2_HDR_LEN || hlen > 0xffff || plen > (1u << 24)) {
++					LM_ERR("X2 Destination %s sent a PDU with header length "
++						   "%u and payload length %u\n",
++							x2_dest_name(d), hlen, plen);
++					return -1;
++				}
++				d->rtotal = hlen + plen;
++			}
++			if(d->rhave >= 12 && d->rhave == d->rtotal) {
++				pdu_in(d);
++				d->rhave = 0;
++			}
++		}
++	}
++}
++
++/* Sends what is queued, as much as the socket takes. Returns -1 when the
++ * connection is to be closed */
++static int dest_write(x2_dest_t *d)
++{
++	x2_job_t *job;
++	ssize_t n;
++	int retry = 0;
++
++	while((job = d->head.job) != NULL) {
++		n = send(d->fd, job->pdu + d->off, job->len - d->off,
++				MSG_DONTWAIT | MSG_NOSIGNAL);
++		if(n < 0) {
++			if(errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
++				return 0;
++			if(d->addr.proto == PROTO_UDP) {
++				/* The error an ICMP message reported for an earlier
++				 * datagram fails the next send() instead, which then sends
++				 * nothing: once more */
++				if(errno == ECONNREFUSED && !retry) {
++					retry = 1;
++					continue;
++				}
++				/* one too long, or no route */
++				if(d->dropped++ % 1000 == 0)
++					LM_ERR("X2 Destination %s: %s, PDU dropped\n",
++							x2_dest_name(d), strerror(errno));
++				dq_pop(d);
++				continue;
++			}
++			LM_ERR("X2 Destination %s: %s\n", x2_dest_name(d), strerror(errno));
++			return -1;
++		}
++		retry = 0;
++		d->progress = time(NULL);
++		d->off += n;
++		if(d->off == job->len) {
++			if(job->pdu[3] == X2_PDU_KEEPALIVE && d->ka_out == 0)
++				d->ka_out = time(NULL);
++			if(job->pdu[3] == X2_PDU_X2)
++				d->sent++;
++			dq_pop(d);
++		}
++	}
++	return 0;
++}
++
++static void dest_event(x2_dest_t *d, short revents, time_t now)
++{
++	int err = 0;
++	socklen_t len = sizeof(err);
++
++	if(d->state == X2_CONNECTING) {
++		if(!(revents & (POLLOUT | POLLERR | POLLHUP)))
++			return;
++		if(getsockopt(d->fd, SOL_SOCKET, SO_ERROR, &err, &len) < 0)
++			err = errno;
++		if(err) {
++			X2_CONN_ERR(d, "X2 Destination %s: connect: %s\n", x2_dest_name(d),
++					strerror(err));
++			dest_close(d, now);
++			return;
++		}
++		dest_up(d, now);
++	}
++	if((revents & (POLLIN | POLLERR | POLLHUP)) && dest_read(d) < 0) {
++		dest_close(d, now);
++		return;
++	}
++	if(dest_write(d) < 0)
++		dest_close(d, now);
++}
++
++/* Once a second */
++static void dest_timers(x2_dest_t *d, time_t now)
++{
++	if(d->state == X2_CONNECTING && now - d->since >= x2_connect_timeout) {
++		X2_CONN_ERR(d, "X2 Destination %s: no connection in %d s\n",
++				x2_dest_name(d), x2_connect_timeout);
++		dest_close(d, now);
++	}
++	if(d->state == X2_UP && d->addr.proto != PROTO_UDP
++			&& x2_keepalive_interval > 0) {
++		if(d->ka_out && now - d->ka_out >= x2_keepalive_timeout) {
++			LM_ERR("X2 Destination %s: no Keepalive Acknowledgement in %d s\n",
++					x2_dest_name(d), x2_keepalive_timeout);
++			dest_close(d, now);
++		} else if(d->head.job && now - d->progress >= x2_keepalive_timeout) {
++			/* not reading: not even a Keepalive gets out to time out */
++			LM_ERR("X2 Destination %s: nothing sent in %d s\n", x2_dest_name(d),
++					x2_keepalive_timeout);
++			dest_close(d, now);
++		} else if(now >= d->ka_next) {
++			ka_send(d, X2_PDU_KEEPALIVE, d->ka_seq++);
++			d->ka_next = now + x2_keepalive_interval;
++			if(dest_write(d) < 0)
++				dest_close(d, now);
++		}
++	}
++	if(d->state == X2_DOWN && d->qlen > 0 && now >= d->next_try)
++		dest_connect(d, now);
++	if(x2_idle_timeout > 0 && d->qlen == 0
++			&& now - d->last_used >= x2_idle_timeout) {
++		if(d->fd >= 0)
++			LM_INFO("X2 Destination %s idle, closed\n", x2_dest_name(d));
++		dest_close(d, now);
++		d->used = 0;
++	}
++}
++
++static void pipe_read(time_t now)
++{
++	x2_job_t *jobs[512];
++	ssize_t n;
++	int i;
++
++	for(;;) {
++		n = read(x2_pipe[0], jobs, sizeof(jobs));
++		if(n <= 0)
++			return;
++		for(i = 0; i < n / (ssize_t)sizeof(x2_job_t *); i++)
++			job_take(jobs[i], now);
++	}
++}
++
++void x2_sender_loop(void)
++{
++	x2_dest_t *d;
++	time_t now, tick = 0, sweep;
++	int i, n;
++
++	x2_pfd = pkg_malloc((1 + x2_sh->ndest) * sizeof(struct pollfd));
++	x2_pdest = pkg_malloc((1 + x2_sh->ndest) * sizeof(x2_dest_t *));
++	if(x2_pfd == NULL || x2_pdest == NULL) {
++		PKG_MEM_ERROR;
++		return;
++	}
++	sweep = time(NULL);
++
++	for(;;) {
++		cfg_update();
++
++		x2_pfd[0].fd = x2_pipe[0];
++		x2_pfd[0].events = POLLIN;
++		n = 1;
++		for(i = 0; i < x2_sh->ndest; i++) {
++			d = &x2_sh->dest[i];
++			if(!d->used || d->fd < 0)
++				continue;
++			x2_pfd[n].fd = d->fd;
++			x2_pfd[n].events = POLLIN;
++			if(d->state == X2_CONNECTING || d->head.job)
++				x2_pfd[n].events |= POLLOUT;
++			x2_pfd[n].revents = 0;
++			x2_pdest[n] = d;
++			n++;
++		}
++		x2_pfd[0].revents = 0;
++		if(poll(x2_pfd, n, 1000) < 0 && errno != EINTR) {
++			LM_ERR("X2 sender: poll: %s\n", strerror(errno));
++			continue;
++		}
++		now = time(NULL);
++		for(i = 1; i < n; i++)
++			if(x2_pfd[i].revents)
++				dest_event(x2_pdest[i], x2_pfd[i].revents, now);
++		if(x2_pfd[0].revents & POLLIN)
++			pipe_read(now);
++		if(now != tick) {
++			tick = now;
++			for(i = 0; i < x2_sh->ndest; i++)
++				if(x2_sh->dest[i].used)
++					dest_timers(&x2_sh->dest[i], now);
++			if(now - sweep >= 60) {
++				seq_sweep(now);
++				sweep = now;
++			}
++		}
++	}
++}
+diff --git a/src/modules/x2/x2_send.h b/src/modules/x2/x2_send.h
+new file mode 100644
+index 0000000000..7b8b603f4e
+--- /dev/null
++++ b/src/modules/x2/x2_send.h
+@@ -0,0 +1,92 @@
++/*
++ * Copyright (C) 2026 kamailio.org
++ *
++ * This file is part of Kamailio, a free SIP server.
++ *
++ * Kamailio is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version
++ *
++ * Kamailio is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
++ */
++
++#ifndef _X2_SEND_H_
++#define _X2_SEND_H_
++
++#include <stdint.h>
++#include <time.h>
++
++#include "../../core/atomic_ops.h"
++
++#include "x2_pdu.h"
++
++enum x2_state
++{
++	X2_DOWN = 0,
++	X2_CONNECTING,
++	X2_UP,
++};
++
++/* A Destination the sender delivers to, in shared memory so that RPC can
++ * read it. Only the sender process writes it */
++typedef struct x2_dest
++{
++	int used;
++	x2_addr_t addr;
++	int state;
++	time_t since;		   /* of the state */
++	unsigned long sent;	   /* PDUs */
++	unsigned long dropped; /* PDUs */
++	unsigned long connects;
++	unsigned int qlen;
++	unsigned int qbytes;
++
++	/* the sender's own */
++	int fd;
++	x2_link_t head;
++	x2_link_t tail;
++	unsigned int off; /* octets of the head sent */
++	time_t next_try;  /* of a connection */
++	time_t last_used; /* by an xIRI */
++	time_t ka_next;	  /* the next Keepalive */
++	time_t ka_out;	  /* the oldest Keepalive not acknowledged, or 0 */
++	time_t progress;  /* when the connection last took octets */
++	uint32_t ka_seq;
++	unsigned int failures;	 /* to connect, since the last connection */
++	unsigned char rbuf[128]; /* the start of the PDU being read */
++	unsigned int rhave;		 /* octets of it read */
++	unsigned int rtotal;	 /* its length, once rhave >= 12 */
++} x2_dest_t;
++
++typedef struct x2_shared
++{
++	atomic_t qbytes;  /* octets of all the PDUs not sent yet */
++	atomic_t dropped; /* PDUs no Destination got: queue full */
++	int ndest;
++	x2_dest_t dest[];
++} x2_shared_t;
++
++extern x2_shared_t *x2_sh;
++extern int x2_pipe[2];
++
++extern int x2_keepalive_interval;
++extern int x2_keepalive_timeout;
++extern int x2_connect_timeout;
++extern int x2_reconnect_interval;
++extern int x2_idle_timeout;
++extern int x2_dest_queue_size;
++extern int x2_seq_lifetime;
++
++void x2_sender_loop(void);
++void x2_job_free(x2_job_t *job);
++char *x2_dest_name(x2_dest_t *d);
++
++#endif
