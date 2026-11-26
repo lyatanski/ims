@@ -44,6 +44,9 @@ services:
       IPSEC: ${IPSEC}
       IPSEC6: ${IPSECv6}
       ECSCF: sip:ecscf.ims.${REALM}
+      # The IMS-AGW's ng socket, by address as the IBCF's RTPADR; unset, the
+      # media goes end to end
+      AGW: udp:${AGWv4}:9910
     configs:
     - source: pcscf.xml
       target: /etc/cscf/diameter.xml
@@ -56,6 +59,8 @@ services:
     depends_on:
       kmod:
         condition: service_completed_successfully
+      agw:
+        condition: service_healthy
 
   icscf:
     << : *kamailio
@@ -177,9 +182,34 @@ services:
       interval: 5s
       start_period: 5s
 
+  # The P-CSCF's IMS-AGW (TS 23.228 Annex G), rtpengine: `access` faces the
+  # UEs, `core` the rest of the network, both on the one network here and in
+  # both families, as the UEs are. The ng socket and the HTTP port on IPv4
+  agw:
+    image: ghcr.io/lyatanski/rtpengine
+    command: --no-log-timestamps
+    configs:
+    - source: agw.conf
+      target: /etc/rtpengine/rtpengine.conf
+    expose:
+    - 9910/udp
+    networks:
+      default:
+        ipv4_address: ${AGWv4}
+        ipv6_address: ${AGWv6}
+    healthcheck:
+      test: wget -qO- ${AGWv4}:9090/ping
+      retries: 60
+      interval: 5s
+      start_period: 5s
+
   route-sip:
     << : *route
     network_mode: service:pcscf
+
+  route-agw:
+    << : *route
+    network_mode: service:agw
 
   route-rtp:
     << : *route
@@ -423,6 +453,42 @@ configs:
       [templates]
       outgoing = direction=internal direction=external strict-source replace-origin
       incoming = direction=external direction=internal strict-source replace-origin
+
+  agw.conf:
+    content: |
+      [rtpengine]
+      log-level = 6
+      table = -1
+      listen-http = ${AGWv4}:9090
+      listen-ng = ${AGWv4}:9910
+      interfaces-config = interface
+      templates = templates
+      timeout = 60
+      silent-timeout = 3600
+      tos = 184
+      port-min = 30000
+      port-max = 40000
+      no-redis-required = true
+
+      # One logical interface over both families: an offer is answered in
+      # its own unless told otherwise
+      [interface-access]
+      address = ${AGWv4}
+
+      [interface-access6]
+      name = access
+      address = ${AGWv6}
+
+      [interface-core]
+      alias = access
+
+      # Named by the P-CSCF on the initial offer, by the side it came from.
+      # The core side is IPv4 whatever the UE's: the TrGW is IPv4 only.
+      # strict-source: once latched, a stream is only taken from that source.
+      # replace-origin: the o= line names the AGW too, not the side behind it
+      [templates]
+      from-ue = direction=access direction=core address-family=IP4 strict-source replace-origin
+      to-ue = direction=core direction=access strict-source replace-origin
 
   # The peer networks, one dispatcher set each: their entry points, and
   # whether they are inside this network's trust domain (TS 24.229 4.4)

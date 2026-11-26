@@ -12,3 +12,8 @@ dependencies:
   version: "*"
   repository: file://../rtpengine
   alias: trgw
+- name: rtpengine
+  version: "*"
+  repository: file://../rtpengine
+  alias: agw
+  condition: agw.enabled

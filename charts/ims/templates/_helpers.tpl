@@ -116,6 +116,10 @@ derived from the rest of the values or the cluster, and so not for
 - name: ECSCF
   value: {{ printf "sip:ecscf.%s" (include "ims.realm.ims" .) | quote }}
 {{- end }}
+{{- if and (eq "proxy" $cscf) .Values.agw.enabled }}
+- name: AGW
+  value: {{ include "rtpengine.ng" .Subcharts.agw | quote }}
+{{- end }}
 {{- if or (eq "emergency" $cscf) (and (eq "proxy" $cscf) .Values.cscf.emergency.enabled) }}
 {{- include "ims.sosnum" . }}
 {{- end }}

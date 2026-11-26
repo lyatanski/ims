@@ -7,6 +7,13 @@ db:
   offset: 8
 
 valkey:
+  # Off, the replicas keep their calls in another release's valkey instead,
+  # `address` -- one whose notifyKeyspaceEvents covers K$g, and whose
+  # databases `db.offset` on are this release's alone.
+  enabled: true
+  # host:port, templated (`{{ .Release.Name }}` and the like); with `enabled`
+  # only.
+  address: ""
   # The two notifications rtpengine acts on: `$` for the SET that writes or
   # updates a call, `g` for the DEL that ends it. Without them the standby
   # subscribes, is never told anything, and has no copy to take over from.
@@ -86,9 +93,10 @@ media:
   # Nothing in this list decides which interface a given call gets. That is
   # `templates` below, selected per call by the control client -- see it.
   #
-  # The client is the IBCF, rtpengine being its TrGW (TS 23.228 Annex I):
-  # `internal` faces the network, `external` the peers on Ici. The S-CSCF no
-  # longer anchors media, so with the IBCF off nothing here carries a call.
+  # The clients are the IBCF, rtpengine being its TrGW (TS 23.228 Annex I):
+  # `internal` faces the network, `external` the peers on Ici; and, in a
+  # release of its own (the ims chart's `agw`), the P-CSCF, rtpengine being
+  # its IMS-AGW (Annex G): `access` faces the UEs, `core` the network.
   #
   # Order matters: the first entry is rtpengine's default interface, the one a
   # control message that names no direction lands on.

@@ -7,14 +7,19 @@ data:
   rtpengine.conf: |
     {{- include "rtpengine.validate" . }}
     {{- $n := int .Values.replicaCount }}
-    {{- $valkey := printf "%s:%v" (include "valkey.name" .Subcharts.valkey) .Values.valkey.ports.valkey }}
+    {{- $valkey := "" }}
+    {{- if .Values.valkey.enabled }}
+    {{- $valkey = printf "%s:%v" (include "valkey.name" .Subcharts.valkey) .Values.valkey.ports.valkey }}
+    {{- else }}
+    {{- $valkey = tpl (required "rtpengine: valkey.address is required with valkey.enabled false" .Values.valkey.address) . }}
+    {{- end }}
     {{- $off := int .Values.db.offset }}
     {{- if gt (add $off $n) 16 }}
       {{- fail (printf "rtpengine: db.offset (%d) + replicaCount (%d) exceeds valkey's 16 databases" $off $n) }}
     {{- end }}
     {{- /* rtpengine speaks plain redis: no MOVED handling, and keyspace
            notifications are published only by the node that holds the key */}}
-    {{- if gt (int .Values.valkey.cluster.primaries) 1 }}
+    {{- if and .Values.valkey.enabled (gt (int .Values.valkey.cluster.primaries) 1) }}
       {{- fail "rtpengine: valkey.cluster.primaries > 1; rtpengine cannot use a valkey cluster" }}
     {{- end }}
     {{- range $i := until $n }}

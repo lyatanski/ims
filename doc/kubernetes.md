@@ -1,7 +1,7 @@
 # Kubernetes
 
 Two charts, installed in either order. `ims` is the IMS core plus CoreDNS,
-the TrGW (rtpengine) and the state store; `core` is the EPC — HSS, PCRF and the PGW
+the TrGW and the IMS-AGW (rtpengine) and the state store; `core` is the EPC — HSS, PCRF and the PGW
 control/user plane split — plus MongoDB and a subscriber seed.
 
     kind create cluster
@@ -306,6 +306,32 @@ are its attachments' IPAM pick, so the test is handed the IPv4 subnets of the
 `internal` and `external` networks instead, and the SDP is checked against
 those.
 
+## IMS-AGW (rtpengine)
+
+`agw` (on by default) is the rtpengine chart a second time, as the P-CSCF's
+IMS-AGW (TS 23.228 Annex G): `images/kamailio/cscf/proxy.cfg` anchors every
+session on it, `AGW` being the ng Service. Two logical interfaces, `access`
+towards the UEs and `core` towards the rest of the network (an alias of
+`access` by default), and two templates the P-CSCF names on a session's
+initial offer: `from-ue` and `to-ue`. The core side is IPv4 whatever the UE
+(`address-family=IP4` in `from-ue`), and an offer to a UE registered over
+IPv6 is answered in IPv6.
+
+- **Network**: `access` attaches the same network as the TrGW's `internal` by
+  default, so an off-net call goes from one to the other on-link, with the UE
+  pool routed out of it like `internal`. Under whereabouts the two NADs share
+  the range's pool; under host-local (KinD) each NAD keeps its own store, so
+  the ranges must not overlap (`kind.sh` splits 10.30.0.0/24 at .200).
+- **State**: no valkey of its own (`agw.valkey.enabled: false`). The calls go
+  to the TrGW's, from database `agw.db.offset` (10) on, beside the TrGW's 8
+  and 9, with the same standby-copy arrangement.
+- **Legs**: a call between two UEs of the one P-CSCF passes the AGW twice with
+  the same Call-ID and tags, so each leg is its own call there, the Call-ID
+  suffixed `-mo` or `-mt`.
+- **Rx**: the flows are the UE's own address and the AGW's access side. The
+  P-CSCF rewrites what goes to the UE before Rx_AAR reads it: a request
+  before its transaction exists, a reply in the core reply route.
+
 ## TrGW (rtpengine)
 The same challenges as the Proxy-CSCF apply. [whereabouts](https://github.com/k8snetworkplumbingwg/whereabouts) with host device/macvlan could be utilised as the IP in the SDP is assigned by the rtpengine when offer/answer is forwarded to it. IP allocation pool could be used for these cases.
 
@@ -374,8 +400,9 @@ the template on a call's initial offer by the side the offer came from
 (`images/kamailio/cscf/border.cfg`, `route[ENTRY]` and `route[EXIT]`). The
 S-CSCF anchored every call here until it was moved, which put the TrGW in the
 wrong place and on-net media through a relay it does not need. With
-`cscf.border` off nothing in the chart sends rtpengine a call; see
-[IBCF](#ibcf) for what `external` has to be for it.
+`cscf.border` off nothing in the chart sends the TrGW a call; see
+[IBCF](#ibcf) for what `external` has to be for it. The P-CSCF's media goes
+through an rtpengine of its own, the [IMS-AGW](#ims-agw-rtpengine).
 
 Measured against the daemon (26.3) with a rendered config, one advertised
 address on `external` to make the choice visible:

@@ -255,11 +255,11 @@ jobs:
                     - - subnet: 10.30.0.0/24
                         gateway: 10.30.0.1
                         rangeStart: 10.30.0.10
-                        rangeEnd: 10.30.0.250
+                        rangeEnd: 10.30.0.199
                     - - subnet: fd30::/64
                         gateway: fd30::1
                         rangeStart: fd30::10
-                        rangeEnd: fd30::fa
+                        rangeEnd: fd30::c7
                     routes:
                     - dst: 10.10.0.0/16
                       gw: 10.30.0.1
@@ -318,6 +318,42 @@ jobs:
             resources:
               requests: {cpu: 50m, memory: 32Mi}
               limits: {cpu: 1, memory: 256Mi}
+        agw:
+          media:
+            interfaces:
+            # The UE side, on the TrGW's media bridge -- on-link with its
+            # `internal` for an off-net call -- from a range of its own
+            - name: access
+              address: media0
+              network:
+                enabled: true
+                name: media
+                config:
+                  cniVersion: 0.3.1
+                  type: bridge
+                  bridge: media0
+                  isGateway: true
+                  ipam:
+                    type: host-local
+                    ranges:
+                    - - subnet: 10.30.0.0/24
+                        gateway: 10.30.0.1
+                        rangeStart: 10.30.0.200
+                        rangeEnd: 10.30.0.250
+                    - - subnet: fd30::/64
+                        gateway: fd30::1
+                        rangeStart: fd30::c8
+                        rangeEnd: fd30::fa
+                    routes:
+                    - dst: 10.10.0.0/16
+                      gw: 10.30.0.1
+                    - dst: fd10:10::/48
+                      gw: fd30::1
+            - name: core
+              alias: access
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 2, memory: 512Mi}
         dns:
           resources:
             requests: {cpu: 50m, memory: 64Mi}

@@ -296,6 +296,53 @@ trgw:
   # The IBCF ends a call whose media stopped (cscf/border.cfg route[XMLRPC])
   b2bUrl: http://%%:9090/RPC2
 
+# The P-CSCF's IMS-AGW (TS 23.228 Annex G), the rtpengine chart again: every
+# session's media is anchored on it, the UE sending to `access` and the rest
+# of the network to `core` (cscf/proxy.cfg route[AGW]). Off, the media goes
+# end to end. Its calls are kept in the trgw's valkey, from database
+# `db.offset` on.
+agw:
+  enabled: true
+  valkey:
+    enabled: false
+    address: "{{ .Release.Name }}-valkey:6379"
+  db:
+    offset: 10
+  media:
+    interfaces:
+    # The UE side, on the same network as the TrGW's `internal` by default,
+    # which puts the two on-link for an off-net call. Each takes its address
+    # from the same whereabouts range, which keys its pool on the range.
+    - name: access
+      address: media0
+      network:
+        enabled: true
+        name: media
+        config:
+          cniVersion: 0.3.1
+          type: macvlan
+          master: eth0
+          mode: bridge
+          ipam:
+            type: whereabouts
+            range: 10.30.0.0/24
+            gateway: 10.30.0.1
+            routes:
+            - dst: 10.10.0.0/16
+              gw: 10.30.0.1
+    - name: core
+      alias: access
+  # Named by the P-CSCF on a session's initial offer, by the side it came
+  # from. The core side is IPv4 whatever the UE's, as the TrGW's `internal`
+  # need not have IPv6; the UE gets the family it registered over.
+  # The chart's own (the TrGW's) are nulled, as their interfaces are not here.
+  templates:
+    internal: null
+    outgoing: null
+    incoming: null
+    from-ue: direction=access direction=core address-family=IP4 strict-source replace-origin
+    to-ue: direction=core direction=access strict-source replace-origin
+
 dns:
   service:
     spec:

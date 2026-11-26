@@ -17,6 +17,7 @@ architecture-beta
     service scscf(server)[SCSCF]
     service ibcf(server)[IBCF]
     service trgw(server)[TrGW]
+    service agw(server)[AGW]
     service ocs(server)[OCS]
     junction Mw
 
@@ -26,7 +27,9 @@ architecture-beta
     smf:R -- L:pcrf
     pcrf:B -- T:pcscf
     upf:R -- L:pcscf
-    upf:B -- L:trgw
+    upf:B -- T:agw
+    agw:R -- L:trgw
+    pcscf:B -- R:agw
     icscf:R -- L:hss
     scscf:T -- B:hss
     scscf:R -- L:ocs
@@ -125,7 +128,7 @@ See [Tracing](doc/trace.md) for what each of those gives you.
 ## Components
 - IMS (compose.yml)
   - [x] [CSCF](doc/images.md#kamailio-p-cscfi-cscfs-cscf)
-    - [x] Proxy
+    - [x] Proxy — every session's media anchored on rtpengine as its IMS-AGW, the Rx flows naming the AGW ([TS 23.228 Annex G](images/kamailio/cscf/proxy.cfg))
     - [x] Interrogating
     - [x] Serving
     - [x] Emergency — PSAP chosen from local configuration by service URN and cell, no LRF ([TS 24.229 5.11](images/kamailio/cscf/emergency.cfg))
