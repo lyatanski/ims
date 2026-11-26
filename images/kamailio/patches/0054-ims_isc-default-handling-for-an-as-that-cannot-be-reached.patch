@@ -4,11 +4,12 @@ dc1554cf35 made isc_forward() return ISC_RETURN_TERMINATE or
 ISC_RETURN_ERROR when the relay to the AS fails, but it tests the
 result of t_relay() with if(ret): tm's t_relay() returns < 0 when it
 fails, so a relay that failed was "forwarded" and those return codes
-were never seen. An AS whose name does not resolve - stopped, scaled to
-zero, or misspelled - then got no default handling (TS 24.229 5.4.3.2,
-5.4.3.3): in a request route tm sent its own delayed 5xx/478 at the end
-of the script, whatever the iFC said, and the session failed even with
-SESSION_CONTINUED. Returning the error codes alone would not have helped
+were never seen. An AS that could not be sent to at all - its name
+does not resolve, or a TCP connect to it is refused, as for a stopped
+AS whose address is still cached - then got no default handling (TS
+24.229 5.4.3.2, 5.4.3.3): in a request route tm sent its own delayed
+5xx/478 at the end of the script, whatever the iFC said, and the
+session failed even with SESSION_CONTINUED. Returning the error codes alone would not have helped
 either: the script carries on to the callee while tm's delayed error
 reply is still pending, so the caller gets both.
 
@@ -24,17 +25,19 @@ isc_match_filter() already does for an AS that fails to answer:
   ISC mark, the Route an AS returns a request with, so triggering
   resumes at the next iFC. It goes to my_uri, where the mark sends an
   AS too, not to the address the request came in on: a wildcard or
-  dual-stack socket does not know that one. If that fails too, 500 as
-  above.
+  dual-stack socket does not know that one. The request URI is marked
+  new again, since the failed relay consumed it as a branch; that branch
+  holds a faked 408 with no reply, which tm never picks. If the relay to
+  ourselves fails too, 500 as above.
 
 isc_mark_set() no longer adds a second P-Served-User when it marks a
 request for ourselves (no match): the one added for the AS is there.
 
 diff --git a/src/modules/ims_isc/isc.c b/src/modules/ims_isc/isc.c
-index 6cdfaefa34..6e5409dc21 100644
+index 6cdfaefa34..aadd748105 100644
 --- a/src/modules/ims_isc/isc.c
 +++ b/src/modules/ims_isc/isc.c
-@@ -48,6 +48,29 @@
+@@ -48,6 +48,32 @@
  
  #include "isc.h"
  
@@ -57,6 +60,9 @@ index 6cdfaefa34..6e5409dc21 100644
 +		return -1;
 +	/* the failure route appended a branch to the AS */
 +	clear_branches();
++	/* the relay to the AS consumed the request URI as a branch: without
++	 * this tm finds "no branches for forwarding" */
++	ruri_mark_new();
 +
 +	return isc_tmb.t_relay(msg, 0, 0);
 +}
@@ -64,7 +70,7 @@ index 6cdfaefa34..6e5409dc21 100644
  /**
   *	Forwards the message to the application server.
   * - Marks the message
-@@ -57,13 +80,15 @@
+@@ -57,13 +83,15 @@
   * @param m  - the isc_match that matched with info about where to forward it
   * @param mark  - the isc_mark that should be used to mark the message
   * @param status - the state of the isc_mark
@@ -81,7 +87,7 @@ index 6cdfaefa34..6e5409dc21 100644
  	int ret;
  	LM_DBG("marking for AS <%.*s>\n", m->server_name.len, m->server_name.s);
  
-@@ -116,22 +141,40 @@ int isc_forward(struct sip_msg *msg, isc_match *m, isc_mark *mark,
+@@ -116,22 +144,40 @@ int isc_forward(struct sip_msg *msg, isc_match *m, isc_mark *mark,
  	t->fr_timeout = S_TO_TICKS(isc_fr_timeout) / 1000;
  	t->fr_inv_timeout = S_TO_TICKS(isc_fr_inv_timeout) / 1000;
  
