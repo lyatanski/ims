@@ -19,6 +19,7 @@ jobs:
         - cgr-engine
         - grafonnet
         - bird
+        - x3
     steps:
     - uses: actions/checkout@v7
     - name: Build
