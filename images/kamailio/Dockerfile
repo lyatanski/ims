@@ -65,5 +65,9 @@ RUN --mount=type=bind,from=build,source=/kamailio/utils/kamctl/db_redis/kamailio
 COPY cscf/ /etc/cscf
 COPY as/ /etc/as
 
-ENTRYPOINT ["kamailio", "-DD", "-E"]
+# 16 MB of private memory per process (-M), not the 8 MB default: with
+# X1PORT set, cscf/li.cfg is parsed into it before the fork, and what is left
+# is too little for the P-CSCF's TCP main process to start (init_io_wait, for
+# its 32768 fds). Only the pages a process touches are resident
+ENTRYPOINT ["kamailio", "-DD", "-E", "-M", "16"]
 
